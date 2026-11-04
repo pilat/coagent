@@ -40,12 +40,10 @@ type PendingInput struct {
 }
 
 type boundaryBatch struct {
-	commit     sessionstore.Commit
-	pending    map[string]string
-	fresh      bool
-	accepted   bool
-	modelInput bool
-	human      bool
+	commit   sessionstore.Commit
+	pending  map[string]string
+	fresh    bool
+	accepted bool
 }
 
 func (s *Session) boundaryStep(ctx context.Context, r *runState) (bool, error) {
@@ -229,13 +227,10 @@ func (s *Session) commitBoundaryBatch(
 	batch *boundaryBatch,
 	inputCount int,
 ) (bool, error) {
-	head, err := s.prepareBoundaryBatch(ctx, r, batch, inputCount)
-	if err != nil {
-		return false, err
-	}
+	s.prepareBoundaryBatch(r, batch, inputCount)
 
 	c := &batch.commit
-	if !c.BeginRun && len(c.Accept) == 0 && len(c.Messages) == 0 && len(c.ToolResults) == 0 && len(c.Outputs) == 0 {
+	if len(c.Accept) == 0 && len(c.Messages) == 0 && len(c.ToolResults) == 0 && len(c.Outputs) == 0 {
 		return batch.accepted, nil
 	}
 
@@ -243,15 +238,6 @@ func (s *Session) commitBoundaryBatch(
 	if err != nil {
 		return false, err
 	}
-
-	r.headCommitted = r.headCommitted || head
-	r.runCommitted = true
-
-	if batch.modelInput && (!r.inputAccepted || batch.human) {
-		r.answerOwed = batch.human
-	}
-
-	r.inputAccepted = r.inputAccepted || batch.modelInput
 
 	if c.State.ResetContext {
 		s.prompt.Todos.Clear()
@@ -272,23 +258,12 @@ func (s *Session) commitBoundaryBatch(
 	return batch.accepted, nil
 }
 
-func (s *Session) prepareBoundaryBatch(
-	ctx context.Context,
-	r *runState,
-	batch *boundaryBatch,
-	inputCount int,
-) (bool, error) {
+func (s *Session) prepareBoundaryBatch(r *runState, batch *boundaryBatch, inputCount int) {
 	c := &batch.commit
-	c.BeginRun = !r.runCommitted
 
 	if batch.fresh && !batch.accepted && inputCount == 0 {
 		c.Messages = append(c.Messages, hostUserMessage(s.stamper.Stamp(noTaskPrompt)))
 		batch.accepted = true
-	}
-
-	head, err := s.prepareHead(ctx, r, batch)
-	if err != nil {
-		return false, err
 	}
 
 	willModel := batch.accepted || s.unansweredWork() || len(c.ToolResults) > 0
@@ -297,8 +272,6 @@ func (s *Session) prepareBoundaryBatch(
 		c.Messages = append(c.Messages, hostUserMessage(s.activeBackgroundSnapshot))
 		r.backgroundInserted = true
 	}
-
-	return head, nil
 }
 
 func (s *Session) acceptBoundaryCommand(
@@ -453,7 +426,6 @@ func acceptBoundaryCallResults(batch *boundaryBatch, inputs []*sessionstore.Inbo
 			accept.State = sessionstore.InputStateHandled
 			accept.Reason = "call_result"
 			accept.InvalidateCompletion = true
-			batch.modelInput = true
 
 			delete(batch.pending, callID)
 		}
@@ -523,7 +495,7 @@ func (s *Session) acceptBoundarySchedule(batch *boundaryBatch, input *sessionsto
 		},
 	)
 	batch.accepted = true
-	batch.modelInput = true
+
 	s.preserveStopped = false
 
 	return boundaryContinue, nil
@@ -566,7 +538,7 @@ func (s *Session) acceptBoundaryText(
 		accept.Receipt = loader.SkillReceipt(prepared.SkillName)
 	}
 
-	if toolID := s.activationIndex[command]; toolID != "" && sessionstore.IsHumanInput(input.Source, input.Attributes) {
+	if toolID := s.activationIndex[command]; toolID != "" && input.Source == sessionstore.InputSourceUser {
 		accept.Content += activationInstruction(toolID, command)
 		c.Activation = &sessionstore.ActivationChange{
 			InputID: input.ID,
@@ -581,8 +553,6 @@ func (s *Session) acceptBoundaryText(
 	accept.LinkRef = len(c.Messages) - 1
 	c.Accept = append(c.Accept, accept)
 	batch.accepted = true
-	batch.modelInput = true
-	batch.human = batch.human || sessionstore.IsHumanInput(input.Source, input.Attributes)
 
 	if input.Source == sessionstore.InputSourceUser || input.Source == sessionstore.InputSourceAgent {
 		s.preserveStopped = false

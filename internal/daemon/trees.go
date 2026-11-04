@@ -47,10 +47,6 @@ type stopPlan struct {
 }
 
 func (s *Service) kill(ctx context.Context, input *sessionstore.InboxInput) error {
-	if refused, err := s.refuseAssistantRoot(ctx, input); refused || err != nil {
-		return err
-	}
-
 	unlock, err := s.lockSessionTree(ctx, input.SessionID)
 	if err != nil {
 		return err
@@ -354,10 +350,6 @@ func (s *Service) settleStoppedTree(ctx context.Context, ids []int64) error {
 }
 
 func (s *Service) clear(ctx context.Context, input *sessionstore.InboxInput) (int64, error) {
-	if refused, err := s.refuseAssistantRoot(ctx, input); refused || err != nil {
-		return 0, err
-	}
-
 	unlock, err := s.lockSessionTree(ctx, input.SessionID)
 	if err != nil {
 		return 0, err

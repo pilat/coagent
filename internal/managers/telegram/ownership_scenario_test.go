@@ -40,7 +40,7 @@ func TestHarnessScenario_DurableManagerOwnershipReachesOnlyTelegramRenderer(t *t
 	require.NoError(t, chat.SetChatFocus(t.Context(), chatID, owned.ID))
 	foreignChat := h.controllers.ForManager("telegram-other").(controllerapi.ChatFocusController)
 	require.Error(t, foreignChat.SetChatFocus(t.Context(), chatID, owned.ID))
-	manager := newAssistantTelegramManager(t, h)
+	manager := newChatTelegramManager(t, h)
 	require.NoError(t, manager.Start(t.Context()))
 	t.Cleanup(func() { require.NoError(t, manager.Stop(context.Background())) })
 	awaitChatTail(t, h, owned.ID)
@@ -52,9 +52,10 @@ func TestHarnessScenario_DurableManagerOwnershipReachesOnlyTelegramRenderer(t *t
 		}
 	}
 	assert.Equal(t, []string{
+		fmt.Sprintf("→ #%d project", owned.ID),
 		fmt.Sprintf("#%d project\nowner answer", owned.ID), fmt.Sprintf("#%d project\nowner barrier", owned.ID),
 	}, messages)
-	seen, err := h.sessions.ChatSeen(t.Context(), delayedTelegramManagerID, chatID, foreign.ID)
-	require.NoError(t, err)
-	assert.Zero(t, seen)
+	for _, text := range messages {
+		assert.NotContains(t, text, fmt.Sprintf("#%d project", foreign.ID))
+	}
 }

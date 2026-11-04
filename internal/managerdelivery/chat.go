@@ -20,31 +20,29 @@ const (
 var _ ChatLoop = (*chatLoop)(nil)
 
 type chatPreludeItem struct {
-	text               string
-	dropOnRowPermanent bool
+	text string
+	row  *ChatRow
 }
 
 type chatLoop struct {
-	port        ChatPort
-	transport   ChatTransport
-	wake        chan struct{}
-	mu          sync.Mutex
-	cancel      context.CancelFunc
-	done        chan struct{}
-	stopped     bool
-	focus       atomic.Int64
-	enterTarget atomic.Int64
+	port      ChatPort
+	transport ChatTransport
+	wake      chan struct{}
+	mu        sync.Mutex
+	cancel    context.CancelFunc
+	done      chan struct{}
+	stopped   bool
+	focus     atomic.Int64
 
-	initialized bool
-	lastFocus   int64
-	prelude     []chatPreludeItem
-	failures    int64
+	preludeFor    int64
+	preludeNewest int64
+	prelude       []chatPreludeItem
+	failures      int64
 }
 
-// NewChat creates one delivery loop for a bound chat, initially at assistant #0.
+// NewChat creates one delivery loop for a bound chat.
 func NewChat(port ChatPort, transport ChatTransport) ChatLoop {
 	w := &chatLoop{port: port, transport: transport, wake: make(chan struct{}, 1)}
-	w.enterTarget.Store(-1)
 
 	return w
 }
@@ -78,12 +76,6 @@ func (w *chatLoop) Wake() {
 	case w.wake <- struct{}{}:
 	default:
 	}
-}
-
-// Enter requests a prelude once target is visible as the focus; -1 cancels the request.
-func (w *chatLoop) Enter(target int64) {
-	w.enterTarget.Store(target)
-	w.Wake()
 }
 
 func (w *chatLoop) Focus() int64 { return w.focus.Load() }
@@ -143,45 +135,44 @@ func (w *chatLoop) wait(ctx context.Context, delay time.Duration) bool {
 }
 
 func (w *chatLoop) pass(ctx context.Context) time.Duration {
-	focus, err := w.port.Focus(ctx)
+	state, err := w.port.Focus(ctx)
 	if err != nil {
 		return w.failed(ctx, SendResult{Class: SendChatFailure, Reason: err.Error()})
 	}
 
+	focus, after := state.Session, state.Cursor
 	w.focus.Store(focus)
 
-	if err := w.prepare(ctx, focus); err != nil {
-		return w.failed(ctx, SendResult{Class: SendChatFailure, Reason: err.Error()})
+	if focus == 0 {
+		w.prelude = nil
+		return 0
 	}
 
-	for len(w.prelude) > 0 {
-		item := w.prelude[0]
-
-		result := w.send(ctx, item.text)
-		if result.Class == SendRowPermanent && item.dropOnRowPermanent {
-			result.Class = SendOK
-		}
-
+	if !state.Entered {
+		entered, result := w.enter(ctx, focus)
 		if result.Class != SendOK {
-			if result.Class == SendRowPermanent {
-				result.Class = SendChatFailure
-			}
-
 			return w.failed(ctx, result)
 		}
 
-		w.prelude = w.prelude[1:]
-		w.failures = 0
+		if !entered {
+			w.prelude = nil
+			w.Wake()
+
+			return 0
+		}
+
+		after = w.preludeNewest
 	}
 
-	changed, result := w.tail(ctx, focus)
+	w.prelude = nil
+
+	after, changed, result := w.tail(ctx, focus, after)
 	if result.Class != SendOK {
 		return w.failed(ctx, result)
 	}
 
 	if changed {
 		w.Wake()
-
 		return 0
 	}
 
@@ -194,15 +185,14 @@ func (w *chatLoop) pass(ctx context.Context) time.Duration {
 		return 0
 	}
 
-	// A kill commits its close row atomically; only a later empty read proves it drained.
-	changed, result = w.tail(ctx, focus)
+	// A kill commits its close row atomically; a later empty read proves it drained.
+	_, changed, result = w.tail(ctx, focus, after)
 	if result.Class != SendOK {
 		return w.failed(ctx, result)
 	}
 
 	if changed {
 		w.Wake()
-
 		return 0
 	}
 
@@ -215,44 +205,77 @@ func (w *chatLoop) pass(ctx context.Context) time.Duration {
 	return 0
 }
 
-func (w *chatLoop) tail(ctx context.Context, focus int64) (bool, SendResult) {
-	for ctx.Err() == nil {
-		rows, err := w.port.Outputs(ctx, focus, chatBatchSize)
-		if err != nil {
+func (w *chatLoop) enter(ctx context.Context, focus int64) (bool, SendResult) {
+	if len(w.prelude) == 0 || w.preludeFor != focus {
+		if err := w.prepare(ctx, focus); err != nil {
 			return false, SendResult{Class: SendChatFailure, Reason: err.Error()}
+		}
+	}
+
+	for len(w.prelude) > 0 {
+		item := w.prelude[0]
+		var result SendResult
+
+		if item.row != nil {
+			result = w.deliverRow(ctx, focus, *item.row)
+		} else {
+			result = w.send(ctx, item.text)
+			if result.Class == SendRowPermanent {
+				result.Class = SendChatFailure
+			}
+		}
+
+		if result.Class != SendOK {
+			return false, result
+		}
+
+		w.prelude = w.prelude[1:]
+		w.failures = 0
+	}
+
+	entered, err := w.port.Enter(ctx, focus, w.preludeNewest)
+	if err != nil {
+		return false, SendResult{Class: SendChatFailure, Reason: err.Error()}
+	}
+
+	return entered, SendResult{}
+}
+
+func (w *chatLoop) tail(ctx context.Context, focus, after int64) (int64, bool, SendResult) {
+	for ctx.Err() == nil {
+		rows, err := w.port.Outputs(ctx, focus, after, chatBatchSize)
+		if err != nil {
+			return after, false, SendResult{Class: SendChatFailure, Reason: err.Error()}
 		}
 
 		if len(rows) == 0 {
-			return false, SendResult{}
+			return after, false, SendResult{}
 		}
 
 		for _, row := range rows {
 			if result := w.deliverRow(ctx, focus, row); result.Class != SendOK {
-				return false, result
+				return after, false, result
 			}
 
 			if ctx.Err() != nil {
-				return false, SendResult{Class: SendTransient, Reason: ctx.Err().Error()}
+				return after, false, SendResult{Class: SendTransient, Reason: ctx.Err().Error()}
 			}
 
-			if err := w.port.MarkSeen(ctx, focus, row.ID); err != nil {
-				return false, SendResult{Class: SendChatFailure, Reason: err.Error()}
-			}
-
-			w.failures = 0
-
-			current, err := w.port.Focus(ctx)
+			advanced, err := w.port.Advance(ctx, focus, row.ID)
 			if err != nil {
-				return false, SendResult{Class: SendChatFailure, Reason: err.Error()}
+				return after, false, SendResult{Class: SendChatFailure, Reason: err.Error()}
 			}
 
-			if current != focus {
-				return true, SendResult{}
+			if !advanced {
+				return after, true, SendResult{}
 			}
+
+			after = row.ID
+			w.failures = 0
 		}
 	}
 
-	return false, SendResult{Class: SendTransient, Reason: ctx.Err().Error()}
+	return after, false, SendResult{Class: SendTransient, Reason: ctx.Err().Error()}
 }
 
 func (w *chatLoop) deliverRow(ctx context.Context, focus int64, row ChatRow) SendResult {

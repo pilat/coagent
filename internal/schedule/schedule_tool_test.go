@@ -38,7 +38,6 @@ type mockScheduleEntry struct {
 	inputMsg    string
 	lastFiredAt *time.Time
 	fresh       bool
-	reportTo    int64
 	sleep       bool
 }
 
@@ -49,8 +48,6 @@ func (e *mockScheduleEntry) InputMessage() string    { return e.inputMsg }
 func (e *mockScheduleEntry) LastFiredAt() *time.Time { return e.lastFiredAt }
 func (e *mockScheduleEntry) Fresh() bool             { return e.fresh }
 func (e *mockScheduleEntry) Sleep() bool             { return e.sleep }
-func (e *mockScheduleEntry) ReportTo() int64         { return e.reportTo }
-
 func (s *mockScheduleStore) ListSchedules(_ context.Context, _ int64) ([]schedule.Entry, error) {
 	result := make([]schedule.Entry, len(s.schedules))
 	for i := range s.schedules {
@@ -127,37 +124,6 @@ func (s *mockScheduleStore) AddSleep(
 	})
 
 	return schedule.Created{ID: id, Type: "interval", NextFire: wakeAt.UTC()}, nil
-}
-
-func (s *mockScheduleStore) AddRecurringReport(
-	ctx context.Context,
-	session int64,
-	expr, prompt string,
-	fresh bool,
-	reportTo int64,
-) (schedule.Created, error) {
-	created, err := s.AddRecurring(ctx, session, expr, prompt, fresh)
-	if err == nil {
-		s.schedules[len(s.schedules)-1].reportTo = reportTo
-	}
-	return created, err
-}
-
-func (s *mockScheduleStore) AddOnce(
-	ctx context.Context,
-	session int64,
-	at time.Time,
-	prompt string,
-	fresh bool,
-	reportTo int64,
-) (schedule.Created, error) {
-	created, err := s.AddRecurring(ctx, session, "", prompt, fresh)
-	if err == nil {
-		entry := &s.schedules[len(s.schedules)-1]
-		entry.oneShotAt, entry.reportTo = &at, reportTo
-		created.NextFire = at
-	}
-	return created, err
 }
 
 func (s *mockScheduleStore) CancelPendingSleeps(_ context.Context, _ int64) (int64, error) {

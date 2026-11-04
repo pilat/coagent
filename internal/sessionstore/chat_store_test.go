@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestChatFocus_CASAndAssistantIdentity(t *testing.T) {
+func TestChatFocus_CAS(t *testing.T) {
 	t.Parallel()
 
 	ctx := t.Context()
@@ -33,10 +33,6 @@ func TestChatFocus_CASAndAssistantIdentity(t *testing.T) {
 	reset, err = store.ResetChatFocus(ctx, "owner", "chat", second.ID)
 	require.NoError(t, err)
 	assert.True(t, reset)
-	assistant, err := store.EnsureAssistantRoot(ctx, project, "owner", "/assistant", "model", "")
-	require.NoError(t, err)
-	require.NoError(t, store.SetChatFocus(ctx, "owner", "chat", first.ID))
-	require.NoError(t, store.SetChatFocus(ctx, "owner", "chat", assistant.ID))
 	var stored sql.NullInt64
 	require.NoError(t, db.QueryRowContext(ctx, `SELECT session_id FROM chat_focus
 		WHERE manager_id = 'owner' AND chat_id = 'chat'`).Scan(&stored))
@@ -44,7 +40,6 @@ func TestChatFocus_CASAndAssistantIdentity(t *testing.T) {
 	focus, err = store.ChatFocus(ctx, "owner", "chat")
 	require.NoError(t, err)
 	assert.Zero(t, focus)
-	require.NoError(t, store.SetChatFocus(ctx, "owner", "chat", 0))
 }
 
 func TestChatFocus_RefusesNonLiveOwnedRootsWithoutChangingSelection(t *testing.T) {
@@ -71,30 +66,6 @@ func TestChatFocus_RefusesNonLiveOwnedRootsWithoutChangingSelection(t *testing.T
 	}
 }
 
-func TestChatSeen_MonotonicAndChatScoped(t *testing.T) {
-	t.Parallel()
-
-	ctx := t.Context()
-	store, _, project := newTestStore(t)
-	root := chatTestRoot(t, store, project, "owner")
-	first := chatTestOutput(t, store, root.ID, "first")
-	second := chatTestOutput(t, store, root.ID, "second")
-	seen, err := store.ChatSeen(ctx, "owner", "chat", root.ID)
-	require.NoError(t, err)
-	assert.Zero(t, seen)
-	for _, id := range []int64{first, second, first} {
-		require.NoError(t, store.MarkChatSeen(ctx, "owner", "chat", root.ID, id))
-	}
-	seen, err = store.ChatSeen(ctx, "owner", "chat", root.ID)
-	require.NoError(t, err)
-	assert.Equal(t, second, seen)
-	for _, key := range [][2]string{{"other", "chat"}, {"owner", "other-chat"}} {
-		seen, err := store.ChatSeen(ctx, key[0], key[1], root.ID)
-		require.NoError(t, err)
-		assert.Zero(t, seen)
-	}
-}
-
 func TestChatOutputs_OrderedBatchesIncludeLifecycleRows(t *testing.T) {
 	t.Parallel()
 
@@ -109,19 +80,23 @@ func TestChatOutputs_OrderedBatchesIncludeLifecycleRows(t *testing.T) {
 	other := chatTestRoot(t, store, project, "owner")
 	chatTestOutput(t, store, other.ID, "other session")
 	second := chatTestOutput(t, store, root.ID, "second")
-	outputs, err := store.ChatOutputs(ctx, "owner", "chat", root.ID, 2)
+	outputs, err := store.ChatOutputs(ctx, root.ID, 0, 2)
 	require.NoError(t, err)
 	require.Equal(t, []ChatOutput{
 		{ID: opened.OutputID, SessionID: root.ID, Name: "test", Type: OutputSessionOpened},
 		{ID: first, SessionID: root.ID, Name: "test", Type: OutputMessage, Content: "first"},
 	}, outputs)
-	seen, err := store.ChatSeen(ctx, "owner", "chat", root.ID)
+	require.NoError(t, store.SetChatFocus(ctx, "owner", "chat", root.ID))
+	_, cursor, entered, err := store.ChatCursor(ctx, "owner", "chat")
 	require.NoError(t, err)
-	assert.Zero(t, seen, "reading the tail does not mark it")
-	require.NoError(t, store.MarkChatSeen(ctx, "owner", "chat", root.ID, first))
+	assert.Zero(t, cursor, "reading the tail does not acknowledge it")
+	assert.False(t, entered)
+	ok, err := store.EnterChat(ctx, "owner", "chat", root.ID, first)
+	require.NoError(t, err)
+	require.True(t, ok)
 	closed, err := store.MarkSessionKilledWithOutput(ctx, root.ID, 2)
 	require.NoError(t, err)
-	outputs, err = store.ChatOutputs(ctx, "owner", "chat", root.ID, 10)
+	outputs, err = store.ChatOutputs(ctx, root.ID, first, 10)
 	require.NoError(t, err)
 	require.Equal(t, []ChatOutput{
 		{ID: second, SessionID: root.ID, Name: "test", Type: OutputMessage, Content: "second"},

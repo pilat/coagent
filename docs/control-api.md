@@ -101,7 +101,7 @@ A manager that is `enabled` but not `running` carries `error` with the reason,
 credential-redacted. A manager failing to start does not take the daemon down;
 the operator can repair configuration by hand while the daemon stays alive.
 `running` means the manager's own loops are up. Output is an append-only log with
-per-chat watermarks, so status reports configured managers without delivery
+a per-chat cursor, so status reports configured managers without delivery
 backlog or per-row delivery health. Chat-level delivery pauses are logged.
 
 `coagent status` renders this and pins its exit codes: **0** running, **2** not

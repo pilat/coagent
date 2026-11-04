@@ -31,7 +31,6 @@ type toolCallResultItem struct {
 	untrusted      bool
 	images         []llmwire.ImageRef
 	directMessages []string
-	answersInput   bool
 	outcome        tool.Outcome
 	// err keeps the raw execution error for logging only.
 	err error
@@ -240,7 +239,6 @@ func mapExecutorReport(
 					agent.ms.agentType == tool.BrowserAgentType && tool.IsBrowserToolID(tc.Name)),
 				untrusted: r.Result.Untrusted, images: r.Result.Images,
 				directMessages: r.Result.DirectMessages, outcome: r.Outcome,
-				answersInput: r.Result.AnswersInput,
 			}
 			if r.Outcome == tool.OutcomeFailed {
 				log.Warn("tool_typed_failure", zap.String("name", tc.Name))
@@ -253,7 +251,7 @@ func mapExecutorReport(
 	return results
 }
 
-func runToolCalls(ctx context.Context, agent *Session, toolCalls []llmwire.ToolCall) (bool, error) {
+func runToolCalls(ctx context.Context, agent *Session, toolCalls []llmwire.ToolCall) error {
 	log := logger.Ctx(ctx).Named("session.toolexec")
 
 	action := agent.loopDetector.check()
@@ -278,7 +276,7 @@ func runToolCalls(ctx context.Context, agent *Session, toolCalls []llmwire.ToolC
 		c.ToolResults = results
 		_, err := agent.commit(ctx, c)
 
-		return false, err
+		return err
 	}
 
 	results := executeToolCallsInternal(ctx, agent, toolCalls)
@@ -311,7 +309,7 @@ func recordToolResults(
 	agent *Session,
 	results []toolCallResultItem,
 	postAction loopAction,
-) (bool, error) {
+) error {
 	// The warning fronts only the turn's last persisted executed/failed result,
 	// so its index must be fixed before the commit loop walks the rows.
 	warnIdx := -1
@@ -359,7 +357,7 @@ func recordToolResults(
 			},
 		)
 		if err != nil {
-			return false, err
+			return err
 		}
 
 		c.ToolResults = append(c.ToolResults, message)
@@ -385,22 +383,20 @@ func commitToolState(
 	agent *Session,
 	c sessionstore.Commit,
 	results []toolCallResultItem,
-) (bool, error) {
+) error {
 	data, err := json.Marshal(agent.prompt.Todos.List())
 	if err != nil {
-		return false, fmt.Errorf("record tool results: %w", err)
+		return fmt.Errorf("record tool results: %w", err)
 	}
 
 	raw := json.RawMessage(data)
 
 	c.State.TodoItems = &raw
 	if _, err := agent.commit(ctx, c); err != nil {
-		return false, err
+		return err
 	}
 
 	agent.stamper.Touch()
-
-	answers := false
 
 	// All rows are durable; user-facing semantics fire only now.
 	for _, r := range results {
@@ -409,10 +405,9 @@ func commitToolState(
 		}
 
 		consumeActivation(agent, r)
-		answers = answers || r.answersInput
 	}
 
-	return answers, nil
+	return nil
 }
 
 func consumeActivation(agent *Session, r toolCallResultItem) {
@@ -424,11 +419,8 @@ func consumeActivation(agent *Session, r toolCallResultItem) {
 	}
 }
 
-func (s *Session) toolStep(ctx context.Context, r *runState, calls []llmwire.ToolCall) error {
-	answers, err := runToolCalls(ctx, s, calls)
-	if err == nil && answers {
-		r.answerOwed = false
-	}
+func (s *Session) toolStep(ctx context.Context, calls []llmwire.ToolCall) error {
+	err := runToolCalls(ctx, s, calls)
 
 	if s.suspended {
 		if s.stagedCalls == nil {

@@ -24,12 +24,6 @@ func prepareCommitTx(ctx context.Context, tx *sql.Tx, c Commit) (Commit, error) 
 }
 
 func applyCommitTx(ctx context.Context, tx *sql.Tx, c Commit, result *CommitResult) error {
-	if c.BeginRun {
-		if err := beginRunTx(ctx, tx, c.SessionID); err != nil {
-			return err
-		}
-	}
-
 	if err := commitBoundaryPartsTx(ctx, tx, c, result); err != nil {
 		return err
 	}

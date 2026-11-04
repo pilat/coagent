@@ -14,6 +14,7 @@
 - **Amended by:** [ADR-0077](0077-assistant-moves-the-user-in-never-out.md) — the assistant may move the focus from `#0` into a work session; only the user moves it out;
   [ADR-0079](0079-chat-shows-where-each-message-comes-from-and-every-model-step.md) — digest only on return to `#0`, session header on every work row, entry context, one message per tool-calling step
 - **Amended by:** [ADR-0081](0081-assistant-forwards-and-the-host-relays-work-answers.md) — `#0` also carries verbatim copies of observed work output, headed by origin
+- **Amended by:** [ADR-0082](0082-manager-is-a-groupless-chat-without-an-assistant.md) — focus NULL means no session; one persisted cursor per chat replaces the watermark; entry sends the last 3 rows; no digest, no `#0`; management tools on ordinary roots
 
 ## Context
 

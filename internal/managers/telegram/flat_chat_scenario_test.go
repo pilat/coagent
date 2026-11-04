@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"net/http"
 	"strconv"
 	"testing"
 	"time"
@@ -11,6 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/pilat/coagent/internal/config"
 	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/sessionstore"
 )
@@ -23,7 +25,7 @@ func TestHarnessScenario_SwitchDeliversHeaderAndTail(t *testing.T) {
 	enqueueChatMessage(t, h, one, "startup")
 	chat := h.controller.(controllerapi.ChatFocusController)
 	require.NoError(t, chat.SetChatFocus(t.Context(), strconv.FormatInt(harnessChatID, 10), one))
-	manager := newAssistantTelegramManager(t, h)
+	manager := newChatTelegramManager(t, h)
 	require.NoError(t, manager.Start(t.Context()))
 	t.Cleanup(func() { require.NoError(t, manager.Stop(context.Background())) })
 	awaitChatTail(t, h, one)
@@ -31,7 +33,7 @@ func TestHarnessScenario_SwitchDeliversHeaderAndTail(t *testing.T) {
 	enqueueChatMessage(t, h, three, "third unread")
 	enqueueChatMessage(t, h, two, "new tail one")
 	enqueueChatMessage(t, h, two, "new tail two")
-	manager.processUpdate(t.Context(), assistantTelegramUpdate(fmt.Sprintf("/switch %d", two)))
+	manager.processUpdate(t.Context(), chatTelegramUpdate(fmt.Sprintf("/switch %d", two)))
 	awaitChatTail(t, h, two)
 	var messages []string
 	for _, call := range h.recorder.snapshot() {
@@ -40,12 +42,12 @@ func TestHarnessScenario_SwitchDeliversHeaderAndTail(t *testing.T) {
 		}
 	}
 	assert.Equal(t, []string{
-		fmt.Sprintf("#%d project\nstartup", one), fmt.Sprintf("→ #%d project", two),
+		fmt.Sprintf("→ #%d project", one), fmt.Sprintf("#%d project\nstartup", one), fmt.Sprintf("→ #%d project", two),
 		fmt.Sprintf("#%d project\nnew tail one", two), fmt.Sprintf("#%d project\nnew tail two", two),
 	}, messages)
-	seen, err := h.sessions.ChatSeen(t.Context(), delayedTelegramManagerID, strconv.FormatInt(harnessChatID, 10), three)
-	require.NoError(t, err)
-	assert.Zero(t, seen)
+	for _, text := range messages {
+		assert.NotContains(t, text, fmt.Sprintf("#%d project", three))
+	}
 }
 
 func TestHarnessScenario_SwitchShowsSessionTitles(t *testing.T) {
@@ -62,14 +64,13 @@ func TestHarnessScenario_SwitchShowsSessionTitles(t *testing.T) {
 		require.NoError(t, err)
 	}
 	chat := h.controller.(controllerapi.ChatFocusController)
-	require.NoError(t, chat.SetChatFocus(t.Context(), strconv.FormatInt(harnessChatID, 10), 0))
-	manager := newAssistantTelegramManager(t, h)
+	require.NoError(t, chat.BindChat(t.Context(), strconv.FormatInt(harnessChatID, 10)))
+	manager := newChatTelegramManager(t, h)
 	require.NoError(t, manager.Start(t.Context()))
 	t.Cleanup(func() { require.NoError(t, manager.Stop(context.Background())) })
-	awaitChatTail(t, h, manager.assistantRootID)
 	enqueueChatMessage(t, h, one, "first unread")
 	enqueueChatMessage(t, h, two, "second tail")
-	manager.processUpdate(t.Context(), assistantTelegramUpdate(fmt.Sprintf("/switch %d", two)))
+	manager.processUpdate(t.Context(), chatTelegramUpdate(fmt.Sprintf("/switch %d", two)))
 	awaitChatTail(t, h, two)
 	var messages []string
 	for _, call := range h.recorder.snapshot() {
@@ -87,28 +88,26 @@ func TestHarnessScenario_ScheduledSessionMarkers(t *testing.T) {
 	h := newDelayedTelegramHarness(t)
 	work := createChatWork(t, h)
 	require.NoError(t, h.sessions.SetSessionTitle(t.Context(), delayedTelegramManagerID, work, "daily check"))
-	manager := newAssistantTelegramManager(t, h)
+	manager := newChatTelegramManager(t, h)
 	require.NoError(t, manager.Start(t.Context()))
 	t.Cleanup(func() { require.NoError(t, manager.Stop(context.Background())) })
-	awaitChatTail(t, h, manager.assistantRootID)
 	require.NoError(t, h.sessions.WithTx(t.Context(), func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(
 			t.Context(),
-			`INSERT INTO schedules(session_id,cron_expr,input_message) VALUES (?, '0 9 * * *',''), (?, '0 9 * * *','')`,
+			`INSERT INTO schedules(session_id,cron_expr,input_message) VALUES (?, '0 9 * * *','')`,
 			work,
-			manager.assistantRootID,
 		)
 		return err
 	}))
 	enqueueChatMessage(t, h, work, "scheduled work result")
-	manager.processUpdate(t.Context(), assistantTelegramUpdate("/sessions"))
+	manager.processUpdate(t.Context(), chatTelegramUpdate("/sessions"))
 	require.Eventually(t, func() bool {
 		return hasTelegramMessage(
 			h.recorder.snapshot(),
-			fmt.Sprintf("#0 Assistant ⏰ ◀\n#%d project · daily check ⏰ · 1 new", work),
+			fmt.Sprintf("#%d project · daily check ⏰", work),
 		)
 	}, time.Second, time.Millisecond)
-	manager.processUpdate(t.Context(), assistantTelegramUpdate(fmt.Sprintf("/switch %d", work)))
+	manager.processUpdate(t.Context(), chatTelegramUpdate(fmt.Sprintf("/switch %d", work)))
 	awaitChatTail(t, h, work)
 	assert.True(t, hasTelegramMessage(h.recorder.snapshot(), fmt.Sprintf("→ #%d project · daily check ⏰", work)))
 	assert.True(
@@ -117,13 +116,6 @@ func TestHarnessScenario_ScheduledSessionMarkers(t *testing.T) {
 			h.recorder.snapshot(),
 			fmt.Sprintf("#%d project · daily check\nscheduled work result", work),
 		),
-	)
-	manager.processUpdate(t.Context(), assistantTelegramUpdate("/assistant"))
-	require.Eventually(
-		t,
-		func() bool { return hasTelegramMessage(h.recorder.snapshot(), "→ #0 Assistant ⏰") },
-		time.Second,
-		time.Millisecond,
 	)
 }
 
@@ -134,10 +126,10 @@ func TestHarnessScenario_NumberedControlsAndTextKeepTheirRouting(t *testing.T) {
 	chat := h.controller.(controllerapi.ChatFocusController)
 	key := strconv.FormatInt(harnessChatID, 10)
 	require.NoError(t, chat.SetChatFocus(t.Context(), key, one))
-	manager := newAssistantTelegramManager(t, h)
-	manager.processUpdate(t.Context(), assistantTelegramUpdate(fmt.Sprintf("/stop %d", two)))
-	manager.processUpdate(t.Context(), assistantTelegramUpdate(fmt.Sprintf("/kill %d", two)))
-	manager.processUpdate(t.Context(), assistantTelegramUpdate("plain focused text"))
+	manager := newChatTelegramManager(t, h)
+	manager.processUpdate(t.Context(), chatTelegramUpdate(fmt.Sprintf("/stop %d", two)))
+	manager.processUpdate(t.Context(), chatTelegramUpdate(fmt.Sprintf("/kill %d", two)))
+	manager.processUpdate(t.Context(), chatTelegramUpdate("plain focused text"))
 	focus, err := chat.ChatFocus(t.Context(), key)
 	require.NoError(t, err)
 	assert.Equal(t, one, focus)
@@ -176,7 +168,7 @@ func TestHarnessScenario_KilledSwitchRefusedAndFocusedKillDrainsClose(t *testing
 	chat := h.controller.(controllerapi.ChatFocusController)
 	key := strconv.FormatInt(harnessChatID, 10)
 	require.NoError(t, chat.SetChatFocus(t.Context(), key, id))
-	manager := newAssistantTelegramManager(t, h)
+	manager := newChatTelegramManager(t, h)
 	require.NoError(t, manager.Start(t.Context()))
 	t.Cleanup(func() { require.NoError(t, manager.Stop(context.Background())) })
 	awaitChatTail(t, h, id)
@@ -184,9 +176,10 @@ func TestHarnessScenario_KilledSwitchRefusedAndFocusedKillDrainsClose(t *testing
 	require.NoError(t, err)
 	manager.wakeDelivery()
 	require.Eventually(t, func() bool {
-		return hasTelegramMessage(h.recorder.snapshot(), "→ #0 Assistant")
+		focus, err := chat.ChatFocus(t.Context(), key)
+		return err == nil && focus == 0
 	}, 3*time.Second, 10*time.Millisecond)
-	manager.processUpdate(t.Context(), assistantTelegramUpdate(fmt.Sprintf("/switch %d", id)))
+	manager.processUpdate(t.Context(), chatTelegramUpdate(fmt.Sprintf("/switch %d", id)))
 	var messages []string
 	for _, call := range h.recorder.snapshot() {
 		if call.Method == "sendMessage" {
@@ -194,7 +187,8 @@ func TestHarnessScenario_KilledSwitchRefusedAndFocusedKillDrainsClose(t *testing
 		}
 	}
 	assert.Equal(t, []string{
-		fmt.Sprintf("#%d project\nSession killed. Cancelled background processes: 3", id), "→ #0 Assistant",
+		fmt.Sprintf("→ #%d project", id),
+		fmt.Sprintf("#%d project\nSession killed. Cancelled background processes: 3", id),
 		fmt.Sprintf("#%d is not a live session", id),
 	}, messages)
 	focus, err := chat.ChatFocus(t.Context(), key)
@@ -209,18 +203,22 @@ func TestHarnessScenario_ForbiddenChatPausesWithoutMarking(t *testing.T) {
 	chat := h.controller.(controllerapi.ChatFocusController)
 	key := strconv.FormatInt(harnessChatID, 10)
 	require.NoError(t, chat.SetChatFocus(t.Context(), key, id))
+	entered, err := chat.EnterChat(t.Context(), key, id, 0)
+	require.NoError(t, err)
+	require.True(t, entered)
 	h.recorder.sendResponses = []string{`{"ok":false,"error_code":403,"description":"bot blocked"}`}
-	manager := newAssistantTelegramManager(t, h)
+	manager := newChatTelegramManager(t, h)
 	require.NoError(t, manager.Start(t.Context()))
 	t.Cleanup(func() { require.NoError(t, manager.Stop(context.Background())) })
 	require.Eventually(t, func() bool {
 		return hasTelegramMessage(h.recorder.snapshot(), fmt.Sprintf("#%d project\nmust remain unread", id))
 	}, time.Second, time.Millisecond)
 	require.NoError(t, manager.Stop(t.Context()))
-	seen, err := h.sessions.ChatSeen(t.Context(), delayedTelegramManagerID, key, id)
+	_, cursor, entered, err := chat.ChatCursor(t.Context(), key)
 	require.NoError(t, err)
-	assert.Less(t, seen, outputID)
-	rows, err := chat.ChatOutputs(t.Context(), key, id, 10)
+	assert.True(t, entered)
+	assert.Less(t, cursor, outputID)
+	rows, err := chat.ChatOutputs(t.Context(), key, id, cursor, 10)
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
 	assert.Equal(t, "must remain unread", rows[0].Content)
@@ -233,8 +231,11 @@ func TestHarnessScenario_ParseRejectionFallsBackBeforeMarking(t *testing.T) {
 	chat := h.controller.(controllerapi.ChatFocusController)
 	key := strconv.FormatInt(harnessChatID, 10)
 	require.NoError(t, chat.SetChatFocus(t.Context(), key, id))
+	entered, err := chat.EnterChat(t.Context(), key, id, 0)
+	require.NoError(t, err)
+	require.True(t, entered)
 	h.recorder.sendResponses = []string{`{"ok":false,"error_code":400,"description":"can't parse entities"}`}
-	manager := newAssistantTelegramManager(t, h)
+	manager := newChatTelegramManager(t, h)
 	require.NoError(t, manager.Start(t.Context()))
 	t.Cleanup(func() { require.NoError(t, manager.Stop(context.Background())) })
 	awaitChatTail(t, h, id)
@@ -253,9 +254,10 @@ func TestHarnessScenario_ParseRejectionFallsBackBeforeMarking(t *testing.T) {
 		},
 		{Method: "sendMessage", Text: fmt.Sprintf("#%d project\nanswer", id), ChatID: harnessChatID},
 	}, sends)
-	seen, err := h.sessions.ChatSeen(t.Context(), delayedTelegramManagerID, key, id)
+	_, cursor, entered, err := chat.ChatCursor(t.Context(), key)
 	require.NoError(t, err)
-	assert.Equal(t, outputID, seen)
+	assert.True(t, entered)
+	assert.Equal(t, outputID, cursor)
 }
 
 func createChatWork(t *testing.T, h *delayedTelegramHarness) int64 {
@@ -277,4 +279,21 @@ func enqueueChatMessage(t *testing.T, h *delayedTelegramHarness, sessionID int64
 	})
 	require.NoError(t, err)
 	return commit.OutputID
+}
+
+func newChatTelegramManager(t *testing.T, h *delayedTelegramHarness) *Manager {
+	t.Helper()
+	m, err := New(config.ManagerEntry{
+		ID: delayedTelegramManagerID, BotToken: "test-token", AllowedUserIDs: []int64{7},
+		TargetChatID: new(int64(harnessChatID)),
+	}, nil, h.controller)
+	require.NoError(t, err)
+	m.httpClient = &http.Client{Transport: h.recorder}
+	return m
+}
+
+func chatTelegramUpdate(text string) telegramUpdate {
+	return telegramUpdate{Message: &telegramMessage{
+		From: &telegramUser{ID: 7}, Chat: telegramChat{ID: harnessChatID}, Text: text,
+	}}
 }

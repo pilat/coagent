@@ -24,8 +24,13 @@ func TestListDir_OmitsHiddenProjectDirByPath(t *testing.T) {
 		require.NoError(t, os.MkdirAll(dir, 0o755))
 	}
 
-	store, _ := newProjectTestManager(t)
-	_, err := store.GetOrCreateHiddenProject(t.Context(), hidden)
+	store, db := newProjectTestManager(t)
+	_, err := db.ExecContext(
+		t.Context(),
+		`INSERT INTO projects(work_dir, name, hidden) VALUES (?, ?, TRUE)`,
+		hidden,
+		filepath.Base(hidden),
+	)
 	require.NoError(t, err)
 	svc := &Service{backend: store}
 

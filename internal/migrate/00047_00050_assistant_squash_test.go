@@ -102,7 +102,7 @@ func TestMigrate_00047_00050_UniqueRootIndex(t *testing.T) {
 		}
 		t.Run(name, func(t *testing.T) {
 			db, provider := assistantSquashDB(t, legacy)
-			_, err := provider.Up(t.Context())
+			_, err := provider.UpTo(t.Context(), 50)
 			require.NoError(t, err)
 			_, err = db.ExecContext(t.Context(), `INSERT INTO projects(id,work_dir,name) VALUES(1,'/p','p');
 INSERT INTO sessions(project_id,model,agent_type,attributes) VALUES(1,'m','assistant','{"manager_id":"owner"}');`)

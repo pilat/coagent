@@ -1,6 +1,6 @@
 # ADR-0081: The assistant forwards the user's words and the host relays work answers into `#0`
 
-- **Status:** Accepted
+- **Status:** Superseded by [ADR-0082](0082-manager-is-a-groupless-chat-without-an-assistant.md)
 - **Date:** 2026-11-01
 - **Amends:** [ADR-0074](0074-assistant-is-an-ordinary-session-with-a-desk-head.md),
   [ADR-0076](0076-flat-chat-with-a-focus.md),

@@ -29,7 +29,7 @@ func (s *Store) SetSessionTitle(ctx context.Context, managerID string, sessionID
 
 	result, err := s.db.ExecContext(ctx, `UPDATE sessions AS s
 		SET attributes = json_set(COALESCE(attributes, '{}'), '$.title', ?)
-		WHERE s.id = ? AND `+assistantChatRootSQL, title, sessionID, managerID)
+		WHERE s.id = ? AND `+liveChatRootSQL, title, sessionID, managerID)
 	if err != nil {
 		return fmt.Errorf("set session title: %w", err)
 	}

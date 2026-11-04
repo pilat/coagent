@@ -31,7 +31,7 @@ func TestOutputStore_AppendsAndReplaysWithoutMutatingHistory(t *testing.T) {
 	assert.Equal(t, first.OutputID, replay.OutputID)
 	assert.Equal(t, "first", replay.Content)
 	assert.Less(t, first.OutputID, second.OutputID)
-	rows, err := store.ChatOutputs(t.Context(), "owner", "chat", root.ID, 100)
+	rows, err := store.ChatOutputs(t.Context(), root.ID, 0, 100)
 	require.NoError(t, err)
 	require.Len(t, rows, 2)
 	assert.Equal(t, "first", rows[0].Content)

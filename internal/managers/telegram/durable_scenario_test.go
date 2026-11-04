@@ -12,7 +12,6 @@ import (
 	"github.com/pilat/coagent/internal/config"
 	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/managerdelivery"
-	"github.com/pilat/coagent/internal/sessionevent"
 )
 
 const replayManagerID = "telegram:main"
@@ -62,16 +61,6 @@ func TestHarnessScenario_SetManagerTracesProduceNoTelegramTraffic(t *testing.T) 
 	}
 }
 
-func TestHarnessScenario_DurableTelegramIgnoresObserverNotifications(t *testing.T) {
-	var calls []telegramHarnessCall
-	manager := newTelegramHarnessManager(t, &fakeController{}, &calls)
-	manager.handleNotification(t.Context(), controllerapi.SessionNotification{
-		SessionID:    harnessSessionID,
-		Notification: sessionevent.Notification{Type: sessionevent.NotifyMessage, Message: "observer answer"},
-	})
-	assert.Empty(t, calls)
-}
-
 func TestHarnessScenario_NarratedTraceReplaysAllNarrationsAndFinal(t *testing.T) {
 	calls := replayDaemonTraceThroughOutbox(t, readDaemonTrace(t, "output_chain_narrated_tools.json"))
 	var messages []string
@@ -81,6 +70,7 @@ func TestHarnessScenario_NarratedTraceReplaysAllNarrationsAndFinal(t *testing.T)
 	}
 
 	assert.Equal(t, []string{
+		"→ #1 &lt;name&gt;",
 		"#1 &lt;name&gt;\nReading the repo\n\n→ ls: <code>.</code>",
 		"#1 &lt;name&gt;\nUpdating the task list\n\n→ todowrite", "#1 &lt;name&gt;\nAll done.",
 	}, messages)
@@ -95,11 +85,12 @@ func TestHarnessScenario_OutputsRetainOwnershipWithoutCreatedNotification(t *tes
 	}
 
 	assert.Equal(t, []string{
+		"→ #1 &lt;name&gt;",
 		"#1 &lt;name&gt;\n⏳ Stopping…", "#1 &lt;name&gt;\n⏸️ Session stopped\nCancelled background processes: 0",
 	}, messages)
 }
 
-func TestHarnessScenario_ReplaySelectsFirstOwnedMessageAndLeavesOtherTailsUnread(t *testing.T) {
+func TestHarnessScenario_ReplaySelectsFirstOwnedMessageAndSkipsOtherTails(t *testing.T) {
 	trace := harnessTraceFile{
 		Owners: map[int64]string{1: "foreign", 2: replayManagerID, 3: replayManagerID},
 		Outputs: []harnessTraceOutput{
@@ -111,9 +102,10 @@ func TestHarnessScenario_ReplaySelectsFirstOwnedMessageAndLeavesOtherTailsUnread
 		},
 	}
 	calls := replayDaemonTraceThroughOutbox(t, trace)
-	require.Len(t, calls, 2)
-	assert.Equal(t, "#2 &lt;name&gt;\nselected first", calls[0].Text)
-	assert.Equal(t, "#2 &lt;name&gt;\nselected second", calls[1].Text)
+	require.Len(t, calls, 3)
+	assert.Equal(t, "→ #2 &lt;name&gt;", calls[0].Text)
+	assert.Equal(t, "#2 &lt;name&gt;\nselected first", calls[1].Text)
+	assert.Equal(t, "#2 &lt;name&gt;\nselected second", calls[2].Text)
 	controller := &fakeController{managerID: replayManagerID, listSessions: []controllerapi.SessionInfo{
 		{ID: 1, Attributes: map[string]any{"manager_id": "foreign"}},
 	}}
@@ -155,7 +147,8 @@ func replayDaemonTraceThroughOutbox(t *testing.T, trace harnessTraceFile) []tele
 		controller.mu.Lock()
 		defer controller.mu.Unlock()
 		rows := controller.outputs[controller.focus]
-		return len(rows) == 0 || controller.seen[controller.focus] == rows[len(rows)-1].ID
+		return controller.focus == 0 ||
+			(controller.entered && (len(rows) == 0 || controller.cursor == rows[len(rows)-1].ID))
 	}, time.Second, time.Millisecond)
 	require.NoError(t, loop.Stop(context.Background()))
 

@@ -111,7 +111,7 @@ func TestMigrate_55_SessionTitles(t *testing.T) {
 			}
 		})
 	}
-	_, err = provider.Up(t.Context())
+	_, err = provider.UpTo(t.Context(), 55)
 	require.NoError(t, err)
 	assert.False(t, tableExists(t, db, "assistant_work"))
 	rows, err := db.QueryContext(

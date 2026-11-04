@@ -34,7 +34,7 @@ func TestMigrate_58_PreservesOutputRowsSequenceAndWatermarks(t *testing.T) {
 			const seen = `SELECT * FROM chat_seen`
 			before, indexesBefore, seenBefore := dumpRows(t, db, rows), dumpRows(t, db, indexes), dumpRows(t, db, seen)
 			require.Empty(t, dumpRows(t, db, `PRAGMA foreign_key_check`))
-			_, err = provider.Up(t.Context())
+			_, err = provider.UpTo(t.Context(), 58)
 			require.NoError(t, err)
 			assert.Equal(t, before, dumpRows(t, db, rows))
 			assert.Equal(t, indexesBefore, dumpRows(t, db, indexes))

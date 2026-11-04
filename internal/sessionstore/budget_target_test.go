@@ -121,6 +121,48 @@ func TestBudgetStore_RejectsNegativeGrantSession(t *testing.T) {
 	require.ErrorIs(t, err, budget.ErrConflict)
 }
 
+func TestBudgetStore_RejectsMissingInputOrCommandWithoutChanges(t *testing.T) {
+	for _, missing := range []string{"zero input", "negative input", "empty command"} {
+		t.Run(missing, func(t *testing.T) {
+			t.Parallel()
+			store, db, project := newTestStore(t)
+			root := chatTestRoot(t, store, project, "owner")
+			valid := targetedBudgetMutation(t, store, root.ID, root.ID, "arm")
+			before, err := store.Arm(t.Context(), valid)
+			require.NoError(t, err)
+			mutation := targetedBudgetMutation(t, store, root.ID, root.ID, "refused")
+			inputID := mutation.InputID
+			switch missing {
+			case "zero input":
+				mutation.InputID = 0
+			case "negative input":
+				mutation.InputID = -1
+			case "empty command":
+				mutation.Command = ""
+			}
+			for _, action := range []string{"arm", "clear"} {
+				mutate := store.Arm
+				if action == "clear" {
+					mutation.DurationSeconds = nil
+					mutate = store.Clear
+				}
+				_, err := mutate(t.Context(), mutation)
+				require.ErrorIs(t, err, budget.ErrConflict)
+				after, err := store.Get(t.Context(), root.ID)
+				require.NoError(t, err)
+				assert.Equal(t, before, after)
+				grant, err := store.PendingActivation(t.Context(), root.ID)
+				require.NoError(t, err)
+				assert.Equal(t, inputID, grant.InputID)
+				var receipts int
+				require.NoError(t, db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM session_outbox
+					WHERE session_id = ? AND source_key = 'tool:refused:direct:0'`, root.ID).Scan(&receipts))
+				assert.Zero(t, receipts)
+			}
+		})
+	}
+}
+
 func targetedBudgetMutation(t *testing.T, store *Store, grant, target int64, call string) budget.Mutation {
 	t.Helper()
 	input, err := enqueueInput(t.Context(), store, grant, InputSourceUser, "/budget 1m")

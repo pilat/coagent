@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
-
-	"github.com/pilat/coagent/internal/controllerapi"
 )
 
 // ProjectRow is a project registry row.
@@ -24,7 +22,7 @@ func (s *Store) GetOrCreateProject(ctx context.Context, workDir string) (int64, 
 	}
 
 	name := filepath.Base(absPath)
-	if name == controllerapi.AssistantProjectDir || strings.ContainsRune(name, ':') {
+	if strings.ContainsRune(name, ':') {
 		return 0, fmt.Errorf("project directory name %q is reserved", name)
 	}
 
@@ -44,35 +42,6 @@ func (s *Store) GetOrCreateNamedProject(ctx context.Context, workDir, name strin
 	}
 
 	return s.getOrCreateProject(ctx, absPath, name)
-}
-
-func (s *Store) GetOrCreateHiddenProject(ctx context.Context, workDir string) (int64, error) {
-	absPath, err := filepath.Abs(workDir)
-	if err != nil {
-		absPath = workDir
-	}
-
-	name := filepath.Base(absPath)
-
-	_, err = s.db.ExecContext(
-		ctx,
-		`INSERT INTO projects (work_dir, name, hidden) VALUES (?, ?, TRUE)
-			ON CONFLICT(work_dir) DO UPDATE SET hidden = excluded.hidden`,
-		absPath,
-		name,
-	)
-	if err != nil {
-		return 0, fmt.Errorf("upsert hidden project: %w", err)
-	}
-
-	var projectID int64
-
-	err = s.db.QueryRowContext(ctx, `SELECT id FROM projects WHERE work_dir = ?`, absPath).Scan(&projectID)
-	if err != nil {
-		return 0, fmt.Errorf("select project: %w", err)
-	}
-
-	return projectID, nil
 }
 
 func (s *Store) GetProjectName(ctx context.Context, projectID int64) (string, error) {

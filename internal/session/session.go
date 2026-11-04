@@ -43,13 +43,11 @@ type Input struct {
 	OpeningContext           string
 	OutputEnabled            bool
 	ToolTrail                bool
-	SilentFinish             bool
 	PreserveStopped          bool
 	Schedules                string
 	Status                   string
 	BackgroundSnapshot       string
 	CompactionDeferAnnounced bool
-	Head                     func(context.Context) (string, error)
 }
 
 // Session executes one activation over an assembled tool and model stack.
@@ -80,10 +78,8 @@ type Session struct {
 	status          string
 	outputEnabled   bool
 	toolTrail       bool
-	silentFinish    bool
 	preserveStopped bool
 	budgetFired     bool
-	head            func(context.Context) (string, error)
 
 	// Loop execution state
 	ms           *messageStore
@@ -162,12 +158,10 @@ func New(ctx context.Context, in Input) (*Session, error) {
 		events:                   in.Events,
 		outputEnabled:            in.OutputEnabled,
 		toolTrail:                in.ToolTrail,
-		silentFinish:             in.SilentFinish,
 		preserveStopped:          in.PreserveStopped,
 		activeBackgroundSnapshot: in.BackgroundSnapshot,
 		compactionDeferAnnounced: in.CompactionDeferAnnounced,
 		iterationOffset:          r.Iteration,
-		head:                     in.Head,
 	}
 	if s.rootID == 0 {
 		s.rootID = s.id

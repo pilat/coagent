@@ -1,7 +1,7 @@
 package managercontrol
 
 import (
-	"context"
+	"database/sql"
 	"fmt"
 	"path/filepath"
 	"testing"
@@ -12,7 +12,6 @@ import (
 	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/migrate"
 	"github.com/pilat/coagent/internal/sessionstore"
-	"github.com/pilat/coagent/internal/transcript"
 )
 
 type chatTestBackend struct {
@@ -21,54 +20,7 @@ type chatTestBackend struct {
 	project int64
 }
 
-func TestChatCapability_RelayOriginSurvivesTailAndContext(t *testing.T) {
-	factory, store, project := newChatControl(t)
-	chat := chatCapability(t, factory, "owner")
-	assistant, err := factory.ForManager("owner").EnsureAssistantRoot(t.Context())
-	require.NoError(t, err)
-	work, err := store.CreateSession(
-		t.Context(),
-		project,
-		"model",
-		"",
-		map[string]any{"manager_id": "owner", "title": "purpose"},
-	)
-	require.NoError(t, err)
-	input, err := store.Enqueue(t.Context(), sessionstore.Input{
-		SessionID: work.ID, Source: sessionstore.InputSourceUser, Content: "work request",
-	})
-	require.NoError(t, err)
-	assert.EqualValues(t, assistant.SessionID, input.Input.Attributes[sessionstore.ObserverSessionIDAttribute])
-	_, err = store.Commit(t.Context(), sessionstore.Commit{
-		SessionID: work.ID,
-		Accept: []sessionstore.Accept{{
-			InputID: input.Input.ID, State: sessionstore.InputStateAccepted,
-			Content: input.Input.RawContent, LinkRef: -1, ModelBound: true,
-		}},
-	})
-	require.NoError(t, err)
-	_, err = store.Commit(t.Context(), sessionstore.Commit{
-		SessionID: work.ID,
-		Messages:  []*transcript.Message{{Role: "assistant", Content: "work answer", FinishType: "stop"}},
-		Outputs: []sessionstore.Output{
-			{Type: sessionstore.OutputMessage, Content: "work answer", MessageRef: 0, Phase: "final"},
-		},
-	})
-	require.NoError(t, err)
-	rows, err := chat.ChatOutputs(t.Context(), "chat", 0, 10)
-	require.NoError(t, err)
-	row := rows[len(rows)-1]
-	assert.Zero(t, row.SessionID)
-	assert.Equal(t, work.ID, row.Origin)
-	assert.Contains(t, row.OriginName, "purpose")
-	require.NoError(t, chat.MarkChatSeen(t.Context(), "chat", 0, row.ID))
-	last, found, err := chat.LastSeenChatOutput(t.Context(), "chat", 0)
-	require.NoError(t, err)
-	require.True(t, found)
-	assert.Equal(t, row, last)
-}
-
-func TestChatCapability_RejectsForeignFocusReadAndMark(t *testing.T) {
+func TestChatCapability_RejectsForeignCursorReadAndAdvance(t *testing.T) {
 	t.Parallel()
 
 	ctx := t.Context()
@@ -83,11 +35,14 @@ func TestChatCapability_RejectsForeignFocusReadAndMark(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, one.SetChatFocus(ctx, "shared", root.ID))
 	require.EqualError(t, two.SetChatFocus(ctx, "shared", root.ID), fmt.Sprintf("#%d is not a live session", root.ID))
-	_, err = two.ChatOutputs(ctx, "shared", root.ID, 10)
+	_, err = two.ChatOutputs(ctx, "shared", root.ID, 0, 10)
 	require.Error(t, err)
-	_, _, err = two.LastSeenChatOutput(ctx, "shared", root.ID)
+	_, _, err = two.ChatEntry(ctx, "shared", root.ID, 3)
 	require.Error(t, err)
-	require.Error(t, two.MarkChatSeen(ctx, "shared", root.ID, output.OutputID))
+	_, err = two.EnterChat(ctx, "shared", root.ID, output.OutputID)
+	require.Error(t, err)
+	_, err = two.AdvanceChat(ctx, "shared", root.ID, output.OutputID)
+	require.Error(t, err)
 	_, err = two.ResetChatFocus(ctx, "shared", root.ID)
 	require.Error(t, err)
 	_, err = two.SessionKilled(ctx, root.ID)
@@ -98,59 +53,22 @@ func TestChatCapability_RejectsForeignFocusReadAndMark(t *testing.T) {
 	focus, err = one.ChatFocus(ctx, "shared")
 	require.NoError(t, err)
 	assert.Equal(t, root.ID, focus)
-	seen, err := store.ChatSeen(ctx, "two", "shared", root.ID)
+	session, cursor, entered, err := two.ChatCursor(ctx, "shared")
 	require.NoError(t, err)
-	assert.Zero(t, seen)
-	rows, err := one.ChatOutputs(ctx, "shared", root.ID, 10)
+	assert.Zero(t, session)
+	assert.Zero(t, cursor)
+	assert.False(t, entered)
+	rows, err := one.ChatOutputs(ctx, "shared", root.ID, 0, 10)
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
 	assert.Equal(t, "private output", rows[0].Content)
-}
-
-func TestChatCapability_AssistantUsesZeroAndItsOwnWatermark(t *testing.T) {
-	t.Parallel()
-
-	ctx := t.Context()
-	factory, store, project := newChatControl(t)
-	chat := chatCapability(t, factory, "owner")
-	assistant, err := factory.ForManager("owner").EnsureAssistantRoot(ctx)
-	require.NoError(t, err)
-	work, err := store.CreateSession(ctx, project, "model", "", map[string]any{"manager_id": "owner"})
-	require.NoError(t, err)
-	require.NoError(t, chat.SetChatFocus(ctx, "chat", work.ID))
-	require.NoError(t, chat.SetChatFocus(ctx, "chat", 0))
-	focus, err := chat.ChatFocus(ctx, "chat")
-	require.NoError(t, err)
-	assert.Zero(t, focus)
-	focus, err = store.ChatFocus(ctx, "owner", "chat")
-	require.NoError(t, err)
-	assert.Zero(t, focus)
-	require.NoError(t, chat.SetChatFocus(ctx, "chat", assistant.SessionID))
-	output, err := store.EnqueueOutput(ctx, sessionstore.OutputDraft{
-		SessionID: assistant.SessionID, Type: sessionstore.OutputMessage, Content: "assistant answer",
-	})
-	require.NoError(t, err)
-	rows, err := chat.ChatOutputs(ctx, "chat", 0, 10)
-	require.NoError(t, err)
-	require.Len(t, rows, 2)
-	assert.Zero(t, rows[1].SessionID)
-	assert.Equal(t, "assistant answer", rows[1].Content)
-	require.NoError(t, chat.MarkChatSeen(ctx, "chat", 0, output.OutputID))
-	seen, err := store.ChatSeen(ctx, "owner", "chat", assistant.SessionID)
-	require.NoError(t, err)
-	assert.Equal(t, output.OutputID, seen)
-	context, found, err := chat.LastSeenChatOutput(ctx, "chat", 0)
-	require.NoError(t, err)
-	require.True(t, found)
-	assert.Zero(t, context.SessionID)
-	assert.Equal(t, "Assistant", context.Name)
-	assert.Equal(t, "assistant answer", context.Content)
-	sessions, err := chat.ChatSessions(ctx, "chat")
-	require.NoError(t, err)
-	require.Len(t, sessions, 2)
-	assert.Equal(t, controllerapi.ChatSessionInfo{
-		ID: 0, SessionID: assistant.SessionID, Name: "Assistant",
-	}, sessions[0])
+	require.NoError(t, store.WithTx(ctx, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `INSERT INTO chat_focus(manager_id,chat_id,session_id)
+			VALUES ('two','shared',?)`, root.ID)
+		return err
+	}))
+	_, _, _, err = two.ChatCursor(ctx, "shared")
+	require.ErrorContains(t, err, "not a root owned by this manager")
 }
 
 func TestChatCapability_KillFenceDoesNotBecomeKilledBeforeClose(t *testing.T) {
@@ -178,14 +96,24 @@ func TestChatCapability_KillFenceDoesNotBecomeKilledBeforeClose(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, killed)
 	require.EqualError(t, chat.SetChatFocus(ctx, "chat", root.ID), fmt.Sprintf("#%d is not a live session", root.ID))
-	rows, err := chat.ChatOutputs(ctx, "chat", root.ID, 10)
+	rows, err := chat.ChatOutputs(ctx, "chat", root.ID, 0, 10)
 	require.NoError(t, err)
 	require.Len(t, rows, 2)
 	assert.Equal(t, controllerapi.OutputSessionClosed, rows[1].Type)
-	require.NoError(t, chat.MarkChatSeen(ctx, "chat", root.ID, closed.OutputID))
+	entered, err := chat.EnterChat(ctx, "chat", root.ID, 0)
+	require.NoError(t, err)
+	require.True(t, entered)
+	advanced, err := chat.AdvanceChat(ctx, "chat", root.ID, closed.OutputID)
+	require.NoError(t, err)
+	require.True(t, advanced)
 	reset, err := chat.ResetChatFocus(ctx, "chat", root.ID)
 	require.NoError(t, err)
 	assert.True(t, reset)
+	session, cursor, entered, err := chat.ChatCursor(ctx, "chat")
+	require.NoError(t, err)
+	assert.Zero(t, session)
+	assert.Zero(t, cursor)
+	assert.False(t, entered)
 }
 
 func TestChatCapability_RejectsAnUnboundManager(t *testing.T) {
@@ -194,7 +122,15 @@ func TestChatCapability_RejectsAnUnboundManager(t *testing.T) {
 	factory, _, _ := newChatControl(t)
 	chat := chatCapability(t, factory, "")
 	require.ErrorContains(t, chat.BindChat(t.Context(), "chat"), "no manager identity")
-	_, err := chat.ChatFocus(t.Context(), "chat")
+	_, _, _, err := chat.ChatCursor(t.Context(), "chat")
+	require.ErrorContains(t, err, "no manager identity")
+	_, _, err = chat.ChatEntry(t.Context(), "chat", 1, 3)
+	require.ErrorContains(t, err, "no manager identity")
+	_, err = chat.EnterChat(t.Context(), "chat", 1, 0)
+	require.ErrorContains(t, err, "no manager identity")
+	_, err = chat.AdvanceChat(t.Context(), "chat", 1, 1)
+	require.ErrorContains(t, err, "no manager identity")
+	_, err = chat.ChatFocus(t.Context(), "chat")
 	require.ErrorContains(t, err, "no manager identity")
 	require.ErrorContains(t, chat.SetChatFocus(t.Context(), "chat", 0), "no manager identity")
 	_, err = chat.ChatSessions(t.Context(), "chat")
@@ -203,23 +139,13 @@ func TestChatCapability_RejectsAnUnboundManager(t *testing.T) {
 
 func TestChatCapability_BindsOnlyItsManager(t *testing.T) {
 	t.Parallel()
-	factory, store, _ := newChatControl(t)
+	factory, _, _ := newChatControl(t)
 	chat := chatCapability(t, factory, "owner")
 	require.NoError(t, chat.BindChat(t.Context(), "chat"))
-	require.ErrorIs(t, store.FocusOwnerChat(t.Context(), "other", 1), sessionstore.ErrChatNotBound)
-	require.EqualError(t, store.FocusOwnerChat(t.Context(), "owner", 999999), "#999999 is not a live session")
-}
-
-func (b *chatTestBackend) EnsureAssistantRoot(
-	ctx context.Context,
-	managerID string,
-) (*sessionstore.SessionRecord, error) {
-	record, err := b.store.EnsureAssistantRoot(ctx, b.project, managerID, "/assistant", "model", "")
-	if err != nil {
-		return nil, fmt.Errorf("ensure test assistant: %w", err)
-	}
-
-	return record, nil
+	other := chatCapability(t, factory, "other")
+	focus, err := other.ChatFocus(t.Context(), "chat")
+	require.NoError(t, err)
+	assert.Zero(t, focus)
 }
 
 func newChatControl(t *testing.T) (controllerapi.ManagerControllerFactory, *sessionstore.Store, int64) {

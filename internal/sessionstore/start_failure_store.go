@@ -16,9 +16,6 @@ func (s *Store) RecordSessionStartFailure(ctx context.Context, sessionID int64, 
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	pending := registerEnqueueTransaction(tx)
-	defer enqueueTransactions.Delete(tx)
-
 	record, err := scanSession(
 		tx.QueryRowContext(ctx, `SELECT `+sessionColumns+` FROM sessions WHERE id = ?`, sessionID),
 	)
@@ -55,8 +52,6 @@ func (s *Store) RecordSessionStartFailure(ctx context.Context, sessionID int64, 
 		return false, fmt.Errorf("commit start failure: %w", err)
 	}
 
-	s.wakeEnqueued(pending)
-
 	return reported, nil
 }
 
@@ -86,14 +81,8 @@ func recordStartFailureOutputTx(
 		return false, fmt.Errorf("record start failure receipt: %w", err)
 	}
 
-	if out != nil {
-		if out.Existing {
-			return false, nil
-		}
-
-		if err := notifyObserversTx(ctx, tx, record.ID, 0, out.OutputID, content, at, CommitLoop); err != nil {
-			return false, err
-		}
+	if out != nil && out.Existing {
+		return false, nil
 	}
 
 	return true, nil

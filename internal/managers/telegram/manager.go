@@ -39,10 +39,9 @@ type Manager struct {
 
 	mu sync.RWMutex
 
-	assistantRootID int64
-	chatID          int64
-	updateOffset    int64
-	workDirs        map[int64]string
+	chatID       int64
+	updateOffset int64
+	workDirs     map[int64]string
 
 	subscription <-chan controllerapi.SessionNotification
 	delivery     managerdelivery.ChatLoop
@@ -180,14 +179,6 @@ func (m *Manager) Start(ctx context.Context) error {
 	if err := m.preflightWithRetry(runCtx, defaultStartupRetryPolicy()); err != nil {
 		return fmt.Errorf("preflight chat: %w", err)
 	}
-
-	root, err := m.controller.EnsureAssistantRoot(runCtx)
-	if err != nil {
-		return fmt.Errorf("ensure assistant: %w", err)
-	}
-
-	m.assistantRootID = root.SessionID
-	m.setWorkDir(root.SessionID, root.WorkDir)
 
 	if err := m.chat.BindChat(runCtx, strconv.FormatInt(m.effectiveChatID(), 10)); err != nil {
 		return fmt.Errorf("bind chat: %w", err)

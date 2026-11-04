@@ -1,6 +1,7 @@
 # ADR-0072: The assistant is a desk loop, not a session
 
 - **Status:** Superseded by [ADR-0073](0073-assistant-turn-is-a-buffered-tool-loop.md)
+- **Chain:** the assistant line ends in [ADR-0082](0082-manager-is-a-groupless-chat-without-an-assistant.md), which removes the assistant
 - **Date:** 2026-10-14
 
 ## Context

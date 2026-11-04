@@ -11,34 +11,26 @@ const liveChatRootSQL = `s.parent_id = 0 AND s.killed_at IS NULL
 	AND s.status NOT IN ('terminating', 'killed')
 	AND json_extract(s.attributes, '$.manager_id') = ?`
 
-const assistantChatRootSQL = liveChatRootSQL + ` AND COALESCE(s.agent_type, '') <> 'assistant'`
-
-// ChatOutput includes non-rendering lifecycle rows that still advance the chat watermark.
+// ChatOutput includes non-rendering lifecycle rows that still advance the chat cursor.
 type ChatOutput struct {
-	ID         int64
-	SessionID  int64
-	Name       string
-	Type       OutputType
-	Content    string
-	Origin     int64
-	OriginName string
+	ID        int64
+	SessionID int64
+	Name      string
+	Type      OutputType
+	Content   string
 }
 
-// ChatSession separates the assistant's display identity from its durable session ID.
+// ChatSession describes a live manager-owned root.
 type ChatSession struct {
-	ID             int64
-	SessionID      int64
-	Name           string
-	Unread         int64
-	LatestUnread   string
-	LatestUnreadID int64
-	Scheduled      bool
+	ID        int64
+	Name      string
+	Scheduled bool
 }
 
 // BindChat preserves the user's selection across manager restarts.
 func (s *Store) BindChat(ctx context.Context, managerID, chatID string) error {
-	_, err := s.db.ExecContext(ctx, `INSERT INTO chat_focus (manager_id, chat_id, session_id)
-		VALUES (?, ?, NULL) ON CONFLICT(manager_id, chat_id) DO NOTHING`, managerID, chatID)
+	_, err := s.db.ExecContext(ctx, `INSERT INTO chat_focus (manager_id, chat_id, session_id, last_sent_id)
+		VALUES (?, ?, NULL, NULL) ON CONFLICT(manager_id, chat_id) DO NOTHING`, managerID, chatID)
 	if err != nil {
 		return fmt.Errorf("bind chat: %w", err)
 	}
@@ -46,14 +38,7 @@ func (s *Store) BindChat(ctx context.Context, managerID, chatID string) error {
 	return nil
 }
 
-// FocusOwnerChat only moves a user who is still talking to the assistant.
-func (s *Store) FocusOwnerChat(ctx context.Context, managerID string, sessionID int64) error {
-	return s.WithTx(ctx, func(tx *sql.Tx) error {
-		return focusOwnerChatTx(ctx, tx, managerID, sessionID)
-	})
-}
-
-// ChatFocus returns zero for the assistant, including a missing chat binding.
+// ChatFocus returns zero when no session is selected.
 func (s *Store) ChatFocus(ctx context.Context, managerID, chatID string) (int64, error) {
 	var sessionID sql.NullInt64
 
@@ -72,19 +57,10 @@ func (s *Store) ChatFocus(ctx context.Context, managerID, chatID string) (int64,
 
 // SetChatFocus validates the root in the same statement that changes the chat binding.
 func (s *Store) SetChatFocus(ctx context.Context, managerID, chatID string, sessionID int64) error {
-	result, err := func() (sql.Result, error) {
-		if sessionID == 0 {
-			return s.db.ExecContext(ctx, `INSERT INTO chat_focus (manager_id, chat_id, session_id)
-				VALUES (?, ?, NULL)
-				ON CONFLICT(manager_id, chat_id) DO UPDATE SET session_id = NULL`, managerID, chatID)
-		}
-
-		return s.db.ExecContext(ctx, `INSERT INTO chat_focus (manager_id, chat_id, session_id)
-			SELECT ?, ?, CASE WHEN s.agent_type = 'assistant' THEN NULL ELSE s.id END
-			FROM sessions s WHERE s.id = ? AND `+liveChatRootSQL+`
-			ON CONFLICT(manager_id, chat_id) DO UPDATE SET session_id = excluded.session_id`,
-			managerID, chatID, sessionID, managerID)
-	}()
+	result, err := s.db.ExecContext(ctx, `INSERT INTO chat_focus (manager_id, chat_id, session_id, last_sent_id)
+		SELECT ?, ?, s.id, NULL FROM sessions s WHERE s.id = ? AND `+liveChatRootSQL+`
+		ON CONFLICT(manager_id, chat_id) DO UPDATE SET session_id = excluded.session_id, last_sent_id = NULL`,
+		managerID, chatID, sessionID, managerID)
 	if err != nil {
 		return fmt.Errorf("set chat focus: %w", err)
 	}
@@ -103,7 +79,7 @@ func (s *Store) SetChatFocus(ctx context.Context, managerID, chatID string, sess
 
 // ResetChatFocus leaves a newer selection untouched.
 func (s *Store) ResetChatFocus(ctx context.Context, managerID, chatID string, from int64) (bool, error) {
-	result, err := s.db.ExecContext(ctx, `UPDATE chat_focus SET session_id = NULL
+	result, err := s.db.ExecContext(ctx, `UPDATE chat_focus SET session_id = NULL, last_sent_id = NULL
 		WHERE manager_id = ? AND chat_id = ? AND session_id = ?`, managerID, chatID, from)
 	if err != nil {
 		return false, fmt.Errorf("reset chat focus: %w", err)
@@ -117,42 +93,10 @@ func (s *Store) ResetChatFocus(ctx context.Context, managerID, chatID string, fr
 	return affected == 1, nil
 }
 
-// ChatSeen returns zero until this chat has consumed an output from the session.
-func (s *Store) ChatSeen(ctx context.Context, managerID, chatID string, sessionID int64) (int64, error) {
-	var watermark int64
-
-	err := s.db.QueryRowContext(ctx, `SELECT last_outbox_id FROM chat_seen
-		WHERE manager_id = ? AND chat_id = ? AND session_id = ?`, managerID, chatID, sessionID).Scan(&watermark)
-	if errors.Is(err, sql.ErrNoRows) {
-		return 0, nil
-	}
-
-	if err != nil {
-		return 0, fmt.Errorf("load chat watermark: %w", err)
-	}
-
-	return watermark, nil
-}
-
-// MarkChatSeen never moves a watermark backwards, including a delayed acknowledgement.
-func (s *Store) MarkChatSeen(ctx context.Context, managerID, chatID string, sessionID, outboxID int64) error {
-	_, err := s.db.ExecContext(ctx, `INSERT INTO chat_seen (manager_id, chat_id, session_id, last_outbox_id)
-		VALUES (?, ?, ?, ?)
-		ON CONFLICT(manager_id, chat_id, session_id) DO UPDATE
-		SET last_outbox_id = MAX(chat_seen.last_outbox_id, excluded.last_outbox_id)`,
-		managerID, chatID, sessionID, outboxID)
-	if err != nil {
-		return fmt.Errorf("advance chat watermark: %w", err)
-	}
-
-	return nil
-}
-
 // ChatOutputs includes lifecycle rows so delivery can consume their positions in the log.
 func (s *Store) ChatOutputs(
 	ctx context.Context,
-	managerID, chatID string,
-	sessionID int64,
+	sessionID, after int64,
 	limit int,
 ) ([]ChatOutput, error) {
 	if limit <= 0 {
@@ -164,13 +108,10 @@ func (s *Store) ChatOutputs(
 		return nil, err
 	}
 
-	rows, err := s.db.QueryContext(ctx, `SELECT id, session_id, type, content,
-		COALESCE(json_extract(attributes, '$.relayed_session_id'), 0) FROM session_outbox
-		WHERE session_id = ? AND id > COALESCE((SELECT last_outbox_id FROM chat_seen
-			WHERE manager_id = ? AND chat_id = ? AND session_id = ?), 0)
-		ORDER BY id LIMIT ?`, sessionID, managerID, chatID, sessionID, limit)
+	rows, err := s.db.QueryContext(ctx, `SELECT id, session_id, type, content FROM session_outbox
+		WHERE session_id = ? AND id > ? ORDER BY id LIMIT ?`, sessionID, after, limit)
 	if err != nil {
-		return nil, fmt.Errorf("load unread chat outputs: %w", err)
+		return nil, fmt.Errorf("load chat outputs: %w", err)
 	}
 	defer rows.Close()
 
@@ -178,8 +119,8 @@ func (s *Store) ChatOutputs(
 
 	for rows.Next() {
 		var output ChatOutput
-		if err := rows.Scan(&output.ID, &output.SessionID, &output.Type, &output.Content, &output.Origin); err != nil {
-			return nil, fmt.Errorf("scan unread chat output: %w", err)
+		if err := rows.Scan(&output.ID, &output.SessionID, &output.Type, &output.Content); err != nil {
+			return nil, fmt.Errorf("scan chat output: %w", err)
 		}
 
 		output.Name = name
@@ -188,141 +129,126 @@ func (s *Store) ChatOutputs(
 	}
 
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate unread chat outputs: %w", err)
+		return nil, fmt.Errorf("iterate chat outputs: %w", err)
 	}
 
 	if err := rows.Close(); err != nil {
-		return nil, fmt.Errorf("close unread chat outputs: %w", err)
-	}
-
-	if err := s.chatOutputOrigins(ctx, outputs); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("close chat outputs: %w", err)
 	}
 
 	return outputs, nil
 }
 
-// LastSeenChatOutput replays context without including unread or non-rendering lifecycle rows.
-func (s *Store) LastSeenChatOutput(
-	ctx context.Context,
-	managerID, chatID string,
-	sessionID int64,
-) (ChatOutput, bool, error) {
-	var output ChatOutput
+// ChatCursor reads the focus and its entry obligation in one snapshot.
+func (s *Store) ChatCursor(ctx context.Context, managerID, chatID string) (int64, int64, bool, error) {
+	var session, cursor sql.NullInt64
 
-	err := s.db.QueryRowContext(ctx, `SELECT o.id, o.session_id, o.type, o.content,
-		COALESCE(json_extract(o.attributes, '$.relayed_session_id'), 0) FROM session_outbox o
-		JOIN chat_seen seen ON seen.session_id = o.session_id
-		WHERE seen.manager_id = ? AND seen.chat_id = ? AND o.session_id = ?
-			AND o.id <= seen.last_outbox_id AND o.type NOT IN ('session_opened', 'session_replaced')
-		ORDER BY o.id DESC LIMIT 1`, managerID, chatID, sessionID).
-		Scan(&output.ID, &output.SessionID, &output.Type, &output.Content, &output.Origin)
+	err := s.db.QueryRowContext(ctx, `SELECT session_id,last_sent_id FROM chat_focus
+		WHERE manager_id = ? AND chat_id = ?`, managerID, chatID).Scan(&session, &cursor)
 	if errors.Is(err, sql.ErrNoRows) {
-		return ChatOutput{}, false, nil
+		return 0, 0, false, nil
 	}
 
 	if err != nil {
-		return ChatOutput{}, false, fmt.Errorf("load last seen chat output: %w", err)
+		return 0, 0, false, fmt.Errorf("load chat cursor: %w", err)
 	}
 
-	output.Name, err = s.chatOutputName(ctx, sessionID)
+	return session.Int64, cursor.Int64, cursor.Valid, nil
+}
+
+// ChatEntry snapshots the renderable tail and the position beyond all current rows together.
+func (s *Store) ChatEntry(ctx context.Context, sessionID int64, limit int) ([]ChatOutput, int64, error) {
+	if limit <= 0 {
+		return nil, 0, errors.New("chat entry limit must be positive")
+	}
+
+	name, err := s.chatOutputName(ctx, sessionID)
 	if err != nil {
-		return ChatOutput{}, false, err
+		return nil, 0, err
 	}
 
-	if output.Origin != 0 {
-		output.OriginName, err = s.chatOutputName(ctx, output.Origin)
-		if err != nil {
-			return ChatOutput{}, false, err
+	rows, err := s.db.QueryContext(ctx, `WITH newest AS (
+		SELECT COALESCE(MAX(id),0) AS id FROM session_outbox WHERE session_id = ?
+	), tail AS (
+		SELECT id,type,content FROM session_outbox WHERE session_id = ?
+			AND type NOT IN ('session_opened','session_replaced') ORDER BY id DESC LIMIT ?
+	)
+	SELECT newest.id,tail.id,tail.type,tail.content FROM newest LEFT JOIN tail ON TRUE ORDER BY tail.id`,
+		sessionID, sessionID, limit)
+	if err != nil {
+		return nil, 0, fmt.Errorf("load chat entry: %w", err)
+	}
+	defer rows.Close()
+	var outputs []ChatOutput
+	var newest int64
+
+	for rows.Next() {
+		var id sql.NullInt64
+
+		var kind, content sql.NullString
+		if err := rows.Scan(&newest, &id, &kind, &content); err != nil {
+			return nil, 0, fmt.Errorf("scan chat entry: %w", err)
+		}
+
+		if id.Valid {
+			outputs = append(outputs, ChatOutput{
+				ID: id.Int64, SessionID: sessionID,
+				Name: name, Type: OutputType(kind.String), Content: content.String,
+			})
 		}
 	}
 
-	return output, true, nil
-}
-
-func (s *Store) chatOutputOrigins(ctx context.Context, outputs []ChatOutput) error {
-	names := make(map[int64]string)
-
-	for i := range outputs {
-		row := &outputs[i]
-		if row.Origin == 0 {
-			continue
-		}
-
-		name, ok := names[row.Origin]
-		if !ok {
-			var err error
-
-			name, err = s.chatOutputName(ctx, row.Origin)
-			if err != nil {
-				return err
-			}
-
-			names[row.Origin] = name
-		}
-
-		row.OriginName = name
+	if err := rows.Err(); err != nil {
+		return nil, 0, fmt.Errorf("iterate chat entry: %w", err)
 	}
 
-	return nil
+	return outputs, newest, nil
 }
 
-func (s *Store) chatOutputName(ctx context.Context, sessionID int64) (string, error) {
-	var agentType, project, title string
-
-	err := s.db.QueryRowContext(ctx, `SELECT s.agent_type, p.name,
-		COALESCE(json_extract(s.attributes, '$.title'), '') FROM sessions s
-		JOIN projects p ON p.id = s.project_id WHERE s.id = ?`, sessionID).
-		Scan(&agentType, &project, &title)
+// EnterChat acknowledges an entry only while its focus still owes one.
+func (s *Store) EnterChat(ctx context.Context, managerID, chatID string, sessionID, newest int64) (bool, error) {
+	result, err := s.db.ExecContext(ctx, `UPDATE chat_focus SET last_sent_id = ?
+		WHERE manager_id = ? AND chat_id = ? AND session_id = ? AND last_sent_id IS NULL`,
+		newest, managerID, chatID, sessionID)
 	if err != nil {
-		return "", fmt.Errorf("load chat output name: %w", err)
-	}
-
-	return chatDisplayName(agentType, project, title), nil
-}
-
-func focusOwnerChatTx(ctx context.Context, tx *sql.Tx, managerID string, sessionID int64) error {
-	var bound, live bool
-	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM chat_focus WHERE manager_id = ?)`,
-		managerID).Scan(&bound); err != nil {
-		return fmt.Errorf("check chat binding: %w", err)
-	}
-
-	if !bound {
-		return ErrChatNotBound
-	}
-
-	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM sessions s WHERE s.id = ? AND `+
-		assistantChatRootSQL+`)`, sessionID, managerID).Scan(&live); err != nil {
-		return fmt.Errorf("check chat target: %w", err)
-	}
-
-	if !live {
-		return fmt.Errorf("#%d is not a live session", sessionID)
-	}
-
-	result, err := tx.ExecContext(ctx, `UPDATE chat_focus SET session_id = ?
-		WHERE manager_id = ? AND session_id IS NULL
-		AND EXISTS(SELECT 1 FROM sessions s WHERE s.id = ? AND `+assistantChatRootSQL+`)`,
-		sessionID, managerID, sessionID, managerID)
-	if err != nil {
-		return fmt.Errorf("switch owner chat: %w", err)
+		return false, fmt.Errorf("enter chat: %w", err)
 	}
 
 	affected, err := result.RowsAffected()
 	if err != nil {
-		return fmt.Errorf("count owner chat switch: %w", err)
+		return false, fmt.Errorf("count chat entry: %w", err)
 	}
 
-	if affected > 0 {
-		return nil
+	return affected == 1, nil
+}
+
+// AdvanceChat cannot consume an entry requested by a re-switch to the same focus.
+func (s *Store) AdvanceChat(ctx context.Context, managerID, chatID string, sessionID, id int64) (bool, error) {
+	result, err := s.db.ExecContext(ctx, `UPDATE chat_focus SET last_sent_id = ?
+		WHERE manager_id = ? AND chat_id = ? AND session_id = ?
+			AND last_sent_id IS NOT NULL AND last_sent_id < ?`, id, managerID, chatID, sessionID, id)
+	if err != nil {
+		return false, fmt.Errorf("advance chat: %w", err)
 	}
 
-	var current int64
-	if err := tx.QueryRowContext(ctx, `SELECT session_id FROM chat_focus
-		WHERE manager_id = ? AND session_id IS NOT NULL LIMIT 1`, managerID).Scan(&current); err != nil {
-		return fmt.Errorf("read current chat selection: %w", err)
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("count chat advance: %w", err)
 	}
 
-	return fmt.Errorf("the user is in session #%d; they switch themselves", current)
+	return affected == 1, nil
+}
+
+func (s *Store) chatOutputName(ctx context.Context, sessionID int64) (string, error) {
+	var project, title string
+
+	err := s.db.QueryRowContext(ctx, `SELECT p.name,
+		COALESCE(json_extract(s.attributes, '$.title'), '') FROM sessions s
+		JOIN projects p ON p.id = s.project_id WHERE s.id = ?`, sessionID).
+		Scan(&project, &title)
+	if err != nil {
+		return "", fmt.Errorf("load chat output name: %w", err)
+	}
+
+	return chatDisplayName(project, title), nil
 }

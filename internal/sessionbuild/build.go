@@ -50,12 +50,10 @@ type BuildInput struct {
 	Status                   string
 	OutputEnabled            bool
 	ToolTrail                bool
-	SilentFinish             bool
 	PreserveStoppedStatus    bool
 	ActiveSubagents          []sessionprompt.ActiveSubagentInfo
 	ActiveProcesses          []sessionprompt.ActiveProcessInfo
 	CompactionDeferAnnounced bool
-	Head                     func(context.Context) (string, error)
 }
 
 // Build transfers the model to the session and returns its tool-stack release.
@@ -160,13 +158,11 @@ func build(
 		OpeningContext:           openingContext,
 		OutputEnabled:            in.OutputEnabled,
 		ToolTrail:                in.ToolTrail,
-		SilentFinish:             in.SilentFinish,
 		PreserveStopped:          in.PreserveStoppedStatus,
 		Schedules:                in.Schedules,
 		Status:                   in.Status,
 		BackgroundSnapshot:       sessionprompt.BuildActiveBackgroundSection(in.ActiveProcesses, in.ActiveSubagents),
 		CompactionDeferAnnounced: in.CompactionDeferAnnounced,
-		Head:                     in.Head,
 		ImageAuthorizer:          imageAuthorizer,
 	})
 	if err != nil {

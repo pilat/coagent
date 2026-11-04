@@ -9,9 +9,9 @@ import (
 
 	"go.uber.org/zap"
 
-	"github.com/pilat/coagent/internal/assistant"
 	"github.com/pilat/coagent/internal/budget"
 	"github.com/pilat/coagent/internal/config"
+	"github.com/pilat/coagent/internal/configapply"
 	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/loader"
 	"github.com/pilat/coagent/internal/logger"
@@ -85,21 +85,11 @@ func (s *Service) openSession(
 
 	owner, _ := rec.Attributes[controllerapi.SessionAttributeManagerID].(string)
 	in.OutputEnabled = rec.ParentID == 0 && owner != ""
-	in.ToolTrail = in.OutputEnabled && rec.AgentType != sessionstore.AssistantAgentType
-	in.SilentFinish = in.OutputEnabled && rec.AgentType == sessionstore.AssistantAgentType
+	in.ToolTrail = in.OutputEnabled
 	in.ActiveSubagents = s.activeSubagentInfos(ctx, sessionID)
 	in.ActiveProcesses = s.activeProcessInfos(ctx, sessionID)
 
-	if rec.AgentType == sessionstore.AssistantAgentType {
-		scope := assistant.Scope{Root: rec.ID, Owner: owner}
-		in.OwnerTools = assistant.Tools(s.assistant, scope, assistant.Host(assistantHost{s: s}))
-		in.OwnerTools = append(in.OwnerTools, s.assistantScheduleTool(scope))
-		in.OwnerTools = append(in.OwnerTools, s.assistantAdministrationTools(rec, scope)...)
-		in.ExtraSkills = nil
-		in.Head = s.assistantHead(scope)
-	} else {
-		in.OwnerTools = s.ownerTools(rec, in.Loader)
-	}
+	in.OwnerTools = s.ownerTools(rec, in.Loader)
 
 	sess, cleanup, err := sessionbuild.Build(ctx, in)
 	if err != nil {
@@ -260,6 +250,13 @@ func (s *Service) ownerTools(rec *sessionstore.SessionRecord, ldr *loader.Servic
 
 	if rec.ParentID == 0 {
 		tools = append(tools, s.administrationTools(rec, rec.ProjectID)...)
+		if owner, _ := rec.Attributes[controllerapi.SessionAttributeManagerID].(string); owner != "" {
+			tools = append(
+				tools,
+				configapply.NewConfigEdit(rec.ID, s.applier),
+				configapply.NewConfigRead(rec.ID, s.applier),
+			)
+		}
 	}
 
 	return tools

@@ -48,28 +48,30 @@ func TestSwitchObservedBeforeSetReturnsSendsOnePrelude(t *testing.T) {
 	})
 }
 
-func TestFocusWriteFailureClearsPendingEntry(t *testing.T) {
+func TestFocusWriteFailureDoesNotWakeDelivery(t *testing.T) {
 	t.Parallel()
 	var messages []string
 	manager := newCmdTestManager(t, &fakeController{}, &messages)
-	loop := &chatLoopStub{target: -1}
+	loop := &chatLoopStub{}
 	manager.delivery = loop
 	manager.chat = &focusWriteHook{
 		ChatFocusController: manager.chat,
-		beforeWrite:         func() { assert.EqualValues(t, 42, loop.target) },
+		beforeWrite:         func() { assert.Zero(t, loop.wakes) },
 	}
 	manager.handleChatText(t.Context(), "/switch 42")
-	assert.Equal(t, []int64{42, -1}, loop.enterTargets)
-	assert.EqualValues(t, -1, loop.target)
 	assert.Zero(t, loop.wakes)
 	assert.Equal(t, []string{"#42 is not a live session"}, messages)
 }
 
 func (h *focusWriteHook) SetChatFocus(ctx context.Context, chatID string, id int64) error {
-	h.beforeWrite()
+	if h.beforeWrite != nil {
+		h.beforeWrite()
+	}
 	if err := h.ChatFocusController.SetChatFocus(ctx, chatID, id); err != nil {
 		return err
 	}
-	h.afterWrite()
+	if h.afterWrite != nil {
+		h.afterWrite()
+	}
 	return nil
 }

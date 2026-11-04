@@ -7,7 +7,6 @@ import (
 
 	"go.uber.org/zap"
 
-	"github.com/pilat/coagent/internal/assistant"
 	"github.com/pilat/coagent/internal/backgroundprocess"
 	"github.com/pilat/coagent/internal/budget"
 	"github.com/pilat/coagent/internal/config"
@@ -33,7 +32,6 @@ type lifetime struct {
 
 // Service owns session runners, admission and recovery for the daemon lifetime.
 type Service struct {
-	assistant    *assistant.Store
 	store        Store
 	links        subagent.Store
 	schedules    schedule.Service
@@ -68,10 +66,8 @@ func New(
 	cfg *config.Config,
 	mcpStore mcpstore.Store,
 	applier *configapply.Service,
-	assistantStore *assistant.Store,
 ) *Service {
 	s := &Service{
-		assistant:    assistantStore,
 		runners:      newRunnerSet(),
 		build:        build,
 		store:        store,

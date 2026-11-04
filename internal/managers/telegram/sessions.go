@@ -90,15 +90,9 @@ func (m *Manager) handleNotification(ctx context.Context, sn controllerapi.Sessi
 
 	m.mu.RLock()
 	delivery := m.delivery
-	assistantID := m.assistantRootID
 	m.mu.RUnlock()
 
-	id := sn.SessionID
-	if id == assistantID {
-		id = 0
-	}
-
-	if delivery != nil && delivery.Focus() == id {
+	if delivery != nil && sn.SessionID > 0 && delivery.Focus() == sn.SessionID {
 		_ = m.sendTyping(ctx)
 	}
 }

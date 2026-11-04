@@ -291,23 +291,8 @@ func (s *Session) prepareStopResponse(
 	state *sessionstore.CompletionCheckState,
 	wake bool,
 ) {
-	if s.silentFinish && !r.answerOwed && response.FinishType == llmwire.FinishStop &&
-		strings.TrimSpace(response.Text) == "" {
-		candidate := durableCandidateID(state)
-		if candidate != 0 {
-			c.State.Candidate = &sessionstore.CandidateChange{Expected: candidate, NextRef: -1}
-			c.State.ConfirmedAnswerID = &candidate
-			s.finalParts(c, state.CandidateText, false)
-			r.result.Final = state.CandidateText
-		}
-
-		r.terminal = true
-
-		return
-	}
-
 	if wake {
-		s.finalParts(c, response.Text, true)
+		s.finalParts(c, response.Text)
 		r.result.Final = response.Text
 		r.terminal = true
 
@@ -340,7 +325,7 @@ func (s *Session) prepareStopResponse(
 		text = state.CandidateText
 	}
 
-	s.finalParts(c, text, false)
+	s.finalParts(c, text)
 	r.result.Final = text
 	r.terminal = true
 }
@@ -388,7 +373,7 @@ func (s *Session) prepareProjectionError(r *runState, c *sessionstore.Commit, ca
 	r.terminalState = true
 }
 
-func (s *Session) finalParts(c *sessionstore.Commit, text string, yield bool) {
+func (s *Session) finalParts(c *sessionstore.Commit, text string) {
 	if strings.TrimSpace(text) == "" {
 		return
 	}
@@ -400,7 +385,6 @@ func (s *Session) finalParts(c *sessionstore.Commit, text string, yield bool) {
 			MessageRef:    0,
 			Phase:         "final",
 			ReleasesInput: true,
-			Yield:         yield,
 		},
 	}
 }

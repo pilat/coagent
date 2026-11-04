@@ -201,7 +201,7 @@ func replaceChatTx(ctx context.Context, tx *sql.Tx, oldID, newID, inputID int64,
 		}
 	}
 
-	if _, err := tx.ExecContext(ctx, `UPDATE chat_focus SET session_id = ? WHERE session_id = ?`,
+	if _, err := tx.ExecContext(ctx, `UPDATE chat_focus SET session_id = ?, last_sent_id = NULL WHERE session_id = ?`,
 		newID, oldID); err != nil {
 		return fmt.Errorf("transfer replacement chat focus: %w", err)
 	}

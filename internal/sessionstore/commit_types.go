@@ -23,7 +23,6 @@ type Commit struct {
 	SessionID, RootID int64
 	At                time.Time
 	Mode              CommitMode
-	BeginRun          bool
 	Accept            []Accept
 	Messages          []*transcript.Message
 	ToolResults       []*transcript.Message
@@ -87,7 +86,6 @@ type Output struct {
 	MessageRef    int
 	Phase         string
 	ReleasesInput bool
-	Yield         bool
 	Session       int64
 }
 

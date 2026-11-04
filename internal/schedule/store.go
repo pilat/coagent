@@ -20,7 +20,6 @@ var _ Store = (*store)(nil)
 type (
 	ScheduleMetadata struct {
 		ToolCallID string `json:"tool_call_id,omitempty"`
-		ReportTo   int64  `json:"report_to,omitempty"`
 	}
 
 	Schedule struct {
@@ -86,8 +85,6 @@ func (s *Schedule) LastFiredAt() *time.Time { return s.lastFiredAt }
 func (s *Schedule) Fresh() bool { return s.fresh }
 
 func (s *Schedule) Sleep() bool { return s.oneShotAt != nil && s.metadata.ToolCallID != "" }
-
-func (s *Schedule) ReportTo() int64 { return s.metadata.ReportTo }
 
 func NewStore(db *sql.DB, sessions *sessionstore.Store) Store {
 	return &store{db: db, sessions: sessions}

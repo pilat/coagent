@@ -55,10 +55,6 @@ type runState struct {
 	backgroundInserted bool
 	compactionFailures int
 	autoCompactionOff  bool
-	headCommitted      bool
-	runCommitted       bool
-	inputAccepted      bool
-	answerOwed         bool
 }
 
 // Context reports the live projection without exposing progress-runtime policy.
@@ -87,7 +83,7 @@ func (s *Session) Run(ctx context.Context) (RunResult, error) {
 		return RunResult{}, err
 	}
 
-	r := &runState{answerOwed: true}
+	r := &runState{}
 
 	defer s.emit(
 		sessionevent.Notification{
@@ -187,7 +183,7 @@ func (s *Session) runIteration(ctx context.Context, r *runState) (bool, error) {
 
 func (s *Session) runPendingTools(ctx context.Context, r *runState) (bool, error) {
 	if calls := s.pendingInLoopCalls(); len(calls) > 0 {
-		if err := s.toolStep(ctx, r, calls); err != nil {
+		if err := s.toolStep(ctx, calls); err != nil {
 			return false, err
 		}
 	}

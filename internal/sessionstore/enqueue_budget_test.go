@@ -1,7 +1,6 @@
 package sessionstore
 
 import (
-	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -12,7 +11,7 @@ import (
 
 func TestEnqueueBudgetCheckpointRequiresHumanInput(t *testing.T) {
 	for _, phase := range []string{"requested", "draining", "parked"} {
-		for _, kind := range []string{"human", "observer", "assistant", "stop"} {
+		for _, kind := range []string{"human", "stop"} {
 			t.Run(phase+"/"+kind, func(t *testing.T) {
 				t.Parallel()
 				store, _, project := newTestStore(t)
@@ -33,12 +32,6 @@ func TestEnqueueBudgetCheckpointRequiresHumanInput(t *testing.T) {
 				before, err := store.Get(t.Context(), root.ID)
 				require.NoError(t, err)
 				input := Input{SessionID: root.ID, Source: InputSourceUser, Content: "continue"}
-				switch kind {
-				case "observer":
-					input.Attributes = map[string]any{ObserverSessionIDAttribute: nil}
-				case "assistant", "stop":
-					input.Attributes = map[string]any{"from": "assistant"}
-				}
 				if kind == "stop" {
 					input.Content = "/stop"
 				}
@@ -49,17 +42,6 @@ func TestEnqueueBudgetCheckpointRequiresHumanInput(t *testing.T) {
 				case kind == "stop":
 					require.NoError(t, enqueueErr)
 					require.True(t, result.Applied)
-					assert.Equal(t, before, record)
-				case kind == "assistant":
-					require.ErrorIs(t, enqueueErr, ErrBudgetParked)
-					require.EqualError(
-						t,
-						enqueueErr,
-						fmt.Sprintf(
-							"session #%d is parked at its budget checkpoint; raise or clear its budget with set_budget first",
-							root.ID,
-						),
-					)
 					assert.Equal(t, before, record)
 				case phase == "draining":
 					require.ErrorIs(t, enqueueErr, budget.ErrConflict)

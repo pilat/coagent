@@ -4,6 +4,7 @@
 - **Date:** 2026-10-30
 - **Amends:** [ADR-0076](0076-flat-chat-with-a-focus.md)
 - **Amended by:** [ADR-0081](0081-assistant-forwards-and-the-host-relays-work-answers.md) — relayed work rows on `#0` get the `#N name` header at delivery
+- **Amended by:** [ADR-0082](0082-manager-is-a-groupless-chat-without-an-assistant.md) — focus NULL means no session; one persisted cursor per chat replaces the watermark; entry sends the last 3 rows; no digest, no `#0`; management tools on ordinary roots
 
 ## Context
 

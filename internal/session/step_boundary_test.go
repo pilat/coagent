@@ -1,6 +1,7 @@
 package session
 
 import (
+	"database/sql"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -211,21 +212,25 @@ func TestActivationInstruction_AllowsPreparationButIsolatesTheMutation(t *testin
 
 func TestBoundaryActivationRequiresHumanInput(t *testing.T) {
 	for _, tc := range []struct {
-		name  string
-		attrs map[string]any
-		human bool
+		name   string
+		source sessionstore.InputSource
+		human  bool
 	}{
-		{"human", nil, true},
-		{"observer", map[string]any{sessionstore.ObserverSessionIDAttribute: nil}, true},
-		{"assistant", map[string]any{"from": "assistant"}, false},
+		{"user", sessionstore.InputSourceUser, true},
+		{"agent", sessionstore.InputSourceAgent, false},
+		{"process", sessionstore.InputSourceProcess, false},
+		{"subagent", sessionstore.InputSourceSubagent, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			_, store, s := newHeadFixture(t, nil)
+			_, store, s := newBoundaryFixture(t, nil)
 			s.registry.Register(configapply.NewConfigEdit(s.id, nil))
 			require.NoError(t, s.prepareRun(t.Context()))
 			input, err := store.Enqueue(t.Context(), sessionstore.Input{
-				SessionID: s.id, Source: sessionstore.InputSourceUser, Content: "/config x", Attributes: tc.attrs,
+				SessionID:  s.id,
+				Source:     tc.source,
+				Content:    "/config x",
+				Attributes: map[string]any{"manager_id": "owner"},
 			})
 			require.NoError(t, err)
 			batch := s.newBoundaryBatch()
@@ -252,4 +257,70 @@ func TestBoundaryActivationRequiresHumanInput(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestRunBoundaryScopesHumanInput(t *testing.T) {
+	db, store, s := newBoundaryFixture(t, []llmwire.Message{usr("history"), asst("answer")})
+	r := &runState{}
+	human, err := store.Enqueue(t.Context(), sessionstore.Input{
+		SessionID: s.id, Source: sessionstore.InputSourceUser, Content: "current",
+	})
+	require.NoError(t, err)
+	accepted, err := s.boundaryStep(t.Context(), r)
+	require.NoError(t, err)
+	require.True(t, accepted)
+	var humanMessage int64
+	require.NoError(t, db.QueryRowContext(t.Context(),
+		`SELECT accepted_message_id FROM session_inbox WHERE id = ?`, human.Input.ID).Scan(&humanMessage))
+	require.Positive(t, humanMessage)
+	event, err := store.Enqueue(t.Context(), sessionstore.Input{
+		SessionID: s.id, Source: sessionstore.InputSourceAgent, Content: "mid-run event",
+	})
+	require.NoError(t, err)
+	accepted, err = s.boundaryStep(t.Context(), r)
+	require.NoError(t, err)
+	require.True(t, accepted)
+	var eventMessage int64
+	require.NoError(t, db.QueryRowContext(t.Context(),
+		`SELECT accepted_message_id FROM session_inbox WHERE id = ?`, event.Input.ID).Scan(&eventMessage))
+	assert.Greater(t, eventMessage, humanMessage)
+	accepted, err = s.boundaryStep(t.Context(), &runState{})
+	require.NoError(t, err)
+	assert.False(t, accepted)
+	rows, err := store.LoadActiveMessages(t.Context(), s.id)
+	require.NoError(t, err)
+	require.Len(t, rows, 4)
+	assert.Equal(t, humanMessage, rows[2].ID)
+	assert.Contains(t, rows[2].Content, "current")
+	assert.Equal(t, eventMessage, rows[3].ID)
+	assert.Contains(t, rows[3].Content, "mid-run event")
+}
+
+func newBoundaryFixture(t *testing.T, previous []llmwire.Message) (*sql.DB, *sessionstore.Store, *Session) {
+	t.Helper()
+	db, store, id := newAttachmentsStore(t)
+	var rows []*transcript.Message
+	for i := range previous {
+		row, err := storedMessage(&previous[i])
+		require.NoError(t, err)
+		rows = append(rows, row)
+	}
+	_, err := store.Commit(t.Context(), sessionstore.Commit{SessionID: id, Messages: rows})
+	require.NoError(t, err)
+	record, err := store.GetSession(t.Context(), id)
+	require.NoError(t, err)
+	prompt := sessionprompt.NewBuilder("stable", "")
+	prompt.Todos = todo.New()
+	s, err := New(t.Context(), Input{
+		Record:        record,
+		Client:        &loopScriptLLM{responses: []*llmwire.Response{textResponse("done"), textResponse("confirmed")}},
+		Loader:        loader.New(),
+		Registry:      tool.NewRegistry(),
+		Prompt:        prompt,
+		Store:         store,
+		OutputEnabled: true,
+	})
+	require.NoError(t, err)
+	t.Cleanup(s.Close)
+	return db, store, s
 }

@@ -77,7 +77,7 @@ func subagentConfigs(
 	configs := make([]registry.AgentTypeConfig, 0, len(subs))
 
 	for _, sa := range subs {
-		if sa.Name == tool.BrowserAgentType || sa.Name == string(registry.AgentTypeAssistant) {
+		if sa.Name == tool.BrowserAgentType {
 			logger.Ctx(ctx).Named("session.setup").Warn("subagent_"+sa.Name+"_reserved", zap.String("path", sa.Path))
 			continue
 		}

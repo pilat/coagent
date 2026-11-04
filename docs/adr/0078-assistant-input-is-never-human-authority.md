@@ -1,6 +1,6 @@
 # ADR-0078: Assistant input is never human authority
 
-- **Status:** Accepted
+- **Status:** Superseded by [ADR-0082](0082-manager-is-a-groupless-chat-without-an-assistant.md)
 - **Date:** 2026-10-30
 - **Amends:** [ADR-0031](0031-user-commands-grant-one-turn-tool-authority.md),
   [ADR-0077](0077-assistant-moves-the-user-in-never-out.md)

@@ -11,7 +11,6 @@ import (
 
 	"github.com/pilat/coagent/internal/logger"
 	"github.com/pilat/coagent/internal/sessionevent"
-	"github.com/pilat/coagent/internal/sessionstore"
 )
 
 // maxOneShotAttempts bounds delivery retries for a one-shot schedule. An
@@ -232,13 +231,7 @@ func (e *Executor) fireCronSchedules(ctx context.Context, now time.Time, l *zap.
 }
 
 func scheduleAttributes(sched *Schedule) map[string]any {
-	attributes := map[string]any{"fresh": sched.fresh}
-	if sched.metadata.ReportTo != 0 {
-		attributes[sessionstore.ObserverSessionIDAttribute] = sched.metadata.ReportTo
-		attributes["schedule_id"] = sched.id
-	}
-
-	return attributes
+	return map[string]any{"fresh": sched.fresh}
 }
 
 // SplitCronTZ splits a stored cron expression into its 5-field part and timezone

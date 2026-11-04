@@ -1,6 +1,7 @@
 # ADR-0073: The assistant turn is a buffered tool loop over a working-set desk
 
 - **Status:** Superseded by [ADR-0074](0074-assistant-is-an-ordinary-session-with-a-desk-head.md)
+- **Chain:** the assistant line ends in [ADR-0082](0082-manager-is-a-groupless-chat-without-an-assistant.md), which removes the assistant
 - **Date:** 2026-10-19
 - **Supersedes:** [ADR-0072](0072-assistant-desk-loop.md)
 

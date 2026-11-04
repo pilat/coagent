@@ -19,7 +19,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/pilat/coagent/internal/assistant"
 	"github.com/pilat/coagent/internal/backgroundprocess"
 	"github.com/pilat/coagent/internal/budget"
 	"github.com/pilat/coagent/internal/coagenthome"
@@ -35,7 +34,6 @@ import (
 	"github.com/pilat/coagent/internal/mcpstore"
 	"github.com/pilat/coagent/internal/migrate"
 	"github.com/pilat/coagent/internal/progressruntime"
-	"github.com/pilat/coagent/internal/projectpath"
 	"github.com/pilat/coagent/internal/schedule"
 	"github.com/pilat/coagent/internal/sessionbuild"
 	"github.com/pilat/coagent/internal/sessionbus"
@@ -63,7 +61,7 @@ func TestHarnessScenario_DelayedTelegramManagerDrainsRealSessionOutput(t *testin
 	chat := h.controller.(controllerapi.ChatFocusController)
 	require.NoError(t, chat.SetChatFocus(t.Context(), strconv.FormatInt(harnessChatID, 10), sessionID))
 
-	manager := newAssistantTelegramManager(t, h)
+	manager := newChatTelegramManager(t, h)
 	require.NoError(t, manager.Start(t.Context()))
 	t.Cleanup(func() { require.NoError(t, manager.Stop(context.Background())) })
 	awaitChatTail(t, h, sessionID)
@@ -131,7 +129,6 @@ func newDelayedTelegramHarnessWithClient(
 			configops.New(filepath.Join(home, "config.yaml"), filepath.Join(home, "secrets.yaml")),
 			sessions,
 		),
-		assistant.New(db, sessions, projectpath.ResolveRoot(cfg.UnifiedConfig)),
 	)
 
 	t.Cleanup(func() { service.Shutdown(context.Background(), 3*time.Second) })
@@ -206,7 +203,7 @@ func (h *delayedTelegramHarness) waitForBacklog(t *testing.T, sessionID int64) {
 	t.Helper()
 	chat := h.controller.(controllerapi.ChatFocusController)
 	require.Eventually(t, func() bool {
-		rows, err := chat.ChatOutputs(t.Context(), strconv.FormatInt(harnessChatID, 10), sessionID, 100)
+		rows, err := chat.ChatOutputs(t.Context(), strconv.FormatInt(harnessChatID, 10), sessionID, 0, 100)
 		if err != nil {
 			return false
 		}
@@ -222,8 +219,13 @@ func (h *delayedTelegramHarness) waitForBacklog(t *testing.T, sessionID int64) {
 func awaitChatTail(t *testing.T, h *delayedTelegramHarness, sessionID int64) {
 	t.Helper()
 	chat := h.controller.(controllerapi.ChatFocusController)
+	key := strconv.FormatInt(harnessChatID, 10)
 	require.Eventually(t, func() bool {
-		rows, err := chat.ChatOutputs(t.Context(), strconv.FormatInt(harnessChatID, 10), sessionID, 100)
+		focus, cursor, entered, err := chat.ChatCursor(t.Context(), key)
+		if err != nil || focus != sessionID || !entered {
+			return false
+		}
+		rows, err := chat.ChatOutputs(t.Context(), key, sessionID, cursor, 100)
 		return err == nil && len(rows) == 0
 	}, 5*time.Second, 10*time.Millisecond)
 }
@@ -322,16 +324,6 @@ func (r *delayedTelegramRecorder) snapshot() []delayedTelegramCall {
 	defer r.mu.Unlock()
 
 	return append([]delayedTelegramCall(nil), r.calls...)
-}
-
-func hasTelegramMethod(calls []delayedTelegramCall, method string) bool {
-	for _, call := range calls {
-		if call.Method == method {
-			return true
-		}
-	}
-
-	return false
 }
 
 func hasTelegramMessage(calls []delayedTelegramCall, text string) bool {

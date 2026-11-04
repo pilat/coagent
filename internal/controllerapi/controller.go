@@ -26,23 +26,11 @@ type ChatController interface {
 	Unsubscribe(ch <-chan SessionNotification)
 }
 
-// AssistantRootEnsureData identifies the manager's durable assistant root.
-type AssistantRootEnsureData struct {
-	SessionID int64  `json:"session_id"`
-	WorkDir   string `json:"work_dir"`
-}
-
-// AssistantController exposes the manager's assistant identity.
-type AssistantController interface {
-	EnsureAssistantRoot(context.Context) (*AssistantRootEnsureData, error)
-}
-
 // Controller is the complete in-process API the daemon exposes to rich
 // built-in managers such as Telegram. Narrower consumers should depend on a named
 // capability interface such as ChatController instead of this aggregate.
 type Controller interface {
 	ChatController
-	AssistantController
 	ListDir(ctx context.Context, data FsListDirData) (*FsListDirResultData, error)
 	ListSkills(ctx context.Context, data ConfigSkillsData) (*ConfigSkillsResultData, error)
 	ListRecentProjects(ctx context.Context) (*ProjectListResultData, error)

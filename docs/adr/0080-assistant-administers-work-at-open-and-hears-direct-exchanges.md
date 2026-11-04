@@ -1,6 +1,6 @@
 # ADR-0080: The assistant administers work at `open` and hears the user's direct exchanges
 
-- **Status:** Accepted
+- **Status:** Superseded by [ADR-0082](0082-manager-is-a-groupless-chat-without-an-assistant.md)
 - **Date:** 2026-10-30
 - **Amends:** [ADR-0040](0040-gwt-forks-a-worktree-off-the-remote-default-branch.md),
   [ADR-0074](0074-assistant-is-an-ordinary-session-with-a-desk-head.md),

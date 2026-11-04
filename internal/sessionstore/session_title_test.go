@@ -48,8 +48,6 @@ func TestSessionTitle_ExcludedAndDuplicateInputs(t *testing.T) {
 	t.Parallel()
 	store, db, project := newTestStore(t)
 	root := chatTestRoot(t, store, project, "owner")
-	assistant, err := store.EnsureAssistantRoot(t.Context(), project, "owner", "/assistant", "model", "")
-	require.NoError(t, err)
 	child, err := store.CreateSubagentSession(t.Context(), project, root.ID, root.ID, "general", "model", "")
 	require.NoError(t, err)
 	_, err = db.ExecContext(
@@ -60,7 +58,7 @@ func TestSessionTitle_ExcludedAndDuplicateInputs(t *testing.T) {
 	require.NoError(t, err)
 	ownerless, err := store.CreateSession(t.Context(), project, "model", "", nil)
 	require.NoError(t, err)
-	for _, id := range []int64{assistant.ID, child, ownerless.ID} {
+	for _, id := range []int64{child, ownerless.ID} {
 		_, err = store.Enqueue(t.Context(), Input{SessionID: id, Source: InputSourceUser, Content: "no title"})
 		require.NoError(t, err)
 		assertSessionTitle(t, store, id, "")
@@ -144,9 +142,6 @@ func TestSessionTitle_RenameAuthorityAndOrder(t *testing.T) {
 		)
 	}
 	require.Error(t, store.SetSessionTitle(t.Context(), "other", root.ID, "foreign"))
-	assistant, err := store.EnsureAssistantRoot(t.Context(), project, "owner", "/assistant", "model", "")
-	require.NoError(t, err)
-	require.Error(t, store.SetSessionTitle(t.Context(), "owner", assistant.ID, "assistant"))
 	_, err = store.MarkSessionKilledWithOutput(t.Context(), root.ID, 0)
 	require.NoError(t, err)
 	require.Error(t, store.SetSessionTitle(t.Context(), "owner", root.ID, "killed"))

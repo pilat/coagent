@@ -2,9 +2,7 @@ package managercontrol
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"path/filepath"
 
 	"github.com/pilat/coagent/internal/controllerapi"
 )
@@ -24,10 +22,6 @@ func (s *service) resolveSessionProject(
 		}
 
 		return projectID, nil
-	}
-
-	if filepath.Base(filepath.Clean(data.WorkDir)) == controllerapi.AssistantProjectDir {
-		return 0, errors.New("reserved for the assistant project")
 	}
 
 	projectID, err := s.store.GetOrCreateProject(ctx, data.WorkDir)

@@ -122,26 +122,17 @@ func (m *Manager) processChatUpdate(ctx context.Context, msg *telegramMessage) {
 		return
 	}
 
-	sessionID, err := m.inputSessionID(ctx, focus)
-	if err != nil {
-		_, _ = m.sendMessage(ctx, strings.ReplaceAll(err.Error(), "\n", " "))
+	if focus == 0 {
+		_, _ = m.sendMessage(ctx, noFocusHint)
 		return
 	}
 
 	if msg.Voice != nil {
-		m.handleVoiceMessage(ctx, msg, sessionID)
+		m.handleVoiceMessage(ctx, msg, focus)
 		return
 	}
 
-	if focus == 0 {
-		if msg.Caption != "" {
-			m.handleChatText(ctx, normalizeTextCommand(msg.Caption))
-		}
-
-		return
-	}
-
-	m.handleAttachment(ctx, msg, attachmentOf(msg), sessionID)
+	m.handleAttachment(ctx, msg, attachmentOf(msg), focus)
 }
 
 func textPreview(value string) string {

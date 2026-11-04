@@ -37,9 +37,8 @@ Telegram manager ── controller contract / status-only control socket ──>
 
 A manager submits work as a session. A session owns one agent-loop activation:
 its model client, tool registry, prompt projection, and conversation handling.
-Each manager chat selects Assistant, public session #0, or a work session through
-`/switch`. Assistant has a deterministic desk head, desk tools and bounded owner
-tools; it routes work to other roots and introduces their relayed answers.
+Each manager chat selects one owned root through `/switch`, or has no session
+in focus. Selected roots publish their own messages and tool trails directly.
 The daemon coordinates work that crosses sessions, survives a process restart,
 or needs global admission decisions; the owning domain package retains each
 ledger. Built-in managers program against the private controller
@@ -59,9 +58,8 @@ The map is an ownership index, not a list of exported symbols. Directory nesting
 does not imply a tier except where it expresses an implementation variant.
 
 - `cmd/coagent` — composition root, CLI product policy and daemon lifecycle commands. Refuses any non-Linux platform at process entry, before the guardian or command dispatch ([ADR-0062](docs/adr/0062-linux-only-supported-runtime.md)).
-- `internal/assistant` — desk rendering, immediate assistant tools, work-root reads, and durable memory, focus and search index.
 - `internal/bashsandbox` — Linux Bubblewrap confinement and process launch for session-owned workloads. Builds one ordered mount plan from a compiled policy; non-Linux builds carry only a compile-time fallback that returns an unsupported-backend error.
-- `internal/budget` — one-shot root-tree budget policy, human-granted changes and assistant-delegated work budgets.
+- `internal/budget` — one-shot root-tree budget policy and human-granted changes.
 - `internal/catalog` — external model metadata acquisition, caching and identifier matching.
 - `internal/coagenthome` — sole resolver and name owner for the coagent home directory, including each project's process output.
 - `internal/config` — typed configuration and secrets resolution policy.
@@ -86,7 +84,7 @@ does not imply a tier except where it expresses an implementation variant.
 - `internal/mcp` — session-owned external MCP process lifecycle, tool discovery and structured content conversion.
 - `internal/mcpstore` — durable MCP server definitions, scope precedence and registry tools.
 - `internal/memory` — curated per-project long-term memory.
-- `internal/managerdelivery` — transport-neutral chat focus, unread digest, ordered tail delivery and retry policy.
+- `internal/managerdelivery` — transport-neutral chat entry, ordered cursor delivery and retry policy.
 - `internal/managercontrol` — manager-bound application use cases and controller adaptation.
 - `internal/managerdiscovery` — manager-facing project, model, skill and filesystem discovery.
 - `internal/migrate` — SQLite opening and schema migration with production backup policy.
@@ -109,7 +107,7 @@ does not imply a tier except where it expresses an implementation variant.
 - `internal/sessionprompt` — system and transcript prompt rendering, timestamps, skill parsing and todo normalization.
 - `internal/sessionbus` — in-process session-event subscriptions and non-blocking fan-out.
 - `internal/sessionevent` — session-to-controller notification vocabulary.
-- `internal/sessionstore` — project registry, durable sessions, messages, inbox, transactional observer inputs, atomic producer delivery, output log, chat focus/watermarks and the session-file-read ledger for write-guard checks.
+- `internal/sessionstore` — project registry, durable sessions, messages, inbox, atomic producer delivery, output log, chat focus/cursor and the session-file-read ledger for write-guard checks.
 - `internal/shellenv` — captured per-worktree shell environment for child processes.
 - `internal/subagent` — parent-child link ledger, completion transactions and agent-facing tools.
 - `internal/todo` — session-local task tracking.
@@ -127,11 +125,10 @@ does not imply a tier except where it expresses an implementation variant.
 SQLite is the source of truth for runtime facts that must survive restart:
 projects, sessions, append-only messages, durable inbox entries, delivery
 identity, subagent links, schedules, curated memory, MCP definitions, producer
-delivery records, append-only manager output, chat focus and seen watermarks,
+delivery records, append-only manager output, chat focus and its cursor,
 tool-activation grants, root-tree budgets, durable
 TODO state, per-session file-read ledger (storing `{mtime_unix_nano, size, hash}`
-for write-guard checks), assistant memory, focus and search index, and the
-background-process lifecycle ledger. Configuration files, their recoverable
+for write-guard checks), and the background-process lifecycle ledger. Configuration files, their recoverable
 backups and the pending-apply marker are atomic filesystem state owned by config operations.
 Other memory is coordination or cache only and must be reconstructible from
 durable state. A runtime state label shown by a controller is an in-memory
@@ -157,39 +154,41 @@ row-ID vector travels with the projection across session assembly and compaction
 then keys durable replacement and idempotent final output.
 Boundary commits accept pending inbox rows only; resubmitting an accepted input
 fails with `ErrInputResolved` and rolls back the whole step.
-The first boundary advances a durable run counter; acceptance stamps each inbox
-row in that transaction, so current-run input is independent of transcript compaction.
 
 Manager-owned roots append messages and lifecycle facts to `session_outbox` in
 the same transaction as their transcript/control effects. Its closed vocabulary
 is `message`, `session_opened`, `session_replaced` and `session_closed`.
 Rows keep their owner and stable source-key identity; there are no
 attempts, transport receipts, delivery states or external-message edits.
-Forward receipts and relays are host rows committed with their input/output producer.
-Every accepted tool-calling step of a work root publishes one message: model text
-when present, then a tool trail, including steps with no text. The assistant's
-model steps publish only non-blank text, without a trail; subagents publish nothing.
-The trail stays out of the model transcript and observer answers.
+Every accepted tool-calling step of a manager-owned root publishes one message:
+model text when present, then a tool trail, including steps with no text.
+Subagents publish nothing. The trail stays out of the model transcript.
 Confirmed finals and compaction/stop notices also append;
 model answers have no footer. A completion candidate stays hidden until confirmed.
 Budget observation and response output share the step transaction.
 
-`chat_focus` selects one owned live root per manager/chat, with NULL denoting its
-assistant. Root replacement transfers every focus atomically with the lifecycle
-commit. `chat_seen` stores a monotonic watermark per manager/chat/session; unread
-counts and newest unread text are derived from the log above it, never stored
-as per-row delivery state. Reads and marks remain authorized for a killed root
-so its selected tail can finish. The log preserves IDs and its AUTOINCREMENT
-high-water mark across schema rebuilds. Replaying a source key returns the original
-row without comparing or changing its payload.
+Each `chat_focus` row holds one manager/chat's selection and
+`last_sent_id`. A NULL session means no focus; a NULL cursor means entry is
+owed. Every selection write, including a re-switch to the same root, resets
+the cursor to NULL. Root replacement transfers every focus and resets its cursor
+atomically with the lifecycle commit. Binding a chat preserves existing state.
+Reads and cursor updates remain authorized for killed roots so their selected
+tails can finish. The log preserves IDs and its AUTOINCREMENT high-water mark
+across schema rebuilds. Replaying a source key returns the original row without
+comparing or changing its payload.
 
-Delivery sends rows in ascending ID order and advances the watermark only after
-the effect, a probe-confirmed skip, or a non-rendering lifecycle row. A crash
-between send and mark may duplicate a row, including every chunk of a long one.
-Other roots remain unread until selected; wake notifications are hints and the
-loop reconstructs focus and tail from SQLite. Session idle publication depends
-on runtime completion or parking, independently of delivery. These contracts
-are recorded in [ADR-0076](docs/adr/0076-flat-chat-with-a-focus.md).
+Entry sends a header and the last three renderable rows, oldest first. Those
+rows and the newest outbox ID of any type come from one read. Entry then
+compare-and-sets the cursor from NULL to that newest ID under the same focus.
+Live delivery reads rows above the cursor in ascending ID order. Every sent,
+probe-confirmed skipped or non-rendering lifecycle row advances the cursor
+only under the same focus with a non-NULL cursor; a failed CAS restarts the
+pass. A crash between send and CAS may duplicate a row, including every chunk
+of a long one; acknowledged rows survive restart without replay.
+Non-focused roots produce no chat traffic. Rows older than their last three are
+omitted on entry. Wake notifications are hints; SQLite reconstructs focus,
+entry obligation and tail. Session idle publication depends on runtime
+completion or parking, independently of delivery.
 
 An explicit skill activation commits one releasing receipt in its promotion
 transaction, keyed by the accepted input and containing only the canonical
@@ -229,8 +228,7 @@ contributions governed by the internal dependency graph.
 Each manager-created root session carries one durable manager owner ID. The
 composition root binds one controller capability to each manager ID: creation
 stamps it, every session-addressed operation checks it, and subscriptions
-deliver only that owner's events. Daemon-internal observer subscriptions are
-not part of that contract. Driver and channel names cannot route ownership
+deliver only that owner's events. Driver and channel names cannot route ownership
 because several configured managers may share them.
 
 Agent-type policy is immutable after construction. Registry inputs and returned
@@ -522,9 +520,9 @@ Failed deadline observations and unfinished parks remain retryable without
 reviving a newer generation. Parking joins runners before taking the tree fence,
 then rechecks liveness under that fence.
 The next direct model-bound human input to the root atomically releases a fired
-checkpoint and resumes only the root. Assistant and forwarded input are refused while the budget
-is fired; control and read-only commands still pass. The assistant lifts a work
-checkpoint explicitly by setting or clearing its budget.
+checkpoint and resumes only the root; control and read-only commands still pass.
+Every user-source input has human authority, while only model-bound root input
+releases a fired checkpoint.
 
 An armed generation remains armed across an ordinary final response while the
 tree has an advertised running process, an undelivered background child, or
@@ -626,7 +624,7 @@ recovered from the durable streak, never fabricated.
 
 Schedules are durable producer records. A one-shot with a tool-call identifier
 is a pending sleep and owes an exact suspended-call result; a one-shot without
-`tool_call_id` is future session input and may carry `report_to` for its observer.
+`tool_call_id` is future session input.
 Schedule owns the transaction that enqueues an occurrence through session-store
 and acknowledges its producer row: one-shots and sleeps are deleted, while cron
 advances its last-fired time and count only for a newer minute. An enqueue error
@@ -655,10 +653,9 @@ acknowledged as unapplied without a runner, transcript mutation, publication or
 retry. A newly delivered standalone occurrence can reactivate a stopped root as a
 new turn in its enqueue/ack transaction; an acknowledged retry leaves it stopped.
 See ADR-0027.
-The assistant can schedule its own root or an addressable work root, using cron
-or a future local timestamp. Its list and cancellation exclude sleep rows.
-Reported schedules persist the assistant root in metadata; delivery stamps that
-observer and the schedule id on ordinary, non-human schedule input.
+The ordinary `schedule` tool manages recurring work for its own root;
+listing and cancellation exclude sleep rows. Existing non-sleep one-shot rows
+retain their delivery and retry behavior.
 
 ### Configuration restart verdict
 
@@ -774,14 +771,9 @@ and global instructions remain trusted daemon inputs.
 This is an integrity boundary, not confidentiality: with no rules, another
 checkout is readable, and so are the operator's own credentials.
 
-Assistant-created worktrees run host git with command-scoped overrides disabling
-hooks, fsmonitor, the ext protocol and submodule recursion. Before any
-remote operation, a preflight refuses all include directives and covered command-running
-keys in local or worktree scope, preserving the user's global includes, helpers and filters.
-Human `/gwt` retains repository hooks. This is a denylist: an unlisted git key may
-still execute. Sessions can write their repository's `.git` configuration and
-hooks; preventing those writes is separate work, and the same planted settings
-can affect ordinary git in the user's terminal ([ADR-0080](docs/adr/0080-assistant-administers-work-at-open-and-hears-direct-exchanges.md)).
+Human `/gwt` retains repository hooks, global helpers and filters. Sessions can
+write their repository's `.git` configuration and hooks; those settings can
+also affect ordinary git in the user's terminal.
 
 Before process admission, the Bash tool parses a direct simple `cat` command
 without an explicit working directory and pushes regular project-file operands
@@ -863,12 +855,9 @@ model-invocable skill plus arguments. The parent resolves and renders that skill
 before creating the subagent, then sends the canonical envelope through the
 child's ordinary initial-input path; the child does not rediscover it by name.
 
-Every configured manager ensures an assistant root in the hidden ordinary
-project at `<projects_root>/sys_coagent`. The reserved directory cannot be
-claimed by user projects; `hidden` controls discovery and grants no authority.
-Only the assistant root exposes `config_read` and `config_edit` under the
-same durable human `/config` grant. Only edit declares the activation route; read
-returns the exact trusted configuration document without consuming the grant.
+Every manager-owned root exposes `config_read` and `config_edit` under the
+same durable human `/config` grant. Unowned roots receive neither tool. Only edit
+declares the activation route; read returns the exact trusted configuration document without consuming the grant.
 An edit replaces the complete document, restarts, boot-validates and rolls back
 on failure. A configuration question or bare activation is not a change request.
 Subagents receive neither tool. Explicit manager lists have retired transport
@@ -876,144 +865,6 @@ config keys stripped and reported before strict typed decoding; unrelated
 unknown fields remain errors.
 
 ## Package profiles
-
-### Assistant desk
-
-`assistant` owns small permanent or dated memory notes, live focus items with
-real session refs and a full-text index. Work cards show the title, configured
-model and applicable effort, remaining or fired budget, and scheduled-root marker. Each
-manager owns one ordinary root of the hidden, non-spawnable `assistant` type in
-the shared assistant project. Its model and effort selection persist like other roots;
-legacy roots with no model receive the defaults. Its agent policy omits project
-context and native integrated search. It exposes its desk tools plus schedule,
-five global MCP registry tools, config read/edit, configured-model discovery and
-work-root model changes, and budgets for itself or addressable work roots. General
-filesystem, shell, external MCP and subagent tools remain absent.
-
-The ordinary session boundary renders a fresh desk when an activation first
-accepts model-bound input and has no pending call. That same transaction marks
-previous active rows compacted, prepends the desk to accepted inputs, resets
-context-dependent state and sets the compaction header to the desk row. Rendering
-failure follows the ordinary durable error path without accepting the input.
-The head commits at most once per `Run`; tool results and later inputs append.
-A resume without newly accepted input keeps the prior desk and transcript. New
-input may replace an unanswered activation: the desk retains that user's words
-as an answer still owed. Automatic compaction preserves the first desk row.
-
-The desk shows live memory (at most 4000 characters), the ten newest focus items,
-the ten newest roots touched by assistant instructions or direct human input and forty chronological conversation
-lines clipped to 2000 characters each. Conversation joins accepted user inbox
-rows with speech, forward receipts (`you:`) and relays (`#N:`); only a `you:` line
-answers a user line. Other host notices stay excluded. Older compacted
-history stays available through search. Observations enter as ordinary agent
-inputs after the head, with their event text clipped to 20000 characters.
-
-One authority predicate decides what work the assistant may address: a
-parentless, non-assistant, unkilled root owned by the same
-manager. Actions, work reads, listings and search apply it, including work the
-user started directly. Search and around additionally admit the exact assistant
-root's own accepted user messages and non-rejected assistant speech, including
-speech accompanying tool calls. The shared message index catches up lazily
-behind one transactional watermark; memory and focus edits update their index
-rows atomically. Compacted rows remain searchable; another assistant's dialog
-never becomes visible through the own-root branch.
-
-Project discovery, project-filtered session listings and opening existing work
-share one catalog. It excludes hidden projects, missing directories and worktrees
-under the coagent home's worktree directory. A new scratch name creates its
-directory before root creation.
-
-The assistant can switch the user into live owned work only from Assistant.
-The manager binds its chat at startup without overwriting the selection; the
-daemon switches by manager identity, rechecking target liveness and the NULL
-selection in the same transaction. An unbound chat or a user already in work is
-refused. The assistant cannot move the user out of work or back to itself;
-delivery observes the ordinary selection change without a separate chat message.
-Work-root model changes use the same daemon path as the manager's model picker.
-The assistant sets or clears work-root budgets on an ordinary request; its own
-budget still requires the current human `/budget` grant. A current grant is consumed
-for any target. Without one, the store authorizes a delegated mutation only from
-an assistant root to a different live, non-assistant root with the same non-empty
-manager owner. The receipt key makes replay a no-op before generation or baseline
-changes. Pricing is read from the target's model at execution. Only the assistant
-receives the receipt; the work root's output log receives neither budget nor model notices.
-
-All tool effects execute immediately through the ordinary tool protocol, return
-real ids and survive a later model failure. Tool handlers orchestrate work through
-the daemon host; the assistant store owns persistence queries and the transactional
-authority check. Memory and focus enforce their limits inside their write
-transactions. Open validates model and effort before atomically committing the
-root, its title and the first authorized instruction. The fresh root's tree fence
-is acquired before that commit publishes a wake and held through startup or
-failed-start cleanup. Startup ignores request cancellation; shutdown preserves
-the durable input for boot recovery, while another startup failure kills the root.
-Optional worktree creation shares the human `/gwt` path and remote selection,
-fetches the remote default and rolls back on transaction or startup failure.
-Send authorizes inside its enqueue transaction while holding the tree lock.
-Stop and kill use the ordinary daemon command path: stopped work can resume,
-while killed work leaves session lists. The daemon host supplies creation,
-delivery, stop, kill, chat switching and model administration,
-while the session owns model calls,
-step commits, durable errors and output. Effects and their tool-result commits
-are separate: a runtime result-commit failure can leave a call unresolved for a
-later activation; boot instead settles interrupted calls as typed failures.
-
-Open/send carry only the assistant's text. `forward(session)` selects the newest
-human input accepted in the current run and copies its raw content byte for byte,
-with human authority and observation provenance. The store rechecks the run stamp,
-refuses slash text before lifecycle or duplicate checks, and never lifts a fired
-budget. The work input and `→ #N name (forwarded)` receipt commit atomically;
-per-input/target keys make replay a no-op. The receipt keeps its original name.
-Forward never changes chat focus. Send delivers generic commands verbatim and dispatches them after
-releasing the tree lock, just as human commands do. Open refuses generic read-only
-and lifecycle commands before worktree or root creation. Both hand over
-`/skill <name> [args]` verbatim.
-One session-store predicate defines human input: `source=user` and `from`
-different from `assistant`; an observer reference does not change authority.
-Only direct human input creates activation grants or releases a fired budget; assistant
-commands otherwise retain ordinary command dispatch, skill expansion and resume semantics.
-
-Every assistant instruction carries its observer root reference in its work
-inbox row. Enqueue also stamps human model-bound input to owned work roots with
-their manager's assistant reference, excluding the seven control/read-only
-commands, assistant roots and subagents. Reported schedule ticks carry the same
-reference. A non-yield final of the work root enqueues one answered agent input
-per observer in the same transaction, joining active finals since that observer's
-earliest open input. The event prefixes human ref rows with bounded quotes and
-reported schedule rows with a firing notice, in inbox order; forwarded input is
-labelled `you forwarded`. The latest non-cancelled answered inbox event anchors
-the next window on the work root's message ids; direct user input does not close
-an outstanding observer instruction. A committed terminal error or a fresh
-start-failure receipt enqueues the error notice without moving that anchor.
-Yield finals leave the window open. Cards derive touched and pending from the
-same inbox refs and window rule, hiding pending for stopped or errored work.
-The inbox-row reference is written only in-process and is never accepted from a
-controller. No send ledger, daemon notification hook or boot sweep is involved;
-ordinary inbox recovery delivers committed events after restart. Kill, clear
-and stop notify nobody. A non-accepting observer is skipped; other enqueue errors
-roll back the work transaction. The same commit copies every window final's
-user-visible outbox row and each failure notice into the observer's outbox unless
-its manager's chat focus is that work root. `relay:<output id>` deduplicates copies;
-content is verbatim, including confirmed candidate text and earlier yield finals.
-Unwritable observers are skipped; other relay insert errors roll back the work.
-Relays never join the work root's committed live outputs or advance its watermark.
-Delivery adds their current `#N name` header on `#0`; entering work can show them again.
-
-The daemon enables generic `SilentFinish` for assistant roots. A successful forward
-returns `AnswersInput`, so its receipt can answer a routing-only human turn.
-Event turns may finish without output or a second look; pending human input still
-takes the ordinary empty-stop nudge/error path. The prompt reserves speech for
-questions, mismatches and requested reports, and requires it for own schedules and
-host notes. If tools correct a candidate, the next answer repeats it whole. State
-notifications and heartbeat typing flow normally. Assistant roots remain
-protected from stop, kill, clear and compact. The session model is
-recorded in [ADR-0074](docs/adr/0074-assistant-is-an-ordinary-session-with-a-desk-head.md),
-superseding [ADR-0073](docs/adr/0073-assistant-turn-is-a-buffered-tool-loop.md), with
-observer delivery recorded in [ADR-0075](docs/adr/0075-work-answers-reach-the-observer-through-its-inbox.md)
-and work administration in [ADR-0077](docs/adr/0077-assistant-moves-the-user-in-never-out.md),
-amended by [ADR-0078](docs/adr/0078-assistant-input-is-never-human-authority.md)
-and [ADR-0080](docs/adr/0080-assistant-administers-work-at-open-and-hears-direct-exchanges.md),
-with forwarding, relaying and silence in [ADR-0081](docs/adr/0081-assistant-forwards-and-the-host-relays-work-answers.md).
 
 ### Daemon, sessions and persistence
 
@@ -1044,7 +895,7 @@ transcript context. The loop receives those prepared values and emits live
 notifications through its sole outward events port. Final answer notifications
 retain the raw answer; durable manager messages carry the same unadorned text.
 Work-step messages and their live notifications include the same tool trail;
-session assembly fixes this policy at construction, with assistant roots excluded.
+session assembly enables this policy for every manager-owned root.
 Scheduled announcements and tool direct outputs reach managers only through
 the outbox; their commit metadata excludes them from live message events.
 Ownerless sessions publish live answers without creating manager outbox rows.
@@ -1059,8 +910,7 @@ mismatch. `transcript` owns the durable message-row vocabulary shared with produ
 The daemon converts the session's context projection into `progress`'s neutral
 diagnostic status vocabulary.
 The session reads pending inbox rows directly and reloads the active transcript
-after every step commit. A root commit may enqueue observer input in its own
-transaction; its targets wake only after commit. Stop commits unresolved-call
+after every step commit. Stop commits unresolved-call
 failures and activation expiry without status or output changes, then finishes
 the stop and cancels
 producer obligations. Explicit stop completes the manager-owned root atomically
@@ -1107,9 +957,8 @@ tools from an enabled MCP server named `playwright`; those tools are hidden from
 every other agent type, including project subagents. It is offered to `task`
 only when this activation discovered one of those tools. Every browser call
 requires a model-written `task_state`, retained in its stored tool arguments
-and stripped before forwarding to the server. Browser and assistant types disable
-integrated search before client construction. The hidden assistant type omits
-project context and exposes only its owner tools; project overlays cannot replace it.
+and stripped before forwarding to the server. Browser sessions disable
+integrated search before client construction.
 Todo tracking is root-session-local durable state. The tool replaces the whole
 list atomically, and progress treats it as planning state rather than a separate
 workflow engine.
@@ -1151,9 +1000,9 @@ retry rules and model listing. The wire package carries neutral message and tool
 types so session/tool code does not depend on provider SDKs. Reasoning payloads
 are stored verbatim with their originating model and are replayed only to that
 same model; a model change drops them rather than sending incompatible data.
-Every agent type's system prompt and assistant cards state the configured model
-identity and effective effort using the driver's catalog clamp, hiding effort for
-models without choices. Runtime configuration and cards share the catalog's
+Every agent type's system prompt states the configured model identity and
+effective effort using the driver's catalog clamp, hiding effort for models
+without choices. Runtime configuration and prompts share the catalog's
 legacy `medium` fallback for an empty persisted effort before clamping. Model or
 effort changes replace that line; older conversation claims cannot override it.
 Image references carried on user/tool messages are materialized inside each
@@ -1169,7 +1018,7 @@ passthrough, an explicit disable removes all integrated search, and an
 unconfigured section falls back to the OpenRouter driver's server-side
 web-search injection
 ([ADR-0043](docs/adr/0043-integrated-search-quality-first.md)). Tool-less
-requests — the compaction summarizer — carry no injection; `browser` and `assistant`
+requests — the compaction summarizer — carry no injection; `browser`
 sessions disable integrated search for initial and replacement clients. Search precedence
 lives in config, so drivers and sessions read one resolver.
 
@@ -1207,7 +1056,7 @@ Config owns parsing and secret-sink resolution; config operations own
 whole-document staging that accepts literal credential values and `${VAR}`
 references alike, backup retention and pending-apply recovery. Config apply owns
 the agent-facing schema and strict argument parsing; the `/config`
-read/edit tools register only on the assistant root; an edit commits only
+read/edit tools register on every manager-owned root; an edit commits only
 under the durable human `/config` activation. Config apply owns the staged
 ledger, process-wide commit claim and restart channel; the daemon gates tool
 availability and calls apply under its tree fence after suspension persists.
@@ -1230,57 +1079,56 @@ helpers with no durable protocol ownership.
 The manager coordinator isolates manager failures. Telegram submits private
 controller requests and adapts the manager-bound `ChatFocusController` to the
 small local ports owned by `managerdelivery`. `managercontrol` owns ownership,
-liveness validation, DTO conversion, focus/seen operations and project resolution;
+liveness validation, DTO conversion, focus/cursor operations and project resolution;
 `managerdiscovery` owns project, model, skill and filesystem discovery. The
 composition root supplies the daemon backend, store, discovery and session bus.
 
 Each Telegram manager owns one private or group chat. Startup validates the bot
-and chat, ensures its assistant, binds the chat without overwriting its selection,
-and starts polling and the send-only chat loop. `/switch` selects only live owned
-roots; `/assistant` selects public ID 0. `/switch`, numbered `/kill` and `/stop`
-accept one leading `#` on the session number.
-Commands and media route to the durable focus; heartbeats type only for the
-loop's focused root. The assistant accepts model, configuration, budget and
-schedule operations, but refuses work-only stop/kill/clear/compact/worktree flows.
-`/config` is accepted only on Assistant; work focus receives a refusal before forwarding.
+and chat, binds the chat without overwriting its selection or cursor, and starts
+polling and the send-only chat loop. NULL focus creates no session. Plain text,
+captions, media, voice and focus-scoped commands receive exactly one local line:
+`No session in focus. /new, /spawn or /switch N.` No-focus voice is not
+transcribed and media is not downloaded. `/new`, `/spawn`, `/sessions`,
+`/switch N`, numbered `/kill N` and `/stop N`, `/help` and `/start` remain
+available; help omits session skills without focus.
+`/switch` selects only positive live owned root IDs, accepting one leading
+`#`, as numbered kill and stop do. Commands and media route to the durable
+focus; heartbeats type only for the loop's positive focused root. `/config`
+uses the selected manager-owned root's ordinary activation grant.
 
 Work roots carry a one-line session title in their attributes. The first inserted
 non-command user input names an untitled root atomically with its inbox row;
-`/title` renames the focused work root, and `/clear` starts untitled. These writes
-preserve session list order. Session summaries, switch headers and unread digests
-share the display name `<project> · <title>`, or `<project>` when untitled;
-`/sessions` and digests show unread counts. `/sessions` puts Assistant first,
-then unread roots, then read roots, each group ordered by last activity and
-descending session ID on ties. Activity is the later timestamp of the newest
-output and newest user/agent inbox row, falling back to creation for empty roots.
-The command shows at most 30 sessions, including Assistant, then an overflow
-count; digest and numbered control commands retain the complete list.
+`/title` renames the focused root, and `/clear` starts untitled. Titles do not
+change activity order. Session summaries, entry headers and delivered rows share
+the display name `<project> · <title>`, or `<project>` when untitled.
+`/sessions` lists live owned roots by newest activity, ties by descending ID.
+Activity is the later timestamp of the newest output and newest user/agent
+inbox row, falling back to creation for empty roots. It marks the focus with
+` ◀` and scheduled roots with ` ⏰`, shows at most 30 lines, then `… and N more`.
+An empty list says `No sessions. /new or /spawn.`
 
-Startup drains the selected tail. A focus change sends the switch header.
-Explicit `/switch` and `/assistant` entries also send that header when the focus
-stays the same or the first delivery pass has not yet run. An explicit entry is
-registered before the focus write and waits for the loop to observe its target; successful
-prelude preparation consumes it, while a rejected focus write cancels it.
-Ordinary wakes do not request entry preludes. Only entry to Assistant includes
-an unread digest for other live owned roots.
-Digest rows remain unread. The selected tail follows when unread exists;
-otherwise entry context replays the newest already-seen renderable row without
-moving its watermark. No context is sent when no such row exists.
-Every delivered work row carries a session header, with its display name read
-once per batch; relays on Assistant carry their work origin's header, while
-Assistant's own rows have none. Headers are added at
-delivery and are absent from stored output. A row-permanent context failure
-drops that prelude item; transient and chat failures retain it for backoff.
-After each marked row, the loop re-reads chat focus. A changed selection ends
-the old tail before kill/reset handling and immediately starts a new pass;
-remaining old rows stay unread for the next digest.
-Transient or chat-level failures pause with backoff and never advance seen;
-wakes cannot bypass the retry deadline. A permanently bad row advances only
-after a successful plain probe; probe failures keep it unread, with chat-level
-pauses logged at warn. Chunking and HTML-to-plain fallback belong to Telegram.
-A kill fence is not completion: the loop observes `killed_at`, drains a fresh
-tail through `session_closed`, then CAS-resets focus to the assistant. A newer
-selection survives that reset. Unread killed roots are omitted from summaries.
+A NULL cursor owes `→ #N name` (plus ` ⏰` when scheduled), followed by the last
+three renderable rows, oldest first, each with its own `#N name` header.
+Renderable excludes `session_opened` and `session_replaced`. Entry acknowledges
+the newest ID of any type from the same read, then tails newer rows. A re-switch
+to the same root repeats entry; ordinary wakes and restarts retain an
+acknowledged cursor. Failed entry CAS discards its prelude and restarts the pass.
+`/clear` enters the successor, including its `Session cleared.` row.
+Headers are added at delivery and are absent from stored output; display names
+are read once per output batch.
+
+Each live row advances the cursor under its focus; failed CAS stops that tail
+before kill/reset handling and immediately requests a new pass. During live
+delivery at most one old-focus row may be sent after a switch commits.
+Transient or chat-level failures pause with backoff and never advance the cursor;
+wakes cannot bypass the retry deadline. A permanently bad row, including an entry
+row, advances only after a successful plain probe; probe failures retain it.
+A row-permanent header failure pauses the chat. Chunking and HTML-to-plain
+fallback belong to Telegram. A kill fence is not completion: the loop observes
+`killed_at`, drains a fresh tail through `session_closed`, then CAS-resets both
+focus and cursor to NULL. A newer selection survives that reset. Killed roots
+are omitted from session summaries. No-focus delivery calls only its focus port
+and sends nothing.
 
 Control owns socket framing, greeting/readiness behavior, `status` registration
 and single-instance coordination. The socket carries responses only, so a slow

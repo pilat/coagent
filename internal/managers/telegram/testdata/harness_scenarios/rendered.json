@@ -22,7 +22,7 @@
         {
           "method": "sendMessage",
           "chat_id": -100123,
-          "text": "#1 &lt;name&gt;\n→ task: <code>scenario</code>",
+          "text": "→ #1 &lt;name&gt;",
           "parse_mode": "HTML"
         },
         {
@@ -49,6 +49,12 @@
       "trace": "background_wait_canary.json",
       "source_test": "TestHarnessScenario_BackgroundFinalResponseResumesOnCompletion",
       "calls": [
+        {
+          "method": "sendMessage",
+          "chat_id": -100123,
+          "text": "→ #1 &lt;name&gt;",
+          "parse_mode": "HTML"
+        },
         {
           "method": "sendMessage",
           "chat_id": -100123,
@@ -81,7 +87,7 @@
         {
           "method": "sendMessage",
           "chat_id": -100123,
-          "text": "#1 &lt;name&gt;\n→ ls: <code>.</code>",
+          "text": "→ #1 &lt;name&gt;",
           "parse_mode": "HTML"
         },
         {
@@ -111,6 +117,12 @@
         {
           "method": "sendMessage",
           "chat_id": -100123,
+          "text": "→ #1 &lt;name&gt;",
+          "parse_mode": "HTML"
+        },
+        {
+          "method": "sendMessage",
+          "chat_id": -100123,
           "text": "#1 &lt;name&gt;\npremature candidate answer",
           "parse_mode": "HTML"
         }
@@ -123,6 +135,12 @@
         {
           "method": "sendMessage",
           "chat_id": -100123,
+          "text": "→ #1 &lt;name&gt;",
+          "parse_mode": "HTML"
+        },
+        {
+          "method": "sendMessage",
+          "chat_id": -100123,
           "text": "#1 &lt;name&gt;\nstopped root resumed after restart",
           "parse_mode": "HTML"
         }
@@ -132,6 +150,12 @@
       "trace": "foreground_child_no_lifetime.json",
       "source_test": "TestHarnessScenario_ForegroundChildHasNoLifetimeLimit",
       "calls": [
+        {
+          "method": "sendMessage",
+          "chat_id": -100123,
+          "text": "→ #1 &lt;name&gt;",
+          "parse_mode": "HTML"
+        },
         {
           "method": "sendMessage",
           "chat_id": -100123,
@@ -158,6 +182,12 @@
         {
           "method": "sendMessage",
           "chat_id": -100123,
+          "text": "→ #1 &lt;name&gt;",
+          "parse_mode": "HTML"
+        },
+        {
+          "method": "sendMessage",
+          "chat_id": -100123,
           "text": "#1 &lt;name&gt;\nsession ready",
           "parse_mode": "HTML"
         },
@@ -176,6 +206,12 @@
         {
           "method": "sendMessage",
           "chat_id": -100123,
+          "text": "→ #1 &lt;name&gt;",
+          "parse_mode": "HTML"
+        },
+        {
+          "method": "sendMessage",
+          "chat_id": -100123,
           "text": "#1 &lt;name&gt;\n❌ LLM error: Model response reached the output limit twice.",
           "parse_mode": "HTML"
         }
@@ -188,6 +224,12 @@
         {
           "method": "sendMessage",
           "chat_id": -100123,
+          "text": "→ #1 &lt;name&gt;",
+          "parse_mode": "HTML"
+        },
+        {
+          "method": "sendMessage",
+          "chat_id": -100123,
           "text": "#1 &lt;name&gt;\nrecovered complete answer",
           "parse_mode": "HTML"
         }
@@ -197,6 +239,12 @@
       "trace": "model_response_unknown_finish.json",
       "source_test": "TestHarnessScenario_UnknownFinishPublishesCanonicalError",
       "calls": [
+        {
+          "method": "sendMessage",
+          "chat_id": -100123,
+          "text": "→ #1 &lt;name&gt;",
+          "parse_mode": "HTML"
+        },
         {
           "method": "sendMessage",
           "chat_id": -100123,
@@ -214,6 +262,12 @@
       "trace": "output_chain_narrated_tools.json",
       "source_test": "TestHarnessScenario_OutputChainNarratedToolIterations",
       "calls": [
+        {
+          "method": "sendMessage",
+          "chat_id": -100123,
+          "text": "→ #1 &lt;name&gt;",
+          "parse_mode": "HTML"
+        },
         {
           "method": "sendMessage",
           "chat_id": -100123,
@@ -238,6 +292,12 @@
       "trace": "output_chain_reported_order.json",
       "source_test": "TestHarnessScenario_OutputChainReportedOrder",
       "calls": [
+        {
+          "method": "sendMessage",
+          "chat_id": -100123,
+          "text": "→ #1 &lt;name&gt;",
+          "parse_mode": "HTML"
+        },
         {
           "method": "sendMessage",
           "chat_id": -100123,
@@ -270,6 +330,12 @@
         {
           "method": "sendMessage",
           "chat_id": -100123,
+          "text": "→ #1 &lt;name&gt;",
+          "parse_mode": "HTML"
+        },
+        {
+          "method": "sendMessage",
+          "chat_id": -100123,
           "text": "#1 &lt;name&gt;\nidle process completion observed",
           "parse_mode": "HTML"
         }
@@ -279,6 +345,12 @@
       "trace": "process_crash_restart.json",
       "source_test": "TestHarnessScenario_ProcessCrashRestartDeliversInterruptedOnce",
       "calls": [
+        {
+          "method": "sendMessage",
+          "chat_id": -100123,
+          "text": "→ #1 &lt;name&gt;",
+          "parse_mode": "HTML"
+        },
         {
           "method": "sendMessage",
           "chat_id": -100123,
@@ -294,6 +366,12 @@
         {
           "method": "sendMessage",
           "chat_id": -100123,
+          "text": "→ #1 &lt;name&gt;",
+          "parse_mode": "HTML"
+        },
+        {
+          "method": "sendMessage",
+          "chat_id": -100123,
           "text": "#1 &lt;name&gt;\nidle-transition completion observed",
           "parse_mode": "HTML"
         }
@@ -303,6 +381,12 @@
       "trace": "process_interrupts_sleep.json",
       "source_test": "TestHarnessScenario_ProcessCompletionInterruptsSleep",
       "calls": [
+        {
+          "method": "sendMessage",
+          "chat_id": -100123,
+          "text": "→ #1 &lt;name&gt;",
+          "parse_mode": "HTML"
+        },
         {
           "method": "sendMessage",
           "chat_id": -100123,
@@ -329,6 +413,12 @@
         {
           "method": "sendMessage",
           "chat_id": -100123,
+          "text": "→ #1 &lt;name&gt;",
+          "parse_mode": "HTML"
+        },
+        {
+          "method": "sendMessage",
+          "chat_id": -100123,
           "text": "#1 &lt;name&gt;\n❌ LLM error: chat completion: openrouter api error: status=400, body=scripted provider failure 1\n",
           "parse_mode": "HTML"
         },
@@ -349,6 +439,12 @@
       "trace": "scheduled_turn_chain.json",
       "source_test": "TestHarnessScenario_ScheduledTurnChain",
       "calls": [
+        {
+          "method": "sendMessage",
+          "chat_id": -100123,
+          "text": "→ #1 &lt;name&gt;",
+          "parse_mode": "HTML"
+        },
         {
           "method": "sendMessage",
           "chat_id": -100123,
@@ -391,19 +487,7 @@
         {
           "method": "sendMessage",
           "chat_id": -100123,
-          "text": "#1 &lt;name&gt;\nRunning the first probe\n\n→ ls: <code>.</code>",
-          "parse_mode": "HTML"
-        },
-        {
-          "method": "sendMessage",
-          "chat_id": -100123,
-          "text": "#1 &lt;name&gt;\nprobe answer",
-          "parse_mode": "HTML"
-        },
-        {
-          "method": "sendMessage",
-          "chat_id": -100123,
-          "text": "#1 &lt;name&gt;\n🔧 Activated skill: review",
+          "text": "→ #1 &lt;name&gt;",
           "parse_mode": "HTML"
         },
         {
@@ -438,6 +522,12 @@
         {
           "method": "sendMessage",
           "chat_id": -100123,
+          "text": "→ #1 &lt;name&gt;",
+          "parse_mode": "HTML"
+        },
+        {
+          "method": "sendMessage",
+          "chat_id": -100123,
           "text": "#1 &lt;name&gt;\n⏳ Stopping…",
           "parse_mode": "HTML"
         },
@@ -453,6 +543,12 @@
       "trace": "stop_live_chain.json",
       "source_test": "TestHarnessScenario_LiveStopChain",
       "calls": [
+        {
+          "method": "sendMessage",
+          "chat_id": -100123,
+          "text": "→ #1 &lt;name&gt;",
+          "parse_mode": "HTML"
+        },
         {
           "method": "sendMessage",
           "chat_id": -100123,
@@ -474,13 +570,7 @@
         {
           "method": "sendMessage",
           "chat_id": -100123,
-          "text": "#1 &lt;name&gt;\nWorking on it\n\n→ ls: <code>.</code>",
-          "parse_mode": "HTML"
-        },
-        {
-          "method": "sendMessage",
-          "chat_id": -100123,
-          "text": "#1 &lt;name&gt;\nWorking on it, done for now.",
+          "text": "→ #1 &lt;name&gt;",
           "parse_mode": "HTML"
         },
         {
@@ -510,6 +600,12 @@
         {
           "method": "sendMessage",
           "chat_id": -100123,
+          "text": "→ #1 &lt;name&gt;",
+          "parse_mode": "HTML"
+        },
+        {
+          "method": "sendMessage",
+          "chat_id": -100123,
           "text": "#1 &lt;name&gt;\n<b><u>Session commands</u></b>\n<code>/status</code> — show session status\n<code>/stop</code> — stop the current run\n<code>/clear</code> — start a fresh session\n<code>/kill</code> — close this session\n<code>/compact [focus]</code> — compact the context\n<code>/schedules</code> — list schedules\n<code>/budget &lt;request&gt;</code> — arm, replace, inspect, or clear a one-shot cost/wall-time checkpoint\n<code>/gwt &lt;name&gt;</code> — fork into a worktree (work sessions only)",
           "parse_mode": "HTML"
         }
@@ -534,6 +630,12 @@
       "trace": "tool_trail_work_steps.json",
       "source_test": "TestHarnessScenario_WorkToolStepsPublishOneMessageEach",
       "calls": [
+        {
+          "method": "sendMessage",
+          "chat_id": -100123,
+          "text": "→ #1 &lt;name&gt;",
+          "parse_mode": "HTML"
+        },
         {
           "method": "sendMessage",
           "chat_id": -100123,

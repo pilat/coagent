@@ -13,7 +13,6 @@ import (
 
 	"go.uber.org/zap"
 
-	"github.com/pilat/coagent/internal/assistant"
 	"github.com/pilat/coagent/internal/backgroundprocess"
 	"github.com/pilat/coagent/internal/bashsandbox"
 	"github.com/pilat/coagent/internal/budget"
@@ -36,7 +35,6 @@ import (
 	"github.com/pilat/coagent/internal/migrate"
 	"github.com/pilat/coagent/internal/procexec"
 	"github.com/pilat/coagent/internal/progressruntime"
-	"github.com/pilat/coagent/internal/projectpath"
 	"github.com/pilat/coagent/internal/sandboxpolicy"
 	"github.com/pilat/coagent/internal/schedule"
 	"github.com/pilat/coagent/internal/sessionbuild"
@@ -584,7 +582,6 @@ func startCore(
 		cfg,
 		mcpRegistry,
 		applier,
-		assistant.New(db, sessionStore, projectpath.ResolveRoot(cfg.UnifiedConfig)),
 	)
 
 	discovery := managerdiscovery.New(sessionStore, cfg, cache)

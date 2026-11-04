@@ -58,7 +58,7 @@ func TestGwtFailureSendsOneErrorAndKeepsSelection(t *testing.T) {
 	assert.Equal(t, int64(42), ctrl.focus)
 }
 
-func TestGwtBareShowsUsageAndAssistantRefuses(t *testing.T) {
+func TestGwtBareShowsUsageAndNoFocusGetsHint(t *testing.T) {
 	var messages []string
 	ctrl := &fakeController{focus: 42}
 	m := newCmdTestManager(t, ctrl, &messages)
@@ -68,6 +68,6 @@ func TestGwtBareShowsUsageAndAssistantRefuses(t *testing.T) {
 	ctrl.focus = 0
 	m.handleChatText(t.Context(), "/gwt api")
 	require.Len(t, messages, 2)
-	assert.Contains(t, messages[1], "Switch to a work session")
+	assert.Equal(t, noFocusHint, messages[1])
 	assert.Empty(t, ctrl.createSessionCalls)
 }

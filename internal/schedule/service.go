@@ -15,21 +15,6 @@ import (
 var _ Service = (*svc)(nil)
 
 type Service interface {
-	AddOnce(
-		ctx context.Context,
-		sessionID int64,
-		at time.Time,
-		prompt string,
-		fresh bool,
-		reportTo int64,
-	) (Created, error)
-	AddRecurringReport(
-		ctx context.Context,
-		sessionID int64,
-		cron, prompt string,
-		fresh bool,
-		reportTo int64,
-	) (Created, error)
 	Render(ctx context.Context, sessionID int64) (string, error)
 	SleepTool(sessionID int64) tool.Tool
 	ListSchedules(ctx context.Context, sessionID int64) ([]Entry, error)
@@ -145,19 +130,8 @@ func (s *svc) RemoveAllForSession(ctx context.Context, sessionID int64) error {
 func (s *svc) AddRecurring(
 	ctx context.Context,
 	sessionID int64,
-	cronExpr string,
-	inputMessage string,
-	fresh bool,
-) (Created, error) {
-	return s.AddRecurringReport(ctx, sessionID, cronExpr, inputMessage, fresh, 0)
-}
-
-func (s *svc) AddRecurringReport(
-	ctx context.Context,
-	sessionID int64,
 	cronExpr, inputMessage string,
 	fresh bool,
-	reportTo int64,
 ) (Created, error) {
 	if cronExpr == "" {
 		return Created{}, errors.New("add recurring schedule: cron expression is required")
@@ -170,34 +144,13 @@ func (s *svc) AddRecurringReport(
 		nil,
 		inputMessage,
 		fresh,
-		ScheduleMetadata{ReportTo: reportTo},
+		ScheduleMetadata{},
 	)
 	if err != nil {
 		return Created{}, fmt.Errorf("add recurring schedule: %w", err)
 	}
 
 	return describeRecurring(sched, cronExpr), nil
-}
-
-// AddOnce creates standalone future input without owning a suspended tool call.
-func (s *svc) AddOnce(
-	ctx context.Context,
-	sessionID int64,
-	at time.Time,
-	prompt string,
-	fresh bool,
-	reportTo int64,
-) (Created, error) {
-	if !at.After(time.Now()) {
-		return Created{}, errors.New("one-shot time must be in the future")
-	}
-
-	sched, err := s.store.AddSchedule(ctx, sessionID, "", &at, prompt, fresh, ScheduleMetadata{ReportTo: reportTo})
-	if err != nil {
-		return Created{}, fmt.Errorf("add one-shot schedule: %w", err)
-	}
-
-	return describeSleep(sched, at), nil
 }
 
 func (s *svc) AddSleep(

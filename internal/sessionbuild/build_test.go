@@ -28,7 +28,6 @@ func TestBuildPrompt_AgentInventory(t *testing.T) {
 		{"build with owners", registry.AgentTypeBuild, true, true, true},
 		{"build without task", registry.AgentTypeBuild, false, true, false},
 		{"builtin explore", registry.AgentTypeExplore, true, false, false},
-		{"assistant", registry.AgentTypeAssistant, false, false, false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

@@ -15,12 +15,14 @@ type Store interface { //nolint:interfacebloat // Manager reads and chat state s
 	GetProjectWorkDir(context.Context, int64) (string, error)
 	GetProjectName(context.Context, int64) (string, error)
 	ChatFocus(context.Context, string, string) (int64, error)
+	ChatCursor(context.Context, string, string) (int64, int64, bool, error)
+	ChatEntry(context.Context, int64, int) ([]sessionstore.ChatOutput, int64, error)
+	EnterChat(context.Context, string, string, int64, int64) (bool, error)
+	AdvanceChat(context.Context, string, string, int64, int64) (bool, error)
 	BindChat(context.Context, string, string) error
 	SetChatFocus(context.Context, string, string, int64) error
 	SetSessionTitle(context.Context, string, int64, string) error
 	ResetChatFocus(context.Context, string, string, int64) (bool, error)
-	ChatOutputs(context.Context, string, string, int64, int) ([]sessionstore.ChatOutput, error)
-	LastSeenChatOutput(context.Context, string, string, int64) (sessionstore.ChatOutput, bool, error)
-	MarkChatSeen(context.Context, string, string, int64, int64) error
-	ChatSessions(context.Context, string, string) ([]sessionstore.ChatSession, error)
+	ChatOutputs(context.Context, int64, int64, int) ([]sessionstore.ChatOutput, error)
+	ChatSessions(context.Context, string) ([]sessionstore.ChatSession, error)
 }

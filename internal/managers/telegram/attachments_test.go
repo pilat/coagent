@@ -158,16 +158,6 @@ func TestAttachment_NoCaptionOmitsSection(t *testing.T) {
 	t.Cleanup(func() { _ = os.Remove(path) })
 }
 
-func TestAttachment_AssistantWithoutCaptionDropsSilently(t *testing.T) {
-	api := &fakeAttachmentAPI{getFilePath: "documents/x.pdf", payload: []byte("%PDF")}
-	controller := &fakeController{}
-	m := newAttachmentTestManager(t, api, controller)
-	m.processChatUpdate(t.Context(), &telegramMessage{Document: &telegramDocument{FileID: "doc-3"}})
-	assert.Empty(t, controller.messageCalls)
-	assert.Empty(t, api.sentMessages)
-	assert.Zero(t, api.getFileCalls)
-}
-
 func TestAttachment_DownloadFailureRepliesWithoutInjection(t *testing.T) {
 	api := &fakeAttachmentAPI{getFilePath: "documents/x.pdf", downloadCode: http.StatusInternalServerError}
 	controller := &fakeController{}

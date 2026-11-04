@@ -53,10 +53,10 @@ numeric user ID in the manager's allowed users. The default target is the privat
 chat with that sole allowed user. To use a group, add the bot and configure its
 numeric `target_chat_id`. Each enabled manager needs its own bot token.
 
-One chat holds Assistant (`#0`) and the work sessions you select with `/switch`.
-Assistant can start and coordinate work, register global MCP servers, schedule
-itself, and administer configuration and budgets. `/config` on Assistant (`#0`) authorizes reading
-the current document and applying the complete candidate `config.yaml`; an
+One chat holds the work sessions you select with `/switch N`. With no session
+in focus, text and media receive `No session in focus. /new, /spawn or /switch N.`
+`/config` in a selected work session authorizes reading the current document
+and applying the complete candidate `config.yaml`; an
 accepted edit restarts the daemon and rolls back if the configuration cannot
 boot. Secrets stay in `~/.coagent/secrets`, maintained by hand outside the
 conversation — never paste a credential into a chat.
@@ -135,8 +135,8 @@ opinionated product, not an agent framework with a public plugin API.
   policy allows it.
 - **Schedules:** cron expressions with `CRON_TZ` and one-shot wakes. Fresh
   schedules reset the transcript on every run while curated memory persists.
-- **Telegram:** one chat with session switching, unread indicators and a digest
-  when you return to Assistant. Selected sessions receive their unread output in order.
+- **Telegram:** one chat with session switching. Entry shows a header and the
+  last three messages, followed by the selected session's live output in order.
   Numbered project/model lists, git worktrees via `/gwt <name>`, status, schedules
   and a hard user allow-list are built in.
 
@@ -210,7 +210,7 @@ for vulnerability reporting.
 ## Configuration and project context
 
 Configuration is a hand-edited `~/.coagent/config.yaml`, or a whole-document
-`/config` apply from Assistant (`#0`) only. The
+`/config` apply from a selected manager-owned work session. The
 underlying state is intentionally inspectable:
 
 - `~/.coagent/config.yaml` — providers, models, managers, marketplaces, and tool
@@ -362,26 +362,29 @@ Telegram commands operate on the selected session unless they name an ID:
 | --- | --- |
 | `/new [name]` | List recent managed projects, or create/open one and select a new session |
 | `/spawn <path>` | Start and select a session in an existing directory |
-| `/sessions` | Show up to 30 sessions: Assistant first, then unread before read, newest activity first; report any overflow |
-| `/switch N`, `/assistant` | Select a work session, or return to Assistant (`/switch 0`) |
+| `/sessions` | Show up to 30 live owned sessions, newest activity first; mark the focus and report any overflow |
+| `/switch N` | Select a live owned session; repeat to see its last three messages again |
 | `/gwt <name>` | Create and select a worktree session from the selected work repository |
 | `/kill [N]`, `/stop [N]` | Kill a work session or stop its loop; an ID leaves focus unchanged |
 | `/model [N [effort]]` | List configured models or select one by its number |
 | `/status`, `/budget <request>`, `/schedules` | Inspect status, authorize a budget change, or list schedules |
 | `/clear`, `/compact [focus]` | Replace a work root or compact its context |
-| `/config <request>` | Authorize configuration work on Assistant (`#0`) only |
+| `/config <request>` | Authorize configuration work in the selected work session |
 | `/skill <name> [args]` | Activate a skill in the selected session |
 | `/help`, `/start` | Show command help |
 
-Assistant refuses stop, kill, clear, compact and worktree commands. Text and
-attachments go to the selected session; Assistant receives attachment captions.
-Switching sends a switch header and the selected session's unread tail, or its
-last seen message as entry context when nothing is unread. The unread digest
-appears only when returning to Assistant. Every work message carries its session
-header. Tool-calling work steps are new messages with a compact tool trail,
-including silent steps; Assistant publishes text only. Final answers are new
-messages too. A crash
-between sending and saving the watermark can repeat a message.
+Text and attachments go to the selected session. Without focus, the manager
+replies `No session in focus. /new, /spawn or /switch N.`; voice is not
+transcribed and media is not downloaded. Project/session creation, session
+listing and switching, numbered kill/stop and help remain available.
+
+Switching sends `→ #N name`, then the last three renderable rows, oldest first,
+even when re-selecting the current session. Each row carries its `#N name`
+header. Later rows arrive live in order. Tool-calling steps are new messages
+with a compact tool trail, including steps with no text. Final answers are new
+messages too. Restart preserves the chat cursor; a crash between sending and
+saving it can repeat a message. Killing the focus leaves no session selected;
+`/clear` selects and enters its successor.
 
 ## Development
 

@@ -1,6 +1,6 @@
 # ADR-0074: The assistant is an ordinary session whose activation starts from a desk
 
-- **Status:** Accepted
+- **Status:** Superseded by [ADR-0082](0082-manager-is-a-groupless-chat-without-an-assistant.md)
 - **Date:** 2026-10-28
 - **Supersedes:** [ADR-0073](0073-assistant-turn-is-a-buffered-tool-loop.md)
 - **Amended by:** [ADR-0075](0075-work-answers-reach-the-observer-through-its-inbox.md) — work answers reach the assistant as inbox input written in the work root's own commit; the send ledger, the observation calls and the boot sweep are gone

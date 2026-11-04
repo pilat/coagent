@@ -41,6 +41,10 @@ func (c *controller) SetChatFocus(ctx context.Context, chatID string, sessionID 
 		return err
 	}
 
+	if sessionID <= 0 {
+		return fmt.Errorf("#%d is not a live session", sessionID)
+	}
+
 	//nolint:wrapcheck // Rejections are the exact user-visible response.
 	return c.app.store.SetChatFocus(ctx, c.managerID, chatID, sessionID)
 }
@@ -64,7 +68,7 @@ func (c *controller) SetSessionTitle(ctx context.Context, _ string, sessionID in
 		return err
 	}
 
-	if sessionID == 0 {
+	if sessionID <= 0 {
 		return fmt.Errorf("#%d is not a live session", sessionID)
 	}
 
@@ -80,7 +84,7 @@ func (c *controller) SetSessionTitle(ctx context.Context, _ string, sessionID in
 func (c *controller) ChatOutputs(
 	ctx context.Context,
 	chatID string,
-	sessionID int64,
+	sessionID, after int64,
 	limit int,
 ) ([]controllerapi.ChatOutput, error) {
 	record, err := c.chatSession(ctx, sessionID)
@@ -88,7 +92,7 @@ func (c *controller) ChatOutputs(
 		return nil, err
 	}
 
-	rows, err := c.app.store.ChatOutputs(ctx, c.managerID, chatID, record.ID, limit)
+	rows, err := c.app.store.ChatOutputs(ctx, record.ID, after, limit)
 	if err != nil {
 		return nil, fmt.Errorf("read chat outputs: %w", err)
 	}
@@ -101,45 +105,12 @@ func (c *controller) ChatOutputs(
 	return outputs, nil
 }
 
-func (c *controller) LastSeenChatOutput(
-	ctx context.Context, chatID string, sessionID int64,
-) (controllerapi.ChatOutput, bool, error) {
-	record, err := c.chatSession(ctx, sessionID)
-	if err != nil {
-		return controllerapi.ChatOutput{}, false, err
-	}
-
-	row, found, err := c.app.store.LastSeenChatOutput(ctx, c.managerID, chatID, record.ID)
-	if err != nil {
-		return controllerapi.ChatOutput{}, false, fmt.Errorf("read last seen chat output: %w", err)
-	}
-
-	if !found {
-		return controllerapi.ChatOutput{}, false, nil
-	}
-
-	return chatOutput(record, row), true, nil
-}
-
-func (c *controller) MarkChatSeen(ctx context.Context, chatID string, sessionID, outboxID int64) error {
-	record, err := c.chatSession(ctx, sessionID)
-	if err != nil {
-		return err
-	}
-
-	if err := c.app.store.MarkChatSeen(ctx, c.managerID, chatID, record.ID, outboxID); err != nil {
-		return fmt.Errorf("mark chat seen: %w", err)
-	}
-
-	return nil
-}
-
-func (c *controller) ChatSessions(ctx context.Context, chatID string) ([]controllerapi.ChatSessionInfo, error) {
+func (c *controller) ChatSessions(ctx context.Context, _ string) ([]controllerapi.ChatSessionInfo, error) {
 	if err := requireManagerIdentity(c.managerID); err != nil {
 		return nil, err
 	}
 
-	rows, err := c.app.store.ChatSessions(ctx, c.managerID, chatID)
+	rows, err := c.app.store.ChatSessions(ctx, c.managerID)
 	if err != nil {
 		return nil, fmt.Errorf("read chat sessions: %w", err)
 	}
@@ -147,8 +118,7 @@ func (c *controller) ChatSessions(ctx context.Context, chatID string) ([]control
 	sessions := make([]controllerapi.ChatSessionInfo, 0, len(rows))
 	for _, row := range rows {
 		sessions = append(sessions, controllerapi.ChatSessionInfo{
-			ID: row.ID, SessionID: row.SessionID, Name: row.Name, Unread: row.Unread,
-			LatestUnread: row.LatestUnread, LatestUnreadID: row.LatestUnreadID,
+			ID: row.ID, Name: row.Name,
 			Scheduled: row.Scheduled,
 		})
 	}
@@ -165,18 +135,87 @@ func (c *controller) SessionKilled(ctx context.Context, sessionID int64) (bool, 
 	return record.KilledAt != nil, nil
 }
 
+func (c *controller) ChatCursor(ctx context.Context, chatID string) (int64, int64, bool, error) {
+	if err := requireManagerIdentity(c.managerID); err != nil {
+		return 0, 0, false, err
+	}
+
+	session, cursor, entered, err := c.app.store.ChatCursor(ctx, c.managerID, chatID)
+	if err != nil {
+		return 0, 0, false, fmt.Errorf("read chat cursor: %w", err)
+	}
+
+	if session != 0 {
+		if _, err := c.chatSession(ctx, session); err != nil {
+			return 0, 0, false, err
+		}
+	}
+
+	return session, cursor, entered, nil
+}
+
+func (c *controller) ChatEntry(
+	ctx context.Context,
+	chatID string,
+	sessionID int64,
+	limit int,
+) ([]controllerapi.ChatOutput, int64, error) {
+	record, err := c.chatSession(ctx, sessionID)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	rows, newest, err := c.app.store.ChatEntry(ctx, record.ID, limit)
+	if err != nil {
+		return nil, 0, fmt.Errorf("read chat entry: %w", err)
+	}
+
+	var outputs []controllerapi.ChatOutput
+	for _, row := range rows {
+		outputs = append(outputs, chatOutput(record, row))
+	}
+
+	return outputs, newest, nil
+}
+
+func (c *controller) EnterChat(ctx context.Context, chatID string, sessionID, newest int64) (bool, error) {
+	record, err := c.chatSession(ctx, sessionID)
+	if err != nil {
+		return false, err
+	}
+
+	entered, err := c.app.store.EnterChat(ctx, c.managerID, chatID, record.ID, newest)
+	if err != nil {
+		return false, fmt.Errorf("enter manager chat: %w", err)
+	}
+
+	return entered, nil
+}
+
+func (c *controller) AdvanceChat(ctx context.Context, chatID string, sessionID, id int64) (bool, error) {
+	record, err := c.chatSession(ctx, sessionID)
+	if err != nil {
+		return false, err
+	}
+
+	advanced, err := c.app.store.AdvanceChat(ctx, c.managerID, chatID, record.ID, id)
+	if err != nil {
+		return false, fmt.Errorf("advance manager chat: %w", err)
+	}
+
+	return advanced, nil
+}
+
 func (c *controller) chatSession(ctx context.Context, sessionID int64) (*sessionstore.SessionRecord, error) {
 	if err := requireManagerIdentity(c.managerID); err != nil {
 		return nil, err
 	}
 
-	record, err := func() (*sessionstore.SessionRecord, error) {
-		if sessionID == 0 {
-			return c.app.backend.EnsureAssistantRoot(ctx, c.managerID)
-		}
+	if sessionID <= 0 {
+		return nil, fmt.Errorf("#%d is not a live session", sessionID)
+	}
 
-		return c.app.store.GetSession(ctx, sessionID)
-	}()
+	record, err := c.app.store.GetSession(ctx, sessionID)
 	if err != nil {
 		return nil, fmt.Errorf("load chat session %d: %w", sessionID, err)
 	}
@@ -190,13 +229,7 @@ func (c *controller) chatSession(ctx context.Context, sessionID int64) (*session
 }
 
 func chatOutput(record *sessionstore.SessionRecord, row sessionstore.ChatOutput) controllerapi.ChatOutput {
-	id := record.ID
-	if record.AgentType == sessionstore.AssistantAgentType {
-		id = 0
-	}
-
 	return controllerapi.ChatOutput{
-		ID: row.ID, SessionID: id, Name: row.Name, Type: string(row.Type), Content: row.Content,
-		Origin: row.Origin, OriginName: row.OriginName,
+		ID: row.ID, SessionID: record.ID, Name: row.Name, Type: string(row.Type), Content: row.Content,
 	}
 }

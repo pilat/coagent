@@ -62,19 +62,13 @@ func EnqueueTx(ctx context.Context, tx *sql.Tx, in Input) (*Enqueued, error) {
 		return nil, err
 	}
 
-	if _, forwarded := in.Attributes[ForwardedByAttribute]; forwarded &&
-		strings.HasPrefix(strings.TrimSpace(in.Content), "/") {
-		return nil, ErrForwardedCommand
-	}
-
 	var parentID int64
 	var status SessionStatus
 	var killed sql.NullTime
 	var attrs string
-	var agentType string
 
-	err := tx.QueryRowContext(ctx, `SELECT parent_id,status,killed_at,attributes,COALESCE(agent_type, '') FROM sessions WHERE id = ?`, in.SessionID).
-		Scan(&parentID, &status, &killed, &attrs, &agentType)
+	err := tx.QueryRowContext(ctx, `SELECT parent_id,status,killed_at,attributes FROM sessions WHERE id = ?`, in.SessionID).
+		Scan(&parentID, &status, &killed, &attrs)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrSessionNotAcceptingInput
 	}
@@ -103,7 +97,7 @@ func EnqueueTx(ctx context.Context, tx *sql.Tx, in Input) (*Enqueued, error) {
 
 	now := time.Now().UTC()
 
-	attributes, err := prepareEnqueueAttributesTx(ctx, tx, in, parentID, attrs, agentType, now)
+	attributes, err := prepareEnqueueAttributesTx(ctx, tx, in, parentID, attrs, now)
 	if err != nil {
 		return nil, err
 	}
@@ -253,7 +247,7 @@ func isExactControlCommand(content string) bool {
 	}
 }
 
-func prepareManagerModelInputTx(ctx context.Context, tx *sql.Tx, id int64, mayLift bool, now time.Time) error {
+func prepareManagerModelInputTx(ctx context.Context, tx *sql.Tx, id int64, now time.Time) error {
 	if _, err := tx.ExecContext(ctx, `UPDATE sessions SET episode_started_at = ? WHERE id = ?
   AND (episode_started_at IS NULL OR status NOT IN ('active','suspended'))`, now, id); err != nil {
 		return fmt.Errorf("start autonomous episode: %w", err)
@@ -272,10 +266,6 @@ func prepareManagerModelInputTx(ctx context.Context, tx *sql.Tx, id int64, mayLi
 
 	if state != "fired" {
 		return nil
-	}
-
-	if !mayLift {
-		return fmt.Errorf("session #%d %w", id, ErrBudgetParked)
 	}
 
 	if phase == "draining" {
@@ -402,7 +392,7 @@ func prepareEnqueueAttributesTx(
 	tx *sql.Tx,
 	in Input,
 	parentID int64,
-	raw, agentType string,
+	raw string,
 	at time.Time,
 ) (map[string]any, error) {
 	attributes := cloneAttributes(in.Attributes)
@@ -414,37 +404,20 @@ func prepareEnqueueAttributesTx(
 
 	attributes[managerIDAttribute] = owner
 
-	human := IsHumanInput(in.Source, in.Attributes)
-	if human && parentID == 0 && agentType != AssistantAgentType && !isExactControlCommand(in.Content) {
-		var observer int64
-
-		err := tx.QueryRowContext(ctx, `SELECT id FROM sessions WHERE parent_id = 0 AND agent_type = ?
-			AND json_extract(attributes, '$.manager_id') = ? AND killed_at IS NULL LIMIT 1`, AssistantAgentType, owner).Scan(&observer)
-		if err != nil && !errors.Is(err, sql.ErrNoRows) {
-			return nil, fmt.Errorf("find human input observer: %w", err)
-		}
-
-		if err == nil {
-			attributes[ObserverSessionIDAttribute] = observer
-		}
-	}
-
 	if title := TitleFromInput(in.Content); title != "" {
 		if _, err := tx.ExecContext(ctx, `UPDATE sessions
 			SET attributes = json_set(COALESCE(attributes, '{}'), '$.title', ?)
-			WHERE id = ? AND parent_id = 0 AND COALESCE(agent_type, '') <> 'assistant'
+			WHERE id = ? AND parent_id = 0
 			AND json_extract(attributes, '$.title') IS NULL`, title, in.SessionID); err != nil {
 			return nil, fmt.Errorf("name session from input: %w", err)
 		}
 	}
 
 	if parentID == 0 && !isExactControlCommand(in.Content) {
-		_, forwarded := in.Attributes[ForwardedByAttribute]
 		if err := prepareManagerModelInputTx(
 			ctx,
 			tx,
 			in.SessionID,
-			human && !forwarded,
 			at,
 		); err != nil {
 			return nil, err

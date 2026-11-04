@@ -21,7 +21,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/pilat/coagent/internal/assistant"
 	"github.com/pilat/coagent/internal/backgroundprocess"
 	"github.com/pilat/coagent/internal/budget"
 	"github.com/pilat/coagent/internal/config"
@@ -32,7 +31,6 @@ import (
 	"github.com/pilat/coagent/internal/llmwire"
 	"github.com/pilat/coagent/internal/mcpstore"
 	"github.com/pilat/coagent/internal/progressruntime"
-	"github.com/pilat/coagent/internal/projectpath"
 	"github.com/pilat/coagent/internal/schedule"
 	"github.com/pilat/coagent/internal/sessionbuild"
 	"github.com/pilat/coagent/internal/sessionbus"
@@ -455,7 +453,6 @@ func newScenarioDaemon(
 	service := New(
 		ctx, in, store, links, budgets, backgroundprocess.NewStore(db, store), progressruntime.New(store), bus,
 		schedules, in.Config, mcp, applier,
-		assistant.New(db, store, projectpath.ResolveRoot(in.Config.UnifiedConfig)),
 	)
 	return service, service.processes
 }

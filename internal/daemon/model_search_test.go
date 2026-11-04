@@ -36,7 +36,6 @@ func TestSetModelPreservesAgentSearchPolicy(t *testing.T) {
 		tool       string
 		wantSearch bool
 	}{
-		{registry.AgentTypeAssistant, "read_session", false},
 		{registry.AgentTypeBrowser, tool.PlaywrightToolPrefix + "view", false},
 		{registry.AgentTypeBuild, "read_session", true},
 	} {

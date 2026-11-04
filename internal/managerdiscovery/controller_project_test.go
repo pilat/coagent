@@ -44,7 +44,7 @@ func TestSanitizeProjectName(t *testing.T) {
 		{name: "slash", in: "a/b", wantErr: true},
 		{name: "backslash", in: `a\b`, wantErr: true},
 		{name: "reserved separator", in: "sys:notes", wantErr: true},
-		{name: "reserved system directory", in: "sys_coagent", wantErr: true},
+		{name: "former system directory", in: "sys_coagent", want: "sys_coagent"},
 		{name: "nul byte", in: "a\x00b", wantErr: true},
 		{name: "hidden dot", in: ".hidden", wantErr: true},
 		{name: "dot", in: ".", wantErr: true},

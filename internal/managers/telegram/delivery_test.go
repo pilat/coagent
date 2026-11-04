@@ -131,7 +131,7 @@ func TestTelegramCommandAndPollingContract(t *testing.T) {
 	_, err := manager.getUpdates(t.Context(), 0)
 	require.NoError(t, err)
 	assert.Equal(t, []string{
-		"new", "spawn", "sessions", "switch", "title", "assistant", "kill", "stop", "help", "start",
+		"new", "spawn", "sessions", "switch", "title", "kill", "stop", "help", "start",
 		"gwt", "model", "clear", "compact", "status", "budget", "schedules", "config", "skill",
 	}, commands)
 	assert.Equal(t, []string{"message"}, updates)

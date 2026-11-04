@@ -22,15 +22,15 @@ type fakeController struct {
 	focus         int64
 	boundChats    map[string]bool
 	outputs       map[int64][]controllerapi.ChatOutput
-	seen          map[int64]int64
+	cursor        int64
+	entered       bool
 	managerID     string
 	listDirResult *controllerapi.FsListDirResultData
 
-	assistantRoot *controllerapi.AssistantRootEnsureData
-	listSessions  []controllerapi.SessionInfo
-	listSkills    []controllerapi.ConfigSkillInfo
-	messageCalls  []controllerapi.SessionMessageData
-	titleCalls    []struct {
+	listSessions []controllerapi.SessionInfo
+	listSkills   []controllerapi.ConfigSkillInfo
+	messageCalls []controllerapi.SessionMessageData
+	titleCalls   []struct {
 		id    int64
 		title string
 	}
@@ -102,16 +102,6 @@ func (f *fakeController) SetSessionModel(_ context.Context, data controllerapi.S
 	return f.setModelErr
 }
 
-func (f *fakeController) EnsureAssistantRoot(context.Context) (*controllerapi.AssistantRootEnsureData, error) {
-	if f.assistantRoot == nil {
-		f.assistantRoot = &controllerapi.AssistantRootEnsureData{
-			SessionID: 99001, WorkDir: "/assistant",
-		}
-	}
-
-	return f.assistantRoot, nil
-}
-
 func (f *fakeController) ListDir(
 	context.Context,
 	controllerapi.FsListDirData,
@@ -176,14 +166,10 @@ func (f *fakeController) BindChat(_ context.Context, chatID string) error {
 func (f *fakeController) SetChatFocus(_ context.Context, _ string, id int64) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if id == 0 || (f.assistantRoot != nil && id == f.assistantRoot.SessionID) {
-		f.focus = 0
-		return nil
-	}
 	for _, session := range f.listSessions {
 		if session.ID == id && session.KilledAt == nil && session.Status != "terminating" &&
 			session.Status != "killed" && session.Attributes["manager_id"] == f.owner() {
-			f.focus = id
+			f.focus, f.cursor, f.entered = id, 0, false
 			return nil
 		}
 	}
@@ -196,21 +182,21 @@ func (f *fakeController) ResetChatFocus(_ context.Context, _ string, from int64)
 	if f.focus != from {
 		return false, nil
 	}
-	f.focus = 0
+	f.focus, f.cursor, f.entered = 0, 0, false
 	return true, nil
 }
 
 func (f *fakeController) ChatOutputs(
 	_ context.Context,
 	_ string,
-	id int64,
+	id, after int64,
 	limit int,
 ) ([]controllerapi.ChatOutput, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	var rows []controllerapi.ChatOutput
 	for _, row := range f.outputs[id] {
-		if row.ID > f.seen[id] {
+		if row.ID > after {
 			row.Name = f.chatName(id)
 			rows = append(rows, row)
 			if len(rows) == limit {
@@ -221,56 +207,64 @@ func (f *fakeController) ChatOutputs(
 	return rows, nil
 }
 
-func (f *fakeController) LastSeenChatOutput(
-	_ context.Context, _ string, id int64,
-) (controllerapi.ChatOutput, bool, error) {
+func (f *fakeController) ChatCursor(context.Context, string) (int64, int64, bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	var last controllerapi.ChatOutput
-	for _, row := range f.outputs[id] {
-		if row.ID <= f.seen[id] && row.ID > last.ID &&
-			row.Type != controllerapi.OutputSessionOpened && row.Type != controllerapi.OutputSessionReplaced {
-			last = row
-		}
-	}
-	if last.ID == 0 {
-		return controllerapi.ChatOutput{}, false, nil
-	}
-	last.Name = f.chatName(id)
-	return last, true, nil
+	return f.focus, f.cursor, f.entered, nil
 }
 
-func (f *fakeController) MarkChatSeen(_ context.Context, _ string, id, outputID int64) error {
+func (f *fakeController) ChatEntry(
+	_ context.Context,
+	_ string,
+	id int64,
+	limit int,
+) ([]controllerapi.ChatOutput, int64, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if f.seen == nil {
-		f.seen = make(map[int64]int64)
+	var rows []controllerapi.ChatOutput
+	var newest int64
+	for _, row := range f.outputs[id] {
+		newest = max(newest, row.ID)
+		if row.Type != controllerapi.OutputSessionOpened && row.Type != controllerapi.OutputSessionReplaced {
+			row.Name = f.chatName(id)
+			rows = append(rows, row)
+		}
 	}
-	f.seen[id] = max(f.seen[id], outputID)
-	return nil
+	if len(rows) > limit {
+		rows = rows[len(rows)-limit:]
+	}
+	return rows, newest, nil
+}
+
+func (f *fakeController) EnterChat(_ context.Context, _ string, id, newest int64) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.focus != id || f.entered {
+		return false, nil
+	}
+	f.cursor, f.entered = newest, true
+	return true, nil
+}
+
+func (f *fakeController) AdvanceChat(_ context.Context, _ string, id, outputID int64) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.focus != id || !f.entered || f.cursor >= outputID {
+		return false, nil
+	}
+	f.cursor = outputID
+	return true, nil
 }
 
 func (f *fakeController) ChatSessions(context.Context, string) ([]controllerapi.ChatSessionInfo, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	rows := []controllerapi.ChatSessionInfo{{ID: 0, Name: "Assistant"}}
+	var rows []controllerapi.ChatSessionInfo
 	for _, session := range f.listSessions {
 		if !isActiveSession(session) || session.Attributes["manager_id"] != f.owner() {
 			continue
 		}
-		if f.assistantRoot != nil && session.ID == f.assistantRoot.SessionID {
-			continue
-		}
 		rows = append(rows, controllerapi.ChatSessionInfo{ID: session.ID, Name: session.Name})
-	}
-	for i := range rows {
-		for _, output := range f.outputs[rows[i].ID] {
-			if output.ID > f.seen[rows[i].ID] &&
-				output.Type != controllerapi.OutputSessionOpened && output.Type != controllerapi.OutputSessionReplaced {
-				rows[i].Unread++
-				rows[i].LatestUnread, rows[i].LatestUnreadID = output.Content, output.ID
-			}
-		}
 	}
 	return rows, nil
 }
@@ -301,9 +295,6 @@ func harnessResponse(req *http.Request, payload string) *http.Response {
 }
 
 func (f *fakeController) chatName(id int64) string {
-	if id == 0 || (f.assistantRoot != nil && id == f.assistantRoot.SessionID) {
-		return "Assistant"
-	}
 	for _, session := range f.listSessions {
 		if session.ID == id {
 			return session.Name

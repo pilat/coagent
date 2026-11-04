@@ -18,43 +18,26 @@ type inputBackend struct {
 }
 
 func TestManagerInputAttributesRemainSessionOnly(t *testing.T) {
-	for _, observed := range []bool{false, true} {
-		t.Run(map[bool]string{false: "without assistant", true: "with assistant"}[observed], func(t *testing.T) {
-			t.Parallel()
-			_, store, project := newChatControl(t)
-			observer := int64(0)
-			if observed {
-				root, err := store.EnsureAssistantRoot(t.Context(), project, "owner", "/assistant", "model", "")
-				require.NoError(t, err)
-				observer = root.ID
-			}
-			backend := &inputBackend{store: store}
-			service := &service{backend: backend, store: store}
-			workDir, err := store.GetProjectWorkDir(t.Context(), project)
-			require.NoError(t, err)
-			id, err := service.createSession(t.Context(), "owner", controllerapi.SessionCreateData{
-				WorkDir: workDir, Prompt: "first user message",
-				Attributes: map[string]any{"from": "assistant", sessionstore.ObserverSessionIDAttribute: 987654},
-			})
-			require.NoError(t, err)
-			err = service.sendSessionMessage(
-				t.Context(),
-				"owner",
-				controllerapi.SessionMessageData{SessionID: id, Message: "follow-up"},
-			)
-			require.NoError(t, err)
-			inputs, err := store.ListPending(t.Context(), id)
-			require.NoError(t, err)
-			require.Len(t, inputs, 2)
-			for _, in := range inputs {
-				assert.NotContains(t, in.Attributes, "from")
-				if observer == 0 {
-					assert.NotContains(t, in.Attributes, sessionstore.ObserverSessionIDAttribute)
-				} else {
-					assert.EqualValues(t, observer, in.Attributes[sessionstore.ObserverSessionIDAttribute])
-				}
-			}
-		})
+	t.Parallel()
+	_, store, project := newChatControl(t)
+	backend := &inputBackend{store: store}
+	service := &service{backend: backend, store: store}
+	workDir, err := store.GetProjectWorkDir(t.Context(), project)
+	require.NoError(t, err)
+	id, err := service.createSession(t.Context(), "owner", controllerapi.SessionCreateData{
+		WorkDir: workDir, Prompt: "first user message",
+		Attributes: map[string]any{"injected": "session-only"},
+	})
+	require.NoError(t, err)
+	err = service.sendSessionMessage(t.Context(), "owner",
+		controllerapi.SessionMessageData{SessionID: id, Message: "follow-up"})
+	require.NoError(t, err)
+	inputs, err := store.ListPending(t.Context(), id)
+	require.NoError(t, err)
+	require.Len(t, inputs, 2)
+	for _, in := range inputs {
+		assert.NotContains(t, in.Attributes, "injected")
+		assert.Equal(t, "owner", in.Attributes["manager_id"])
 	}
 }
 

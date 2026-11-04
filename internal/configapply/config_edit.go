@@ -37,6 +37,7 @@ const wholeDocumentRule = "config_edit is not a patch or merge: the document rep
 const editAuthorityDoc = wholeDocumentRule + " " +
 	"Use only when the user explicitly requests a configuration change. A /config prefix alone is not a change request. " +
 	"Answer configuration questions without calling this tool. " +
+	"Never ask for a credential in chat; a pasted secret lands in history and must be rotated. " +
 	"Credentials may be literal values or ${VAR} references to entries in " + secretsDisplayPath + ", " +
 	"which the operator maintains by hand outside this protocol. " +
 	"An invalid candidate is refused immediately with nothing written. " +

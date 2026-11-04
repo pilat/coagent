@@ -8,8 +8,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestResultAnswersInputIsExecutionOnly(t *testing.T) {
-	encoded, err := json.Marshal(Result{Output: "answered", AnswersInput: true})
+func TestResultJSON(t *testing.T) {
+	encoded, err := json.Marshal(Result{Output: "answered"})
 	require.NoError(t, err)
 	assert.JSONEq(t, `{"output":"answered"}`, string(encoded))
 }

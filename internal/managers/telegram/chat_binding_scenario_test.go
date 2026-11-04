@@ -13,7 +13,7 @@ import (
 func TestHarnessScenario_StartupBindsChatAndRestartKeepsSelection(t *testing.T) {
 	h := newDelayedTelegramHarness(t)
 	key := strconv.FormatInt(harnessChatID, 10)
-	manager := newAssistantTelegramManager(t, h)
+	manager := newChatTelegramManager(t, h)
 	require.NoError(t, manager.Start(t.Context()))
 	t.Cleanup(func() { require.NoError(t, manager.Stop(context.Background())) })
 	var selected sql.NullInt64
@@ -25,7 +25,7 @@ func TestHarnessScenario_StartupBindsChatAndRestartKeepsSelection(t *testing.T) 
 	work := createChatWork(t, h)
 	require.NoError(t, h.sessions.SetChatFocus(t.Context(), delayedTelegramManagerID, key, work))
 	require.NoError(t, manager.Stop(context.Background()))
-	restarted := newAssistantTelegramManager(t, h)
+	restarted := newChatTelegramManager(t, h)
 	require.NoError(t, restarted.Start(t.Context()))
 	t.Cleanup(func() { require.NoError(t, restarted.Stop(context.Background())) })
 	focus, err := h.sessions.ChatFocus(t.Context(), delayedTelegramManagerID, key)

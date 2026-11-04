@@ -208,7 +208,7 @@ func insertActivation(
 	now time.Time,
 ) (*ToolActivation, error) {
 	owner, _ := input.Attributes[managerIDAttribute].(string)
-	if !IsHumanInput(input.Source, input.Attributes) || owner == "" {
+	if input.Source != InputSourceUser || owner == "" {
 		return nil, ErrActivationConflict
 	}
 

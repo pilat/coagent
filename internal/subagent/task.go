@@ -375,7 +375,7 @@ func (t *taskTool) agentSet() *registry.Set {
 
 	if t.loader != nil {
 		for _, agent := range t.loader.ListSubagents() {
-			if agent.Name == tool.BrowserAgentType || agent.Name == string(registry.AgentTypeAssistant) {
+			if agent.Name == tool.BrowserAgentType {
 				continue
 			}
 

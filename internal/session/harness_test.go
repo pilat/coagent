@@ -1298,8 +1298,7 @@ func runTestLoop(t *testing.T, s *Session) (RunResult, error) {
 }
 
 func executeToolCalls(ctx context.Context, agent *Session, calls []llmwire.ToolCall) error {
-	_, err := runToolCalls(ctx, agent, calls)
-	return err
+	return runToolCalls(ctx, agent, calls)
 }
 
 func textResponse(text string) *llmwire.Response {

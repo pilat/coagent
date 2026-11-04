@@ -19,6 +19,11 @@ func TestChatFocus_ClearTransfersEveryChatAtomically(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, store.SetChatFocus(ctx, "owner", "one", old.ID))
 	require.NoError(t, store.SetChatFocus(ctx, "owner", "two", old.ID))
+	for _, chat := range []string{"one", "two"} {
+		entered, err := store.EnterChat(ctx, "owner", chat, old.ID, 1)
+		require.NoError(t, err)
+		require.True(t, entered)
+	}
 	_, err = db.ExecContext(ctx, `INSERT INTO chat_focus(manager_id, chat_id, session_id)
 		VALUES ('other', 'chat', ?);
 		CREATE TRIGGER fail_focus_transfer BEFORE UPDATE OF session_id ON chat_focus
@@ -43,8 +48,14 @@ func TestChatFocus_ClearTransfersEveryChatAtomically(t *testing.T) {
 	replacement, _, err := store.ReplaceManagerRootForInput(ctx, old.ID, input.ID, "test", "/project")
 	require.NoError(t, err)
 	assertChatFocusRows(t, store, replacement.ID)
+	for _, chat := range []string{"one", "two"} {
+		_, cursor, entered, err := store.ChatCursor(ctx, "owner", chat)
+		require.NoError(t, err)
+		assert.Zero(t, cursor)
+		assert.False(t, entered)
+	}
 	assertInputState(t, db, input.ID, InputStateHandled)
-	outputs, err := store.ChatOutputs(ctx, "owner", "one", replacement.ID, 10)
+	outputs, err := store.ChatOutputs(ctx, replacement.ID, 0, 10)
 	require.NoError(t, err)
 	require.Len(t, outputs, 2)
 	assert.Equal(t, OutputSessionReplaced, outputs[0].Type)

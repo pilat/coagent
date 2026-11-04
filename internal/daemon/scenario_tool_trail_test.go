@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -29,35 +30,13 @@ func TestHarnessScenario_WorkToolStepsPublishOneMessageEach(t *testing.T) {
 	root, err := h.mgr.Send(h.ctx, h.projectID, "inspect files", "fake-model", managerAttrs(scenarioManagerID))
 	require.NoError(t, err)
 	collector.waitIdleAfter(root, "Work complete.")
+	assert.Equal(t, 1, assistantSayCount(t, h, root, "Work complete."))
 	assertNarratedOutputOrder(t, h, root, "→ ls: `.`\n→ glob: `*.go`", "Checking files\n\n→ ls: `.`", "Work complete.")
 	for _, message := range h.messages(root) {
 		assert.NotContains(t, message.Content, "→ ls:", "the trail belongs only to the output log")
 	}
 	assert.Equal(t, 1, countPublishedMessage(collector.snapshot(), root, "→ ls: `.`\n→ glob: `*.go`"))
 	assertHarnessTrace(t, h, "tool_trail_work_steps.json", collector.snapshot(), root)
-}
-
-func TestHarnessScenario_AssistantToolStepsKeepTextOnly(t *testing.T) {
-	h := newHarness(t, harnessOptions{respond: func(_ string, messages []llmwire.Message) *llmwire.Response {
-		if toolResultForCallID(messages, "text-models") != nil {
-			return textReply("Assistant complete.")
-		}
-		if toolResultForCallID(messages, "silent-models") != nil {
-			return assistantCalls("Checking models", llmwire.ToolCall{
-				ID: "text-models", Name: "models", Arguments: []byte(`{}`),
-			})
-		}
-		return callReply("silent-models", "models", `{}`)
-	}})
-	root, err := h.mgr.EnsureAssistantRoot(h.ctx, scenarioManagerID)
-	require.NoError(t, err)
-	h.startInboxWake()
-	require.NoError(t, h.mgr.sendToSession(h.ctx, root.ID, "check the models"))
-	h.waitUntil("assistant finished", func() bool {
-		return assistantSayCount(t, h, root.ID, "Assistant complete.") == 1 && !h.mgr.HasActiveLoop(root.ID)
-	})
-	assertNarratedOutputOrder(t, h, root.ID, "Checking models", "Assistant complete.")
-	assert.Equal(t, 2, countToolResultsFor(h.messages(root.ID), "models"))
 }
 
 func TestHarnessScenario_SubagentToolStepsHaveNoOutbox(t *testing.T) {
@@ -92,4 +71,18 @@ func TestHarnessScenario_SubagentToolStepsHaveNoOutbox(t *testing.T) {
 	for _, row := range h.outbox(root) {
 		assert.NotContains(t, row.Content, "Child inspecting")
 	}
+}
+
+func assistantCalls(text string, calls ...llmwire.ToolCall) *llmwire.Response {
+	return &llmwire.Response{Text: text, ToolCalls: calls}
+}
+
+func assistantSayCount(t *testing.T, h *harness, id int64, text string) int {
+	t.Helper()
+	var count int
+	require.NoError(t, h.db.QueryRowContext(context.Background(), `SELECT count(*) FROM session_outbox
+		WHERE session_id = ? AND type = 'message'
+		AND source_key LIKE 'message:%' AND content = ?`, id, text).Scan(&count))
+
+	return count
 }

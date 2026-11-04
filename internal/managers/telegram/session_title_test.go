@@ -16,7 +16,6 @@ func TestTitleCommand(t *testing.T) {
 		{"rename", "/title fix login 500", "Renamed #12: fix login 500", "fix login 500", 12},
 		{"trim", "/title   fix login 500  ", "Renamed #12: fix login 500", "fix login 500", 12},
 		{"usage", "/title", "Usage: /title text.", "", 12},
-		{"assistant", "/title foo", "This command is unavailable for Assistant.", "", 0},
 		{"long", "/title " + strings.Repeat("界", 81), "Title must be one line of 1-80 characters.", "", 12},
 		{"multiline", "/title two\nlines", "Title must be one line of 1-80 characters.", "", 12},
 		{"bot suffix", "/title@bot x", "Renamed #12: x", "x", 12},

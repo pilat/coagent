@@ -113,7 +113,7 @@ project, with or without code or Git; many independent sessions can share it.
 _Avoid_: workspace, space; dialog (a dialog is a session in a project).
 
 **agent type**:
-A named agent configuration — tool allowlist, prompt template, model override, mode and optional project-context omission — that session assembly selects. Built-ins: `build`, `general`, `explore`, `browser`, `assistant`, `compaction`. The `task` tool offers only spawnable types; `build`, `assistant` and `compaction` are not subagent types. The built-in `explore` type is deliberately lean: it has read-only code-search tools and starts without project instructions, skills, curated memory, Git state or model catalog; its assignment must supply relevant constraints. The built-in `browser` type has only the project's Playwright tools and the same project-context omission. The hidden `assistant` type receives its own tools and a desk head, without project context. Browser and assistant disable integrated search. Agent type selects behavior and tools, never a work budget.
+A named agent configuration — tool allowlist, prompt template, model override, mode and optional project-context omission — that session assembly selects. Built-ins: `build`, `general`, `explore`, `browser`, `compaction`. The `task` tool offers only spawnable types; `build` and `compaction` are not subagent types. The built-in `explore` type is deliberately lean: it has read-only code-search tools and starts without project instructions, skills, curated memory, Git state or model catalog; its assignment must supply relevant constraints. The built-in `browser` type has only the project's Playwright tools and the same project-context omission. Browser disables integrated search. Agent type selects behavior and tools, never a work budget.
 _Avoid_: role, persona, mode (mode is a separate axis on the same config).
 
 **control socket**:
@@ -121,93 +121,7 @@ _Avoid_: role, persona, mode (mode is a separate axis on the same config).
 The daemon begins accepting only after every startup op owner has registered, so a greeting is also a control-plane readiness boundary rather than a partially initialized view.
 _Avoid_: RPC server, API server, IPC channel.
 
-**assistant project**:
-The hidden ordinary project at `<projects_root>/sys_coagent` shared by the
-managers' assistant roots. Its reserved name prevents user-created projects from
-claiming it. `hidden` affects discovery only and grants no tools or authority.
-_Avoid_: management project, privileged project.
-
 ## Agent loop & context management
-
-**assistant**:
-Coagent's `#0` in a manager's chat: an ordinary root of the hidden `assistant`
-type, with a desk head and immediate tools for routing work and introducing
-relayed answers. It can switch the user into live owned work from `#0`, list configured
-models and change work roots' models. Its owner tools administer global MCP
-registration, its own and addressable work roots' schedules, and configuration under `/config`. It sets
-budgets for addressable work roots on request without a grant; changing its own
-budget requires a current `/budget` grant on `#0`. It has no general file, shell
-or web tools. `/assistant` and `/switch 0` select it.
-_Avoid_: coordinator, dispatcher, work-item manager.
-
-**turn** (assistant):
-One ordinary agent-loop activation. Its first accepted input rebuilds the desk
-head and compacts the preceding activation atomically; later inputs and tool
-results append within the activation. Transcript rows remain durable history.
-Resuming without new input preserves the existing head and transcript.
-
-**desk**:
-The first message of an assistant activation: live memory, the newest focus items,
-the newest assistant-touched sessions and the last forty conversation lines.
-The accepted inputs follow the head. Conversation includes relays as `#N:` and
-forward receipts as `you:` lines. Only a `you:` line answers a user line; relays
-alone leave it owed. Every list states how much it shows and which tool shows the rest.
-_Avoid_: transcript, context compaction, catalog.
-
-**memory** (assistant):
-Small assistant notes, permanent or temporary with an `until` date, each at most
-300 characters and together at most 4000 live characters. Expired notes leave the
-desk but stay searchable; a deleted note leaves search too.
-_Avoid_: keyed or scoped notes (the removed `user.`/`wait.` scheme), diary, stickers,
-project memory (that is the separate curated-memory store).
-
-**focus**:
-The assistant's live list of what is being done now: items of at most 200
-characters, each with the real session ids it waits on; at most 30 live.
-
-**assistant tool**:
-A tool bound to the assistant's store, root scope and daemon lifecycle host.
-Reads return current data; actions and memory/focus edits take effect during
-execution and return real ids through the ordinary tool-result path.
-
-**second look** (assistant):
-The ordinary completion nudge asking the model to check its answer and
-bookkeeping before finishing. A silent finish gets none. Tool-based corrections invalidate the candidate;
-the next answer must repeat the complete response.
-
-**move**:
-An assistant-requested open, send, forward, stop or kill applied immediately through the
-daemon's ordinary session lifecycle during tool execution.
-_Avoid_: dispatch intent.
-
-**observation** (assistant):
-A work answer or error notice queued as agent input in the work root's own
-transaction, for inputs carrying an observer reference: assistant instructions,
-direct human input, or schedules with `report_to`. Human ref rows add bounded
-quote lines (`you forwarded` for forwards) and reported schedules add firing
-notices to that same event. The same transaction relays the observed output
-unless the manager is focused on that work root.
-A non-yield final
-reports the joined window answer and anchors the next window through its inbox
-event, unless that event is cancelled; a failure leaves the window open. Kill,
-clear and stop produce no observation.
-
-**forward**:
-The assistant's target-only call that copies the newest human input accepted in
-its current activation into a work session, byte for byte and as human input.
-It carries forwarding and observer provenance, never moves chat focus, and is
-idempotent per input and target. Slash text and fired-budget targets are refused.
-The work input and the assistant's `→ #N name (forwarded)` receipt commit together;
-the receipt answers the user without requiring assistant text.
-_Avoid_: relay, pass-through.
-
-**relay**:
-The host's verbatim copy of observed work finals or failure notices into the
-assistant's output log, committed with the work output unless chat focus is on
-that work root. It copies the user-visible outbox content, including confirmed
-candidates and yield finals, and deduplicates by source output id. Delivery adds
-the current work-session header; the work root's watermark never moves.
-_Avoid_: forward, retell, echo.
 
 **context artifact**:
 One of the three instruction files a session loads at open — **global**, **project**, or **local** — each resolved by a first-match-wins search over an ordered candidate list, then merged into the opening context as a `[role] <path>` labeled section with the home directory abbreviated to `~`. The section's path is the winning candidate, not the resolved symlink target.
@@ -339,7 +253,7 @@ The runtime status a controller sees — `running` / `idle` / `error` (`controll
 _Avoid_: treating "running" (runtime) and "active" (persisted) as the same word.
 
 **notification** (session event):
-A session→controller event — a message chunk, a state change, a heartbeat (`sessionevent.Notification`, delivered as `controllerapi.SessionNotification`). Only *root* sessions have them: the daemon drops every event whose session is a subagent. Manager subscriptions additionally receive only events whose durable manager owner matches their ID; daemon-internal observers may inspect all root events. The bare type name "Notification" is overloaded elsewhere (LSP JSON-RPC, tool notifications), so qualify it as a *session event*.
+A session→controller event — a message chunk, a state change, a heartbeat (`sessionevent.Notification`, delivered as `controllerapi.SessionNotification`). Only *root* sessions have them: the daemon drops every event whose session is a subagent. Manager subscriptions additionally receive only events whose durable manager owner matches their ID. The bare type name "Notification" is overloaded elsewhere (LSP JSON-RPC, tool notifications), so qualify it as a *session event*.
 _Avoid_: bare "Notification".
 
 **model-input generation**:
@@ -353,62 +267,55 @@ _Avoid_: iteration (loop counter), activation sequence (subagent delivery CAS).
 **output log**:
 The append-only `session_outbox` rows for owned root messages and lifecycle
 facts, with stable source identities. It is neither the model transcript nor a
-delivery queue; unread state is derived with per-chat watermarks.
+delivery queue; a per-chat **chat cursor** records the selected position.
 _Avoid_: output queue, delivery backlog.
 
 **chat focus**:
-The durable session selected by one manager and chat. Public ID `0` denotes its
-assistant, stored as NULL in `chat_focus`. It is independent of the assistant's
-**focus** items and does not change which sessions keep running.
-The manager creates its row at startup without overwriting an existing selection.
-The assistant may switch the user into work only from `#0`; leaving a live work
-session, for Assistant or another session, belongs to the user.
-_Avoid_: active session (several sessions may run at once), assistant focus.
+The durable root selected by one manager and chat, stored in
+`chat_focus.session_id`. NULL means no session. Focus does not change which
+sessions keep running. The manager binds its row at startup without overwriting
+an existing selection; every selection write resets its **chat cursor**.
+_Avoid_: active session (several sessions may run at once).
+
+**chat cursor**:
+`chat_focus.last_sent_id`, the selected session's highest output-log ID sent
+or skipped past by one manager/chat. NULL means **entry** is owed. Numeric
+positions advance only while the same focus remains entered. Selection writes,
+including re-switch and clear, reset it to NULL; restart preserves it.
+_Avoid_: per-session read tracking, transport receipt.
+
+**entry**:
+A selected session's `→ #N name` header followed by its last three renderable
+output-log rows, oldest first, each with a **session header**. It repeats after
+every selection write, including a re-switch. A compare-and-set then
+acknowledges the newest ID of any type from the same read before live delivery.
+_Avoid_: entry context, unread digest.
 
 **session title**:
-A live owned work root's one-line name, `sessions.attributes.title`, 1–80
-characters. The assistant's `open` sets it from its `about` argument; otherwise
-the first accepted non-command user input names it once; the user renames it with
-`/title`. A `/clear` replacement starts untitled. A chat shows `<project> · <title>`.
-It is not `agent_type` and does not follow the work as it changes.
-_Avoid_: about (only the `open` argument that supplies it), label, session name.
-
-**watermark**:
-`chat_seen.last_outbox_id`, the monotonic position reached for one manager,
-chat and session after a successful send, probe-confirmed skip or non-rendering
-lifecycle row. It is not a transport receipt or a per-row delivery flag.
-_Avoid_: delivery receipt, shared cursor.
-
-**unread digest**:
-The message sent only on entry to the assistant, including repeated explicit
-entry, showing each other live owned session's newest unread message, ordered newest first.
-It does not mark those messages seen and is not
-the effective policy's **digest**.
-_Avoid_: policy digest, full unread history.
+A live owned root's one-line name, `sessions.attributes.title`, 1–80 characters.
+The first inserted non-command user input names an untitled root once; the user
+renames it with `/title`. A `/clear` replacement starts untitled. A chat shows
+`<project> · <title>`. It is not `agent_type` and does not follow the work as it changes.
+_Avoid_: label, session name.
 
 **session header**:
-The `#<id> <Name>` line prefixed at delivery to every renderable work-root row,
-using the same display name as `/sessions`. It is never stored in the output
-log; relays on the assistant carry their work origin's header, while its own rows have none.
-_Avoid_: switch header (the `→ #N <Name>` line confirming entry to a session).
-
-**entry context**:
-The newest already-seen renderable output-log row replayed when entering a
-session with nothing unread. It never moves the watermark; a work row keeps
-its session header, including a relay on the assistant; the assistant's own row has none.
-_Avoid_: unread tail, new output.
+The `#<id> <Name>` line prefixed at delivery to every renderable root row,
+including entry rows, using the same display name as `/sessions`. It is never
+stored in the output log.
+_Avoid_: entry header (the `→ #N <Name>` line that precedes entry rows).
 
 **tool trail**:
-The per-call lines of one work-root step message: `→ <tool>` or a tool name
-with its main argument in inline code, redacted and clipped to 80 runes.
-Batch calls expand one level. The model's text precedes the trail when present;
-assistant roots publish text only, and subagents publish no output-log rows.
+The per-call lines of one manager-owned root's step message: `→ <tool>` or a
+tool name with its main argument in inline code, redacted and clipped to 80
+runes. Batch calls expand one level. The model's text precedes the trail when
+present; a step with no text still publishes its trail. Subagents publish no
+output-log rows.
 _Avoid_: tool result, progress card, one message per call.
 
 **tail**:
-The selected session's output-log rows above that chat's watermark, read in
-ascending ID order. It is not every session's unread history; other roots stay
-unread until selected.
+The selected session's output-log rows above that chat's **chat cursor**, read
+in ascending ID order. Non-focused roots are never sent; selecting one enters its
+last three renderable rows before starting its live tail.
 _Avoid_: backlog, transcript.
 
 **skill activation receipt**:
@@ -429,21 +336,17 @@ _Avoid_: accepted task, queued message, run (ambiguous with process activation).
 
 **one-shot budget**:
 A root-tree checkpoint over additional persisted USD cost, additional wall
-time, or both, set by the user's `/budget` grant or, for a work root, by the
-assistant on request. One generation is armed from durable baselines, fires
-once, closes admission and parks the tree, then is released by the next
-direct model-bound **human input** to the root. Assistant and forwarded input into a parked
-root are refused; the assistant lifts a checkpoint only with `set_budget`.
-It is not a permanent spending policy.
+time, or both, set under the user's `/budget` grant. One generation is armed
+from durable baselines, fires once, closes admission and parks the tree, then is
+released by the next model-bound **human input** to the root. Control and
+read-only commands still pass. It is not a permanent spending policy.
 _Avoid_: iteration budget, billing limit, permanent ceiling.
 
 **human input**:
-A `source = 'user'` session input with `from` different from `assistant`.
-An `observer_session_id` or forwarding provenance does not change its authority.
-A forwarded input is human, but slash text is refused and it never lifts a fired
-budget. Only direct human input creates tool activation grants or lifts a fired budget. Assistant input with `source = 'user'`
-otherwise behaves like the user's, including commands and skills.
-_Avoid_: user input (it includes the assistant's), real user message.
+Every session input with `source = 'user'`. Model-bound human input to a root
+can release a fired budget; a matching leading command creates its exact
+durable tool activation grant.
+_Avoid_: real user message (authority follows the source field).
 
 **tool activation grant**:
 Durable one-turn authority created only by a manager-owned **human input** whose
@@ -483,8 +386,8 @@ _Avoid_: scheduled delivery identity (the retired delivery-key contract).
 
 **scheduled root**:
 A root with at least one schedule that is not a pending sleep. The `⏰` marker
-appears on its assistant card, in `/sessions` and in its switch header, including
-Assistant (`#0`); individual delivered messages do not repeat it.
+appears in `/sessions` and in its entry header; individual delivered rows do not
+repeat it.
 
 **scheduled turn**:
 New standalone work injected by a one-shot or cron schedule, rather than the

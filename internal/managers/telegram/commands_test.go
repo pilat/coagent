@@ -2,7 +2,6 @@ package telegram
 
 import (
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -30,7 +29,7 @@ func TestHandleCommandsPreservesCanonicalSkillNames(t *testing.T) {
 	require.Len(t, messages, 2)
 	assert.Contains(t, messages[0], "/switch")
 	assert.Contains(t, messages[0], "/title")
-	assert.Contains(t, messages[0], "/assistant")
+	assert.NotContains(t, messages[0], "/assistant")
 	assert.Equal(
 		t,
 		"<b>Skills:</b>\n  /skill pilat:plan-handoff&lt;&amp;&gt; — Use &lt;plan&gt; &amp; ship",
@@ -64,33 +63,9 @@ func TestFocusedCommandsEnterDurableInboxVerbatim(t *testing.T) {
 	}
 	assert.Empty(t, messages)
 	m.handleChatText(t.Context(), "/config")
-	assert.Len(t, ctrl.messageCalls, len(inputs))
-	assert.Equal(t, []string{"/config works on the assistant: /assistant, then /config"}, messages)
-}
-
-func TestConfigCommandIsOnlyForwardedFromAssistant(t *testing.T) {
-	for _, focus := range []int64{0, 12} {
-		for _, text := range []string{"/config x", "/config@bot x"} {
-			t.Run(fmt.Sprintf("%d/%s", focus, text), func(t *testing.T) {
-				t.Parallel()
-				var messages []string
-				ctrl := &fakeController{focus: focus}
-				m := newCmdTestManager(t, ctrl, &messages)
-				m.processUpdate(t.Context(), telegramUpdate{Message: &telegramMessage{
-					From: &telegramUser{ID: 42}, Chat: telegramChat{ID: harnessChatID}, Text: text,
-				}})
-				if focus != 0 {
-					assert.Empty(t, ctrl.messageCalls)
-					assert.Equal(t, []string{"/config works on the assistant: /assistant, then /config"}, messages)
-					return
-				}
-				require.Len(t, ctrl.messageCalls, 1)
-				assert.Equal(t, ctrl.assistantRoot.SessionID, ctrl.messageCalls[0].SessionID)
-				assert.Equal(t, "/config x", ctrl.messageCalls[0].Message)
-				assert.Empty(t, messages)
-			})
-		}
-	}
+	require.Len(t, ctrl.messageCalls, len(inputs)+1)
+	assert.Equal(t, controllerapi.SessionMessageData{SessionID: 42, Message: "/config"}, ctrl.messageCalls[len(inputs)])
+	assert.Empty(t, messages)
 }
 
 func TestNumberedControlsDoNotChangeSelection(t *testing.T) {
@@ -115,26 +90,6 @@ func TestNumberedControlsDoNotChangeSelection(t *testing.T) {
 	assert.Len(t, ctrl.messageCalls, 2)
 	assert.Len(t, messages, 3)
 	assert.Equal(t, int64(42), ctrl.focus)
-}
-
-func TestAssistantCommandRefusalsAndManagementForwarding(t *testing.T) {
-	var messages []string
-	ctrl := &fakeController{}
-	m := newCmdTestManager(t, ctrl, &messages)
-	for _, input := range []string{"/kill", "/stop", "/clear", "/compact steer"} {
-		m.handleChatText(t.Context(), input)
-	}
-	assert.Empty(t, ctrl.messageCalls)
-	require.Len(t, messages, 4)
-	for _, message := range messages {
-		assert.Equal(t, "This command is unavailable for Assistant.", message)
-	}
-	m.handleChatText(t.Context(), "/config")
-	m.handleChatText(t.Context(), "/budget 1 usd")
-	require.Len(t, ctrl.messageCalls, 2)
-	assert.Equal(t, ctrl.assistantRoot.SessionID, ctrl.messageCalls[0].SessionID)
-	assert.Equal(t, "/config", ctrl.messageCalls[0].Message)
-	assert.Equal(t, "/budget 1 usd", ctrl.messageCalls[1].Message)
 }
 
 func telegramMessageRecorder(t *testing.T, messages *[]string) roundTripFunc {

@@ -1,6 +1,6 @@
 # ADR-0075: Work answers reach the observer through its inbox in the work's own commit
 
-- **Status:** Accepted
+- **Status:** Superseded by [ADR-0082](0082-manager-is-a-groupless-chat-without-an-assistant.md)
 - **Date:** 2026-10-28
 - **Amends:** [ADR-0074](0074-assistant-is-an-ordinary-session-with-a-desk-head.md)
 - **Amended by:** [ADR-0080](0080-assistant-administers-work-at-open-and-hears-direct-exchanges.md) — human input to owned work roots and reported schedule runs are observed; events quote the user's words

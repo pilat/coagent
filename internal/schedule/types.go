@@ -11,7 +11,6 @@ type Entry interface {
 	LastFiredAt() *time.Time
 	Fresh() bool
 	Sleep() bool
-	ReportTo() int64
 }
 
 // Created describes a freshly added schedule.

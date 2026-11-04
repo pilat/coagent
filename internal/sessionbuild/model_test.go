@@ -5,12 +5,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/pilat/coagent/internal/assistant"
 	"github.com/pilat/coagent/internal/config"
 	"github.com/pilat/coagent/internal/llm"
 	"github.com/pilat/coagent/internal/registry"
@@ -52,7 +50,7 @@ func TestBuildPromptModelIdentity(t *testing.T) {
 			client := &levelClient{}
 			level := configureClient(client, in.Record)
 			assert.Equal(t, client.level, level)
-			for _, agent := range []registry.AgentType{registry.AgentTypeBuild, registry.AgentTypeAssistant, registry.AgentTypeExplore, registry.AgentTypeBrowser} {
+			for _, agent := range []registry.AgentType{registry.AgentTypeBuild, registry.AgentTypeExplore, registry.AgentTypeBrowser} {
 				cfg, ok := registry.NewSet(nil).Get(agent)
 				require.True(t, ok)
 				prompt := buildPrompt(in, cfg, nil, level).SystemPrompt()
@@ -128,16 +126,6 @@ func TestModelIdentityMatchesRequestEffort(t *testing.T) {
 			case effort := <-requests:
 				assert.Equal(t, tc.want, effort)
 				assert.Contains(t, prompt, "Display (model), effort "+effort+".")
-				entry := cfg.UnifiedConfig.Models[0]
-				card := assistant.Card{ID: in.Record.ID, Model: cfg.Model, Effort: in.Record.ReasoningLevel}
-				desk := assistant.Render(assistant.View{
-					Recent: []assistant.Card{card},
-					Models: []assistant.Model{{
-						ID: entry.ID, DisplayName: entry.DisplayName, DefaultEffort: entry.DefaultEffort,
-						EffortLevels: entry.EffortLevels, EffortAllowlist: entry.Reasoning.Efforts,
-					}},
-				}, time.Time{})
-				assert.Contains(t, desk, "Display · "+effort+"\n")
 			default:
 				t.Fatal("no model request received")
 			}
@@ -168,7 +156,7 @@ func TestBuildClientModelIdentity(t *testing.T) {
 		{"plain", "medium", "plain (plain)"},
 	} {
 		client, section, err := BuildClient(t.Context(), BuildInput{
-			Config: cfg, Record: &sessionstore.SessionRecord{ID: 1, AgentType: "assistant"},
+			Config: cfg, Record: &sessionstore.SessionRecord{ID: 1, AgentType: "build"},
 		}, tc.model, tc.effort)
 		require.NoError(t, err)
 		require.NoError(t, client.Close())

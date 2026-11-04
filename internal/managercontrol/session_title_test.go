@@ -21,10 +21,7 @@ func TestChatCapability_SetSessionTitle(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "fix login 500", reloaded.Attributes[controllerapi.SessionAttributeTitle])
 	require.Error(t, chatCapability(t, factory, "other").SetSessionTitle(t.Context(), "chat", root.ID, "foreign"))
-	require.Error(t, chat.SetSessionTitle(t.Context(), "chat", 0, "assistant"))
-	assistant, err := factory.ForManager("owner").EnsureAssistantRoot(t.Context())
-	require.NoError(t, err)
-	require.Error(t, chat.SetSessionTitle(t.Context(), "chat", assistant.SessionID, "assistant"))
+	require.Error(t, chat.SetSessionTitle(t.Context(), "chat", 0, "invalid"))
 	require.EqualError(
 		t,
 		chat.SetSessionTitle(t.Context(), "chat", root.ID, strings.Repeat("界", 81)),

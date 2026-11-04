@@ -14,7 +14,6 @@ const (
 	AgentTypeGeneral    AgentType = "general"
 	AgentTypeExplore    AgentType = "explore"
 	AgentTypeBrowser    AgentType = tool.BrowserAgentType
-	AgentTypeAssistant  AgentType = "assistant"
 	AgentTypeCompaction AgentType = "compaction"
 )
 
@@ -54,22 +53,6 @@ var builtinAgentTypes = map[AgentType]AgentTypeConfig{
 		Mode:                    ModeSubagent,
 		Tools:                   []string{tool.PlaywrightToolPrefix + "*"},
 		Prompt:                  BrowserAgentPrompt,
-		OmitProjectContext:      true,
-		DisableIntegratedSearch: true,
-	},
-	AgentTypeAssistant: {
-		Name:        AgentTypeAssistant,
-		Description: "The manager's assistant with a live desk and work-session tools",
-		Mode:        ModeHidden,
-		Tools: []string{
-			"search", "around", "read_session", "sessions", "projects", "focus_list",
-			"open", "send", "forward", "stop", "kill", "remember", "rewrite_memory", "forget_memory",
-			"focus", "update_focus", "done_focus",
-			"switch", "models", "set_model",
-			tool.IDSchedule, tool.IDMCPAdd, tool.IDMCPRemove, tool.IDMCPEnable, tool.IDMCPDisable, tool.IDMCPList,
-			tool.IDConfigRead, tool.IDConfigEdit, "set_budget",
-		},
-		Prompt:                  AssistantPrompt,
 		OmitProjectContext:      true,
 		DisableIntegratedSearch: true,
 	},
@@ -118,7 +101,7 @@ func NewSet(projectSubagents []AgentTypeConfig) *Set {
 	}
 
 	for _, cfg := range projectSubagents {
-		if cfg.Name == AgentTypeBrowser || cfg.Name == AgentTypeAssistant {
+		if cfg.Name == AgentTypeBrowser {
 			continue
 		}
 

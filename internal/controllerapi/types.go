@@ -21,9 +21,7 @@ const (
 	StateError   = sessionevent.StateError
 )
 
-// AssistantProjectDir reserves the assistant's hidden project; hiding grants no authority.
 const (
-	AssistantProjectDir = "sys_coagent"
 	// SessionAttributeManagerID is the durable owner of a root session. Manager
 	// subscriptions are routed by this value, so one manager never receives
 	// another manager's conversation.
@@ -95,7 +93,6 @@ type FsListDirData struct {
 }
 
 // ProjectCreateData provisions a visible folder-project under the configured root.
-// The hidden assistant project is reserved for EnsureAssistantRoot.
 type ProjectCreateData struct {
 	Name string `json:"name"`
 }

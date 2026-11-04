@@ -39,10 +39,10 @@ func TestPrepareStopResponseAfterNudge(t *testing.T) {
 	assert.True(t, wakeRun.terminal)
 	assert.Empty(t, wake.Unfired.Messages)
 	require.Len(t, wake.Unfired.Outputs, 1)
-	assert.True(t, wake.Unfired.Outputs[0].Yield)
+	assert.True(t, wake.Unfired.Outputs[0].ReleasesInput)
 }
 
-func TestFinalPartsYield(t *testing.T) {
+func TestFinalPartsWithBackgroundWake(t *testing.T) {
 	for _, yield := range []bool{false, true} {
 		agent := newTestAgent()
 		step := agent.newCommit()
@@ -50,7 +50,7 @@ func TestFinalPartsYield(t *testing.T) {
 		state := &sessionstore.CompletionCheckState{NudgedThisGeneration: true}
 		agent.prepareStopResponse(run, &step, &llmwire.Response{Text: "answer"}, state, yield)
 		require.Len(t, step.Unfired.Outputs, 1)
-		assert.Equal(t, yield, step.Unfired.Outputs[0].Yield)
+		assert.True(t, step.Unfired.Outputs[0].ReleasesInput)
 		assert.Equal(t, sessionstore.OutputMessage, step.Unfired.Outputs[0].Type)
 		assert.Equal(t, "answer", step.Unfired.Outputs[0].Content)
 	}
@@ -113,7 +113,7 @@ func TestPrepareAcceptedAttempt_SubagentBackgroundExit(t *testing.T) {
 			if tt.wantYield {
 				assert.Empty(t, c.Unfired.Messages)
 				require.Len(t, c.Unfired.Outputs, 1)
-				assert.True(t, c.Unfired.Outputs[0].Yield)
+				assert.True(t, c.Unfired.Outputs[0].ReleasesInput)
 			}
 		})
 	}

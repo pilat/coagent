@@ -11,7 +11,6 @@ import (
 
 	"github.com/pilat/coagent/internal/coagenthome"
 	"github.com/pilat/coagent/internal/config"
-	"github.com/pilat/coagent/internal/controllerapi"
 )
 
 const (
@@ -182,10 +181,6 @@ func SanitizeName(raw string) (string, error) {
 
 	if strings.ContainsAny(name, "/\\:\x00") {
 		return "", errors.New(`project name must not contain "/", "\", ":", or a NUL byte`)
-	}
-
-	if name == controllerapi.AssistantProjectDir {
-		return "", errors.New("project name is reserved")
 	}
 
 	if strings.HasPrefix(name, ".") {
