@@ -433,7 +433,7 @@ func (s *Session) renderSessionHelp() string {
 		"`/compact [focus]` — compact the context",
 		"`/schedules` — list schedules",
 		"`/budget <request>` — arm, replace, inspect, or clear a one-shot cost/wall-time checkpoint",
-		"`/gwt <name>` — fork into a worktree (work sessions only)",
+		"`/gwt <name>` — fork into a worktree",
 	}
 	if s.loader == nil {
 		return strings.Join(lines, "\n")

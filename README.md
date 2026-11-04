@@ -53,15 +53,15 @@ numeric user ID in the manager's allowed users. The default target is the privat
 chat with that sole allowed user. To use a group, add the bot and configure its
 numeric `target_chat_id`. Each enabled manager needs its own bot token.
 
-One chat holds the work sessions you select with `/switch N`. With no session
+One chat holds the sessions you select with `/switch N`. With no session
 in focus, text and media receive `No session in focus. /new, /spawn or /switch N.`
-`/config` in a selected work session authorizes reading the current document
+`/config` in a selected session authorizes reading the current document
 and applying the complete candidate `config.yaml`; an
 accepted edit restarts the daemon and rolls back if the configuration cannot
 boot. Secrets stay in `~/.coagent/secrets`, maintained by hand outside the
 conversation — never paste a credential into a chat.
 
-Send `/spawn /absolute/path/to/checkout` to select a new work session, or
+Send `/spawn /absolute/path/to/checkout` to select a new session, or
 `/new project-name` for a managed project, then give it the task:
 
 ```text
@@ -210,7 +210,7 @@ for vulnerability reporting.
 ## Configuration and project context
 
 Configuration is a hand-edited `~/.coagent/config.yaml`, or a whole-document
-`/config` apply from a selected manager-owned work session. The
+`/config` apply from a selected manager-owned root. The
 underlying state is intentionally inspectable:
 
 - `~/.coagent/config.yaml` — providers, models, managers, marketplaces, and tool
@@ -336,7 +336,7 @@ native injection — while configured MCP search tools coexist alongside it.
   network again but can fall back to the last valid disk snapshot. Arbitrary
   local model IDs need a matching catalog entry.
 - `/spawn <path>` selects an existing checkout in Telegram; `/gwt <name>` from
-  a selected work session forks its repository into a fresh worktree branched
+  a selected session forks its repository into a fresh worktree branched
   off the remote default branch.
 - Shell environment activation is Bash-based. zsh and fish users can still run
   coagent, but do not get automatic per-directory mise/asdf/nvm/direnv capture.
@@ -364,12 +364,12 @@ Telegram commands operate on the selected session unless they name an ID:
 | `/spawn <path>` | Start and select a session in an existing directory |
 | `/sessions` | Show up to 30 live owned sessions, newest activity first; mark the focus and report any overflow |
 | `/switch N` | Select a live owned session; repeat to see its last three messages again |
-| `/gwt <name>` | Create and select a worktree session from the selected work repository |
-| `/kill [N]`, `/stop [N]` | Kill a work session or stop its loop; an ID leaves focus unchanged |
+| `/gwt <name>` | Create and select a worktree session from the selected session's repository |
+| `/kill [N]`, `/stop [N]` | Kill a session or stop its loop; an ID leaves focus unchanged |
 | `/model [N [effort]]` | List configured models or select one by its number |
 | `/status`, `/budget <request>`, `/schedules` | Inspect status, authorize a budget change, or list schedules |
-| `/clear`, `/compact [focus]` | Replace a work root or compact its context |
-| `/config <request>` | Authorize configuration work in the selected work session |
+| `/clear`, `/compact [focus]` | Replace a root or compact its context |
+| `/config <request>` | Authorize configuration work in the selected session |
 | `/skill <name> [args]` | Activate a skill in the selected session |
 | `/help`, `/start` | Show command help |
 

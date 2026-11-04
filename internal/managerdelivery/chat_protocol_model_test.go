@@ -167,7 +167,7 @@ func (m *switchDeliveryModel) acceptSend(t *testing.T, text string) {
 
 	expected := []string{"→ #9 B", "#9 B\nB answer"}
 	require.Less(t, len(m.prelude), len(expected), "unexpected send after the new tail")
-	require.Equal(t, expected[len(m.prelude)], text, "a work-session switch must send only its own tail")
+	require.Equal(t, expected[len(m.prelude)], text, "a session switch must send only its own tail")
 	m.prelude = append(m.prelude, text)
 }
 

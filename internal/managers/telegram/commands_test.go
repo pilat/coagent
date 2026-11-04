@@ -29,7 +29,6 @@ func TestHandleCommandsPreservesCanonicalSkillNames(t *testing.T) {
 	require.Len(t, messages, 2)
 	assert.Contains(t, messages[0], "/switch")
 	assert.Contains(t, messages[0], "/title")
-	assert.NotContains(t, messages[0], "/assistant")
 	assert.Equal(
 		t,
 		"<b>Skills:</b>\n  /skill pilat:plan-handoff&lt;&amp;&gt; — Use &lt;plan&gt; &amp; ship",

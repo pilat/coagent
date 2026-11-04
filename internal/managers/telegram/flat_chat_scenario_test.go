@@ -30,7 +30,7 @@ func TestHarnessScenario_SwitchDeliversHeaderAndTail(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, manager.Stop(context.Background())) })
 	awaitChatTail(t, h, one)
 
-	enqueueChatMessage(t, h, three, "third unread")
+	enqueueChatMessage(t, h, three, "third output")
 	enqueueChatMessage(t, h, two, "new tail one")
 	enqueueChatMessage(t, h, two, "new tail two")
 	manager.processUpdate(t.Context(), chatTelegramUpdate(fmt.Sprintf("/switch %d", two)))
@@ -68,7 +68,7 @@ func TestHarnessScenario_SwitchShowsSessionTitles(t *testing.T) {
 	manager := newChatTelegramManager(t, h)
 	require.NoError(t, manager.Start(t.Context()))
 	t.Cleanup(func() { require.NoError(t, manager.Stop(context.Background())) })
-	enqueueChatMessage(t, h, one, "first unread")
+	enqueueChatMessage(t, h, one, "first output")
 	enqueueChatMessage(t, h, two, "second tail")
 	manager.processUpdate(t.Context(), chatTelegramUpdate(fmt.Sprintf("/switch %d", two)))
 	awaitChatTail(t, h, two)
@@ -199,7 +199,7 @@ func TestHarnessScenario_KilledSwitchRefusedAndFocusedKillDrainsClose(t *testing
 func TestHarnessScenario_ForbiddenChatPausesWithoutMarking(t *testing.T) {
 	h := newDelayedTelegramHarness(t)
 	id := createChatWork(t, h)
-	outputID := enqueueChatMessage(t, h, id, "must remain unread")
+	outputID := enqueueChatMessage(t, h, id, "must keep the cursor")
 	chat := h.controller.(controllerapi.ChatFocusController)
 	key := strconv.FormatInt(harnessChatID, 10)
 	require.NoError(t, chat.SetChatFocus(t.Context(), key, id))
@@ -211,7 +211,7 @@ func TestHarnessScenario_ForbiddenChatPausesWithoutMarking(t *testing.T) {
 	require.NoError(t, manager.Start(t.Context()))
 	t.Cleanup(func() { require.NoError(t, manager.Stop(context.Background())) })
 	require.Eventually(t, func() bool {
-		return hasTelegramMessage(h.recorder.snapshot(), fmt.Sprintf("#%d project\nmust remain unread", id))
+		return hasTelegramMessage(h.recorder.snapshot(), fmt.Sprintf("#%d project\nmust keep the cursor", id))
 	}, time.Second, time.Millisecond)
 	require.NoError(t, manager.Stop(t.Context()))
 	_, cursor, entered, err := chat.ChatCursor(t.Context(), key)
@@ -221,7 +221,7 @@ func TestHarnessScenario_ForbiddenChatPausesWithoutMarking(t *testing.T) {
 	rows, err := chat.ChatOutputs(t.Context(), key, id, cursor, 10)
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
-	assert.Equal(t, "must remain unread", rows[0].Content)
+	assert.Equal(t, "must keep the cursor", rows[0].Content)
 }
 
 func TestHarnessScenario_ParseRejectionFallsBackBeforeMarking(t *testing.T) {

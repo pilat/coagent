@@ -1507,7 +1507,7 @@ func lastToolResultContent(msgs []llmwire.Message, toolName string) string {
 	return ""
 }
 
-func TestScenario_ConfigEditFromWorkRoot(t *testing.T) {
+func TestScenario_ConfigEditFromRoot(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "apply.db")
 	configDir := newApplyConfigDirWith(t, toolConfig)
 	first := newApplyDaemonWith(t, dbPath, configDir, configReadEditRespond)

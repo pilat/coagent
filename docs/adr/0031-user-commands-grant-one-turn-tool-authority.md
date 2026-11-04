@@ -2,7 +2,6 @@
 
 - **Status:** Accepted
 - **Date:** 2026-08-26
-- **Amended by:** [ADR-0078](0078-assistant-input-is-never-human-authority.md) — only human input (no assistant provenance) creates a grant; the assistant mutates its work roots' budgets without one
 
 ## Context
 

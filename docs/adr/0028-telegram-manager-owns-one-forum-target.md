@@ -1,6 +1,6 @@
 # ADR-0028: One Telegram manager owns one bot-controlled forum target
 
-- **Status:** Superseded by [ADR-0076](0076-flat-chat-with-a-focus.md)
+- **Status:** Superseded by [ADR-0072](0072-flat-chat-with-a-focus.md)
 - **Date:** 2026-08-23
 
 ## Context

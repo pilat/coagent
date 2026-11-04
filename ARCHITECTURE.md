@@ -490,10 +490,10 @@ completion committed later observes the killed root and suppresses its handoff.
 Clear uses the same killed-tree boundary.
 Status and events expose stable IDs, state, timing, size, path and bounded text
 previews, never raw command text or complete output. The deliberate exception is
-a work root's step message and its `NotifyMessage` event to the owning manager:
+a manager-owned root's step message and its `NotifyMessage` event to the owning manager:
 its tool trail includes the bash command after registered-secret redaction and
 clipping to 80 runes. `/status`, process status/previews and other event kinds
-keep the invariant ([ADR-0079](docs/adr/0079-chat-shows-where-each-message-comes-from-and-every-model-step.md)).
+keep the invariant ([ADR-0073](docs/adr/0073-chat-shows-where-each-message-comes-from-and-every-model-step.md)).
 
 ### Diagnostic status and one-shot budgets
 
@@ -1096,7 +1096,7 @@ available; help omits session skills without focus.
 focus; heartbeats type only for the loop's positive focused root. `/config`
 uses the selected manager-owned root's ordinary activation grant.
 
-Work roots carry a one-line session title in their attributes. The first inserted
+Manager-owned roots carry a one-line session title in their attributes. The first inserted
 non-command user input names an untitled root atomically with its inbox row;
 `/title` renames the focused root, and `/clear` starts untitled. Titles do not
 change activity order. Session summaries, entry headers and delivered rows share

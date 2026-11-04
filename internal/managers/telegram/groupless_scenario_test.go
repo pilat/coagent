@@ -99,7 +99,7 @@ func TestHarnessScenario_KillFocusLeavesNoFocus(t *testing.T) {
 	assert.Equal(t, append(messages, noFocusHint), chatMessages(h))
 }
 
-func TestHarnessScenario_ConfigCommandReachesWorkRoot(t *testing.T) {
+func TestHarnessScenario_ConfigCommandReachesRoot(t *testing.T) {
 	h := newDelayedTelegramHarness(t)
 	id := createChatWork(t, h)
 	chat := h.controller.(controllerapi.ChatFocusController)

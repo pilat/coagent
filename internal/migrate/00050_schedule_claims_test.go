@@ -24,7 +24,7 @@ type scheduleClaimUpgrade struct {
 	minute   time.Time
 }
 
-func TestMigrate_57_PreventsScheduleClaimReplay(t *testing.T) {
+func TestMigrate_00050_PreventsScheduleClaimReplay(t *testing.T) {
 	for _, source := range []string{"inbox", "legacy"} {
 		for _, kind := range []string{"one-shot", "fresh one-shot", "cron", "sleep"} {
 			t.Run(source+"/"+kind, func(t *testing.T) {
@@ -45,7 +45,7 @@ func TestMigrate_57_PreventsScheduleClaimReplay(t *testing.T) {
 				for i, query := range queries {
 					before[i] = dumpRows(t, f.db, query)
 				}
-				require.NoError(t, RunUpTo(t.Context(), f.db, 57))
+				require.NoError(t, RunUpTo(t.Context(), f.db, 50))
 				rows, err := f.store.ListSchedules(t.Context(), f.entry.SessionID())
 				require.NoError(t, err)
 				if kind == "cron" {
@@ -69,7 +69,7 @@ func TestMigrate_57_PreventsScheduleClaimReplay(t *testing.T) {
 	}
 }
 
-func TestMigrate_57_CronKeepsLatestClaimAndPreservesFireCount(t *testing.T) {
+func TestMigrate_00050_CronKeepsLatestClaimAndPreservesFireCount(t *testing.T) {
 	for _, offset := range []time.Duration{-time.Minute, 0, 20 * time.Second, time.Minute} {
 		t.Run(offset.String(), func(t *testing.T) {
 			t.Parallel()
@@ -90,7 +90,7 @@ func TestMigrate_57_CronKeepsLatestClaimAndPreservesFireCount(t *testing.T) {
 				"legacy",
 				fmt.Sprintf("schedule:cron:%d:%s", f.entry.ID(), f.minute.Add(-time.Minute).Format("20060102T1504Z")),
 			)
-			require.NoError(t, RunUpTo(t.Context(), f.db, 57))
+			require.NoError(t, RunUpTo(t.Context(), f.db, 50))
 			rows, err := f.store.ListSchedules(t.Context(), f.entry.SessionID())
 			require.NoError(t, err)
 			require.Len(t, rows, 1)
@@ -105,7 +105,7 @@ func TestMigrate_57_CronKeepsLatestClaimAndPreservesFireCount(t *testing.T) {
 	}
 }
 
-func TestMigrate_57_ClaimsDoNotAcknowledgeAnotherSession(t *testing.T) {
+func TestMigrate_00050_ClaimsDoNotAcknowledgeAnotherSession(t *testing.T) {
 	for _, kind := range []string{"one-shot", "cron", "sleep"} {
 		t.Run(kind, func(t *testing.T) {
 			t.Parallel()
@@ -118,7 +118,7 @@ func TestMigrate_57_ClaimsDoNotAcknowledgeAnotherSession(t *testing.T) {
 			f.claim(t, "inbox", f.input.DeliveryKey)
 			f.claim(t, "legacy", f.input.DeliveryKey)
 			before := dumpRows(t, f.db, `SELECT * FROM schedules ORDER BY id`)
-			require.NoError(t, RunUpTo(t.Context(), f.db, 57))
+			require.NoError(t, RunUpTo(t.Context(), f.db, 50))
 			assert.Equal(t, before, dumpRows(t, f.db, `SELECT * FROM schedules ORDER BY id`))
 		})
 	}
@@ -129,7 +129,7 @@ func newScheduleClaimUpgrade(t *testing.T, kind string) *scheduleClaimUpgrade {
 	db, err := OpenDB(t.Context(), filepath.Join(t.TempDir(), "claim-upgrade.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
-	require.NoError(t, RunUpTo(t.Context(), db, 56))
+	require.NoError(t, RunUpTo(t.Context(), db, 49))
 	sessions := sessionstore.NewStore(db)
 	project, err := sessions.GetOrCreateProject(t.Context(), t.TempDir())
 	require.NoError(t, err)
@@ -221,4 +221,47 @@ func (f *scheduleClaimUpgrade) assertFireCount(t *testing.T) {
 		f.db.QueryRowContext(t.Context(), `SELECT fire_count FROM schedules WHERE id = ?`, f.entry.ID()).Scan(&count),
 	)
 	assert.Equal(t, 7, count)
+}
+
+func TestMigrate_00050_DropsSessionDeliveriesPreservingOtherTables(t *testing.T) {
+	t.Parallel()
+
+	db, err := OpenDB(t.Context(), filepath.Join(t.TempDir(), "drop-deliveries.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, db.Close()) })
+	provider := newProvider(t, db)
+	_, err = provider.UpTo(t.Context(), 49)
+	require.NoError(t, err)
+	_, err = db.ExecContext(t.Context(), `INSERT INTO projects(id, work_dir, name) VALUES (1, '/work', 'work');
+		INSERT INTO sessions(id, project_id, agent_type, attributes) VALUES (1, 1, 'build', '{"manager_id":"owner"}');
+		INSERT INTO messages(id, session_id, role, content) VALUES (1, 1, 'user', 'task');
+		INSERT INTO session_inbox(session_id, source, raw_content, received_at, delivery_key)
+		VALUES (1, 'process', 'done', CURRENT_TIMESTAMP, 'process:1');
+		INSERT INTO schedules(session_id, cron_expr, input_message) VALUES (1, '* * * * *', 'tick');
+		INSERT INTO session_deliveries(session_id, delivery_id, kind, fingerprint, delivered_at)
+		VALUES (1, 'legacy', 'tool_notification', 'fingerprint', CURRENT_TIMESTAMP)`)
+	require.NoError(t, err)
+	require.Equal(t, 1, countRows(t, db, "session_deliveries", "1 = 1"))
+	const schema = `SELECT type, name, tbl_name, sql FROM sqlite_master
+		WHERE tbl_name <> 'session_deliveries' ORDER BY type, name`
+	schemaBefore := dumpRows(t, db, schema)
+	tables := stringColumn(t, db, `SELECT name FROM sqlite_master WHERE type = 'table'
+		AND name NOT IN ('session_deliveries', 'goose_db_version', 'sqlite_sequence') ORDER BY name`)
+	queries := []string{`SELECT * FROM sqlite_sequence WHERE name <> 'goose_db_version' ORDER BY name`}
+	for _, table := range tables {
+		queries = append(queries, `SELECT * FROM "`+table+`"`)
+	}
+	before := make([][]map[string]sql.NullString, len(queries))
+	for i, query := range queries {
+		before[i] = dumpRows(t, db, query)
+	}
+	_, err = provider.UpTo(t.Context(), 50)
+	require.NoError(t, err)
+	assert.False(t, tableExists(t, db, "session_deliveries"))
+	assert.Empty(t, dumpRows(t, db, `SELECT name FROM sqlite_master WHERE tbl_name = 'session_deliveries'`))
+	assert.Equal(t, schemaBefore, dumpRows(t, db, schema))
+	for i, query := range queries {
+		assert.Equal(t, before[i], dumpRows(t, db, query), query)
+	}
+	assert.Empty(t, dumpRows(t, db, `PRAGMA foreign_key_check`))
 }

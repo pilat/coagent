@@ -517,7 +517,7 @@ const helpWithGWT = "## Session commands\n" +
 	"`/compact [focus]` — compact the context\n" +
 	"`/schedules` — list schedules\n" +
 	"`/budget <request>` — arm, replace, inspect, or clear a one-shot cost/wall-time checkpoint\n" +
-	"`/gwt <name>` — fork into a worktree (work sessions only)"
+	"`/gwt <name>` — fork into a worktree"
 
 type registryPromptLLM struct {
 	scriptedLLM

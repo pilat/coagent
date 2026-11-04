@@ -11,14 +11,14 @@ import (
 	"github.com/pilat/coagent/internal/sessionstore"
 )
 
-func TestMigrate_56_DropsWriteOnlyColumnsPreservingRows(t *testing.T) {
+func TestMigrate_00049_DropsWriteOnlyColumnsPreservingRows(t *testing.T) {
 	t.Parallel()
 
 	db, err := OpenDB(t.Context(), filepath.Join(t.TempDir(), "write-only-columns.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
 	provider := newProvider(t, db)
-	_, err = provider.UpTo(t.Context(), 55)
+	_, err = provider.UpTo(t.Context(), 48)
 	require.NoError(t, err)
 	draft := seedWriteOnlyColumns(t, db)
 	queries := []string{
@@ -26,7 +26,7 @@ func TestMigrate_56_DropsWriteOnlyColumnsPreservingRows(t *testing.T) {
 		`SELECT * FROM session_outbox ORDER BY id`,
 		`SELECT * FROM subagent_links ORDER BY parent_id, child_id`,
 	}
-	removed := [][]string{{"model_input_boundary"}, {"releases_input"}, {"delivered_msg_id", "delivered_input_id"}}
+	removed := [][]string{{"model_input_boundary"}, {}, {"delivered_msg_id", "delivered_input_id"}}
 	before := make([][]map[string]sql.NullString, len(queries))
 	for i, query := range queries {
 		before[i] = dumpRows(t, db, query)
@@ -41,19 +41,15 @@ func TestMigrate_56_DropsWriteOnlyColumnsPreservingRows(t *testing.T) {
 		AND tbl_name IN ('sessions', 'session_outbox', 'subagent_links') ORDER BY name`
 	indexesBefore := dumpRows(t, db, indexes)
 	require.Empty(t, dumpRows(t, db, `PRAGMA foreign_key_check`))
-	_, err = provider.UpTo(t.Context(), 56)
+	_, err = provider.UpTo(t.Context(), 49)
 	require.NoError(t, err)
 	for i, query := range queries {
 		assert.Equal(t, before[i], dumpRows(t, db, query), query)
 	}
 	assert.Equal(t, indexesBefore, dumpRows(t, db, indexes))
-	assert.False(t, tableExists(t, db, "subagent_links_legacy_00056"))
+	assert.False(t, tableExists(t, db, "subagent_links_legacy"))
 	assert.Empty(t, dumpRows(t, db, `PRAGMA foreign_key_check`))
 	assertWriteOnlyColumnsAbsent(t, db)
-	var fingerprint string
-	require.NoError(t, db.QueryRowContext(t.Context(), `SELECT fingerprint FROM session_outbox WHERE id = 30`).
-		Scan(&fingerprint))
-	assert.Equal(t, frozenOutputFingerprint(t, draft), fingerprint)
 	_, err = provider.Up(t.Context())
 	require.NoError(t, err)
 	assertMigratedOutputReplay(t, db, draft)
@@ -84,10 +80,9 @@ func seedWriteOnlyColumns(t *testing.T, db *sql.DB) sessionstore.OutputDraft {
 	_, err = db.ExecContext(
 		t.Context(),
 		`INSERT INTO session_outbox
-		(id, session_id, type, content, attributes, source_key, fingerprint, releases_input, created_at)
-		VALUES (30, 1, 'message', 'answer', '{"manager_id":"owner","source":"agent"}', ?, ?, 1, '2026-01-02 00:00:00')`,
+		(id, session_id, type, content, attributes, source_key, created_at)
+		VALUES (30, 1, 'message', 'answer', '{"manager_id":"owner","source":"agent"}', ?, '2026-01-02 00:00:00')`,
 		draft.SourceKey,
-		frozenOutputFingerprint(t, draft),
 	)
 	require.NoError(t, err)
 	return draft

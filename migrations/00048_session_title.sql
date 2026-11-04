@@ -1,18 +1,5 @@
 -- +goose Up
 
-WITH descriptions AS (
-    SELECT session_id, trim(replace(replace(about, char(13), ' '), char(10), ' '),
-        ' ' || char(9, 10, 13)) AS title
-    FROM assistant_work
-)
-UPDATE sessions
-SET attributes = json_set(COALESCE(attributes, '{}'), '$.title', (
-    SELECT CASE WHEN length(title) > 80 THEN substr(title, 1, 79) || '…' ELSE title END
-    FROM descriptions WHERE session_id = sessions.id
-))
-WHERE json_extract(attributes, '$.title') IS NULL
-    AND id IN (SELECT session_id FROM descriptions WHERE title <> '');
-
 WITH inputs AS (
     SELECT id, session_id, trim(raw_content, ' ' || char(9, 10, 13)) AS content
     FROM session_inbox WHERE source = 'user'
@@ -38,8 +25,5 @@ SET attributes = json_set(COALESCE(attributes, '{}'), '$.title', (
     SELECT title FROM first_titles WHERE session_id = sessions.id
 ))
 WHERE parent_id = 0 AND COALESCE(json_extract(attributes, '$.manager_id'), '') <> ''
-    AND COALESCE(agent_type, '') <> 'assistant'
     AND json_extract(attributes, '$.title') IS NULL
     AND id IN (SELECT session_id FROM first_titles);
-
-DROP TABLE assistant_work;

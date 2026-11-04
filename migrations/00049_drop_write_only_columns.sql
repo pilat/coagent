@@ -1,11 +1,10 @@
 -- +goose Up
 
-ALTER TABLE session_outbox DROP COLUMN releases_input;
 ALTER TABLE sessions DROP COLUMN model_input_boundary;
 
 DROP INDEX idx_subagent_links_undelivered;
 DROP INDEX idx_subagent_links_child;
-ALTER TABLE subagent_links RENAME TO subagent_links_legacy_00056;
+ALTER TABLE subagent_links RENAME TO subagent_links_legacy;
 
 CREATE TABLE subagent_links (
     parent_id INTEGER NOT NULL,
@@ -27,9 +26,9 @@ INSERT INTO subagent_links
      created_at, result, outcome, activation_seq)
 SELECT parent_id, child_id, task_call_id, blocking, depth, state, delivered_at,
        created_at, result, outcome, activation_seq
-FROM subagent_links_legacy_00056;
+FROM subagent_links_legacy;
 
-DROP TABLE subagent_links_legacy_00056;
+DROP TABLE subagent_links_legacy;
 
 CREATE INDEX idx_subagent_links_undelivered
     ON subagent_links(parent_id) WHERE delivered_at IS NULL;

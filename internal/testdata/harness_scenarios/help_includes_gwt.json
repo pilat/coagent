@@ -39,7 +39,7 @@
     },
     {
       "type": "message",
-      "message": "## Session commands\n`/status` — show session status\n`/stop` — stop the current run\n`/clear` — start a fresh session\n`/kill` — close this session\n`/compact [focus]` — compact the context\n`/schedules` — list schedules\n`/budget <request>` — arm, replace, inspect, or clear a one-shot cost/wall-time checkpoint\n`/gwt <name>` — fork into a worktree (work sessions only)"
+      "message": "## Session commands\n`/status` — show session status\n`/stop` — stop the current run\n`/clear` — start a fresh session\n`/kill` — close this session\n`/compact [focus]` — compact the context\n`/schedules` — list schedules\n`/budget <request>` — arm, replace, inspect, or clear a one-shot cost/wall-time checkpoint\n`/gwt <name>` — fork into a worktree"
     },
     {
       "type": "state_changed",
@@ -65,7 +65,7 @@
       "id": 3,
       "session_id": 1,
       "type": "message",
-      "content": "## Session commands\n`/status` — show session status\n`/stop` — stop the current run\n`/clear` — start a fresh session\n`/kill` — close this session\n`/compact [focus]` — compact the context\n`/schedules` — list schedules\n`/budget <request>` — arm, replace, inspect, or clear a one-shot cost/wall-time checkpoint\n`/gwt <name>` — fork into a worktree (work sessions only)",
+      "content": "## Session commands\n`/status` — show session status\n`/stop` — stop the current run\n`/clear` — start a fresh session\n`/kill` — close this session\n`/compact [focus]` — compact the context\n`/schedules` — list schedules\n`/budget <request>` — arm, replace, inspect, or clear a one-shot cost/wall-time checkpoint\n`/gwt <name>` — fork into a worktree",
       "source_key": "input:2:help:result"
     }
   ],

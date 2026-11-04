@@ -289,7 +289,7 @@ A selected session's `→ #N name` header followed by its last three renderable
 output-log rows, oldest first, each with a **session header**. It repeats after
 every selection write, including a re-switch. A compare-and-set then
 acknowledges the newest ID of any type from the same read before live delivery.
-_Avoid_: entry context, unread digest.
+_Avoid_: entry context.
 
 **session title**:
 A live owned root's one-line name, `sessions.attributes.title`, 1–80 characters.

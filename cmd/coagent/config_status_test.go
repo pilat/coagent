@@ -16,10 +16,9 @@ import (
 func TestConfigStatus_WarnsOnceForRemovedManagerKeys(t *testing.T) {
 	parsed, err := config.ParseUnifiedConfig([]byte(`managers:
   - service_topic_name: old
-    assistant_topic_name: old
     service_topic_icon_emoji_id: old
     session_topic_icon_emoji_id: old
-  - assistant_topic_name: repeated
+  - service_topic_name: repeated
 `))
 	require.NoError(t, err)
 	var output bytes.Buffer

@@ -19,16 +19,15 @@ managers:
     bot_token: test-token
     allowed_user_ids: [7]
     service_topic_name: old
-    assistant_topic_name: old
     service_topic_icon_emoji_id: old
     session_topic_icon_emoji_id: old
   - <<: *manager
     id: second
-    assistant_topic_name: ignored
+    service_topic_name: ignored
 `), nil)
 	require.NoError(t, err)
 	assert.Equal(t, []string{
-		"assistant_topic_name", "service_topic_icon_emoji_id", "service_topic_name", "session_topic_icon_emoji_id",
+		"service_topic_icon_emoji_id", "service_topic_name", "session_topic_icon_emoji_id",
 	}, cfg.RemovedManagerKeys)
 	require.Len(t, cfg.Managers, 2)
 	encoded, err := MarshalUnifiedConfig(cfg)

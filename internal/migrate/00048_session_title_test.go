@@ -11,33 +11,28 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestMigrate_55_SessionTitles(t *testing.T) {
+func TestMigrate_00048_SessionTitles(t *testing.T) {
 	t.Parallel()
 	db, err := OpenDB(t.Context(), filepath.Join(t.TempDir(), "titles.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
 	provider := newProvider(t, db)
-	_, err = provider.UpTo(t.Context(), 53)
+	_, err = provider.UpTo(t.Context(), 47)
 	require.NoError(t, err)
 	_, err = db.ExecContext(t.Context(), `INSERT INTO projects(id, work_dir, name) VALUES (1, '/work', 'work')`)
 	require.NoError(t, err)
 	cases := []struct {
-		name, about, title, want, state     string
-		inputs                              []string
-		ownerless, child, assistant, killed bool
+		name, title, want, state string
+		inputs                   []string
+		ownerless, child, killed bool
 	}{
-		{name: "short about", about: "purpose", want: "purpose"},
-		{name: "long about", about: strings.Repeat("界", 200), want: strings.Repeat("界", 79) + "…"},
-		{name: "multiline about", about: " first\r\nsecond ", want: "first  second"},
-		{name: "empty about", about: " \t\r\n ", inputs: []string{"/model x"}},
-		{name: "existing title", about: "old purpose", title: "kept", inputs: []string{"new input"}, want: "kept"},
+		{name: "existing title", title: "kept", inputs: []string{"new input"}, want: "kept"},
+		{name: "first input wins", inputs: []string{"first request", "later request"}, want: "first request"},
 		{name: "skip command", inputs: []string{"/model x", "fix login 500\nmore"}, want: "fix login 500"},
-		{name: "about wins", about: "purpose", inputs: []string{"inbox request"}, want: "purpose"},
 		{name: "only commands", inputs: []string{"/skill foo", "/model x"}},
 		{name: "skip blanks", inputs: []string{"   ", "\n", "deploy staging"}, want: "deploy staging"},
 		{name: "ownerless", ownerless: true, inputs: []string{"request"}},
 		{name: "child", child: true, inputs: []string{"request"}},
-		{name: "assistant", assistant: true, inputs: []string{"request"}},
 		{name: "long input", inputs: []string{strings.Repeat("界", 81)}, want: strings.Repeat("界", 79) + "…"},
 		{name: "exact limit", inputs: []string{strings.Repeat("界", 80)}, want: strings.Repeat("界", 80)},
 		{name: "CRLF", inputs: []string{"first\r\nsecond"}, want: "first"},
@@ -61,9 +56,6 @@ func TestMigrate_55_SessionTitles(t *testing.T) {
 			raw, err := json.Marshal(attrs)
 			require.NoError(t, err)
 			agentType, parent, status := "build", 0, "active"
-			if tt.assistant {
-				agentType = "assistant"
-			}
 			if tt.child {
 				parent = 1
 			}
@@ -81,11 +73,7 @@ func TestMigrate_55_SessionTitles(t *testing.T) {
 				status,
 			)
 			require.NoError(t, err)
-			if tt.about != "" {
-				_, err = db.ExecContext(t.Context(), `INSERT INTO assistant_work(session_id, about, created_at)
-					VALUES (?, ?, CURRENT_TIMESTAMP)`, id, tt.about)
-				require.NoError(t, err)
-			}
+
 			_, err = db.ExecContext(
 				t.Context(),
 				`INSERT INTO session_inbox(session_id, source, raw_content, attributes, received_at)
@@ -111,9 +99,8 @@ func TestMigrate_55_SessionTitles(t *testing.T) {
 			}
 		})
 	}
-	_, err = provider.UpTo(t.Context(), 55)
+	_, err = provider.UpTo(t.Context(), 48)
 	require.NoError(t, err)
-	assert.False(t, tableExists(t, db, "assistant_work"))
 	rows, err := db.QueryContext(
 		t.Context(),
 		`SELECT json_extract(attributes, '$.title'), json_extract(attributes, '$.keep') FROM sessions ORDER BY id`,

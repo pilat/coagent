@@ -12,7 +12,6 @@ import (
 
 var removedManagerKeys = map[string]bool{
 	"service_topic_name":          true,
-	"assistant_topic_name":        true,
 	"service_topic_icon_emoji_id": true,
 	"session_topic_icon_emoji_id": true,
 }

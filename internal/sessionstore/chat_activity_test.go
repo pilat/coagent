@@ -45,7 +45,7 @@ func TestChatSessions_LastActivitySources(t *testing.T) {
 		wantFirst                bool
 	}{
 		{name: "user", source: "user", wantFirst: true},
-		{name: "assistant", source: "user", attributes: `{"from":"assistant"}`, wantFirst: true},
+		{name: "user with attributes", source: "user", attributes: `{"channel":"telegram"}`, wantFirst: true},
 		{name: "agent", source: "agent", wantFirst: true},
 		{name: "process", source: "process"},
 		{name: "schedule", source: "schedule"},

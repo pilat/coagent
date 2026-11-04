@@ -20,7 +20,7 @@ func TitleFromInput(content string) string {
 	return controllerapi.SessionTitleFromInput(content)
 }
 
-// SetSessionTitle renames only live work roots owned by the manager, preserving list order.
+// SetSessionTitle renames only live roots owned by the manager, preserving list order.
 func (s *Store) SetSessionTitle(ctx context.Context, managerID string, sessionID int64, raw string) error {
 	title, ok := NormalizeTitle(raw)
 	if !ok {

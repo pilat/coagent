@@ -97,7 +97,7 @@ func TestHarnessScenario_ReplaySelectsFirstOwnedMessageAndSkipsOtherTails(t *tes
 			{ID: 1, SessionID: 1, Type: controllerapi.OutputMessage, Content: "foreign"},
 			{ID: 2, SessionID: 3, Type: controllerapi.OutputSessionOpened},
 			{ID: 3, SessionID: 2, Type: controllerapi.OutputMessage, Content: "selected first"},
-			{ID: 4, SessionID: 3, Type: controllerapi.OutputMessage, Content: "other unread"},
+			{ID: 4, SessionID: 3, Type: controllerapi.OutputMessage, Content: "other output"},
 			{ID: 5, SessionID: 2, Type: controllerapi.OutputMessage, Content: "selected second"},
 		},
 	}
