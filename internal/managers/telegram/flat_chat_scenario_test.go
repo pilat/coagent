@@ -284,8 +284,7 @@ func enqueueChatMessage(t *testing.T, h *delayedTelegramHarness, sessionID int64
 func newChatTelegramManager(t *testing.T, h *delayedTelegramHarness) *Manager {
 	t.Helper()
 	m, err := New(config.ManagerEntry{
-		ID: delayedTelegramManagerID, BotToken: "test-token", AllowedUserIDs: []int64{7},
-		TargetChatID: new(int64(harnessChatID)),
+		ID: delayedTelegramManagerID, BotToken: "test-token", AllowedUserIDs: []int64{harnessChatID},
 	}, nil, h.controller)
 	require.NoError(t, err)
 	m.httpClient = &http.Client{Transport: h.recorder}
@@ -294,6 +293,6 @@ func newChatTelegramManager(t *testing.T, h *delayedTelegramHarness) *Manager {
 
 func chatTelegramUpdate(text string) telegramUpdate {
 	return telegramUpdate{Message: &telegramMessage{
-		From: &telegramUser{ID: 7}, Chat: telegramChat{ID: harnessChatID}, Text: text,
+		From: &telegramUser{ID: harnessChatID}, Chat: telegramChat{ID: harnessChatID}, Text: text,
 	}}
 }

@@ -22,7 +22,7 @@ func TestPreflightWithRetry_RetriesEachTransientRemoteCall(t *testing.T) {
 	attempts := make(map[string]int)
 
 	manager := &Manager{
-		cfg: config.ManagerEntry{BotToken: "token", TargetChatID: new(int64(-100123))},
+		cfg: config.ManagerEntry{BotToken: "token", AllowedUserIDs: []int64{7}},
 		httpClient: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 			method := filepath.Base(req.URL.Path)
 			attempts[method]++
@@ -36,7 +36,7 @@ func TestPreflightWithRetry_RetriesEachTransientRemoteCall(t *testing.T) {
 			case "getChat":
 				return telegramResponse(
 					req,
-					`{"ok":true,"result":{"id":-100123,"type":"supergroup"}}`,
+					`{"ok":true,"result":{"id":7,"type":"private"}}`,
 				), nil
 			default:
 				t.Fatalf("unexpected Telegram method %q", method)
@@ -265,7 +265,7 @@ func (permanentNetworkError) Temporary() bool { return false }
 func managerBlockedInPreflight(requestStarted chan<- struct{}) *Manager {
 	return &Manager{
 		id:         "telegram-test",
-		cfg:        config.ManagerEntry{BotToken: "token", TargetChatID: new(int64(-100123))},
+		cfg:        config.ManagerEntry{BotToken: "token", AllowedUserIDs: []int64{7}},
 		controller: &fakeController{},
 		httpClient: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 			select {

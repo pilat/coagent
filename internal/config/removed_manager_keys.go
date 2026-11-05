@@ -14,6 +14,7 @@ var removedManagerKeys = map[string]bool{
 	"service_topic_name":          true,
 	"service_topic_icon_emoji_id": true,
 	"session_topic_icon_emoji_id": true,
+	"target_chat_id":              true,
 }
 
 func stripRemovedManagerKeys(data []byte) ([]byte, []string, error) {

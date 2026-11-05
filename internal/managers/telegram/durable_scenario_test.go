@@ -133,7 +133,7 @@ func replayDaemonTraceThroughOutbox(t *testing.T, trace harnessTraceFile) []tele
 	}
 
 	manager, err := New(config.ManagerEntry{
-		ID: replayManagerID, BotToken: "test-token", TargetChatID: new(int64(harnessChatID)),
+		ID: replayManagerID, BotToken: "test-token", AllowedUserIDs: []int64{harnessChatID},
 	}, nil, controller)
 	require.NoError(t, err)
 	recorder := &delayedTelegramRecorder{}

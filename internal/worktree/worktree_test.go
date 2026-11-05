@@ -149,7 +149,7 @@ func TestCreateWorktree_RemoveClosureRollsEverythingBack(t *testing.T) {
 	assert.False(t, exists, "remove must delete the branch too")
 }
 
-func TestCreateWorktree_CapsDisplayNameForTopics(t *testing.T) {
+func TestCreateWorktree_CapsDisplayNameForSessionLists(t *testing.T) {
 	clone := setupNamedClone(t, strings.Repeat("r", 140))
 	s := serviceWithWorktreesRoot(t)
 
@@ -157,7 +157,7 @@ func TestCreateWorktree_CapsDisplayNameForTopics(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.LessOrEqual(t, utf8.RuneCountInString(wt.DisplayName), 128,
-		"display name must fit a manager's topic limit")
+		"display name must stay compact in session listings")
 	assert.True(t, strings.HasSuffix(wt.DisplayName, "/api"), "branch segment must survive capping")
 	assert.Equal(t, "api", filepath.Base(wt.Path))
 }

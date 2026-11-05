@@ -32,7 +32,6 @@ managers:
       bot_token: ${MANAGER_TG_BOT_TOKEN}
       allowed_user_ids:
         - 7
-      target_chat_id: -100
 `
 
 //nolint:gosec // fake credentials
@@ -139,7 +138,6 @@ managers:
       bot_token: ${MANAGER_TG_BOT_TOKEN}
       allowed_user_ids:
         - 7
-      target_chat_id: -100
 `
 	f.applied(t, candidate)
 

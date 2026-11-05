@@ -16,8 +16,7 @@ import (
 func newCmdTestManager(t *testing.T, ctrl *fakeController, messages *[]string) *Manager {
 	t.Helper()
 	m, err := New(config.ManagerEntry{
-		ID: "telegram-main", BotToken: "test-token", TargetChatID: new(int64(harnessChatID)),
-		AllowedUserIDs: []int64{42},
+		ID: "telegram-main", BotToken: "test-token", AllowedUserIDs: []int64{harnessChatID},
 	}, nil, ctrl)
 	require.NoError(t, err)
 	m.httpClient = &http.Client{Transport: telegramMessageRecorder(t, messages)}

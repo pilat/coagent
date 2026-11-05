@@ -85,9 +85,10 @@ _Avoid_: using "controller" for a front-end integration — that is a manager.
 
 **manager**:
 A built-in front end that drives the daemon through its private controller.
-A Telegram manager owns one durable manager ID, one bot account, one chat and
-one polling instance. Enabled managers cannot reuse a bot token. Adding a
-manager is a source-level contribution, not a third-party plugin.
+A Telegram manager owns one durable manager ID, one bot account, one private chat
+with its sole allowed user and one polling instance. Enabled managers cannot
+reuse a bot token. Adding a manager is a source-level contribution, not a
+third-party plugin.
 _Avoid_: controller, bot, adapter, integration.
 
 **manager ownership**:

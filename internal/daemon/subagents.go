@@ -431,7 +431,7 @@ func (s *Service) completionContent(ctx context.Context, link subagent.Link) str
 	return subagent.FormatChildResult(res)
 }
 
-// A child that failed before announcement has no topic, so failures go to its parent.
+// A child is never a chat-selectable root, so its failures go to its parent.
 func (s *Service) notifyChildFailure(ctx context.Context, parentID, childID int64, what string, err error) {
 	if parentID == 0 {
 		return

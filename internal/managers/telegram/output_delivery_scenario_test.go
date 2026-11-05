@@ -168,7 +168,7 @@ func TestHarnessScenario_StartFailureCannotFloodTelegram(t *testing.T) {
 	require.NoError(t, chat.SetChatFocus(t.Context(), strconv.FormatInt(harnessChatID, 10), id))
 	for round := range 2 {
 		manager, err := New(config.ManagerEntry{
-			ID: delayedTelegramManagerID, BotToken: "test-token", TargetChatID: new(int64(harnessChatID)),
+			ID: delayedTelegramManagerID, BotToken: "test-token", AllowedUserIDs: []int64{harnessChatID},
 		}, &config.UnifiedConfig{}, h.controller)
 		require.NoError(t, err)
 		manager.httpClient = &http.Client{Transport: h.recorder}

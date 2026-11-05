@@ -1,7 +1,7 @@
 package telegram
 
 import (
-	"fmt"
+	"encoding/json"
 	"net/http"
 	"path/filepath"
 	"testing"
@@ -13,22 +13,48 @@ import (
 )
 
 func TestPreflight_UsesOnlyIdentityAndChat(t *testing.T) {
-	for _, chatType := range []string{"private", "group", "supergroup"} {
-		t.Run(chatType, func(t *testing.T) {
-			var methods []string
-			m := &Manager{
-				cfg: config.ManagerEntry{BotToken: "test-token", AllowedUserIDs: []int64{7}},
-				httpClient: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-					method := filepath.Base(req.URL.Path)
-					methods = append(methods, method)
-					if method == "getMe" {
-						return telegramResponse(req, `{"ok":true,"result":{"id":9}}`), nil
-					}
-					return telegramResponse(req, fmt.Sprintf(`{"ok":true,"result":{"id":7,"type":%q}}`, chatType)), nil
-				})},
-			}
-			require.NoError(t, m.preflight(t.Context()))
-			assert.Equal(t, []string{"getMe", "getChat"}, methods)
+	t.Run("private", func(t *testing.T) {
+		var methods []string
+		m := &Manager{
+			cfg: config.ManagerEntry{BotToken: "test-token", AllowedUserIDs: []int64{7}},
+			httpClient: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				method := filepath.Base(req.URL.Path)
+				methods = append(methods, method)
+				if method == "getMe" {
+					return telegramResponse(req, `{"ok":true,"result":{"id":9}}`), nil
+				}
+				var body struct {
+					ChatID int64 `json:"chat_id"`
+				}
+				require.NoError(t, json.NewDecoder(req.Body).Decode(&body))
+				assert.Equal(t, int64(7), body.ChatID)
+				return telegramResponse(req, `{"ok":true,"result":{"id":7,"type":"private"}}`), nil
+			})},
+		}
+		require.NoError(t, m.preflight(t.Context()))
+		assert.Equal(t, []string{"getMe", "getChat"}, methods)
+	})
+}
+
+func TestNew_RequiresOnePositiveAllowedUser(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		ids  []int64
+	}{
+		{name: "missing"},
+		{name: "empty", ids: []int64{}},
+		{name: "multiple", ids: []int64{7, 8}},
+		{name: "duplicate", ids: []int64{7, 7}},
+		{name: "zero", ids: []int64{0}},
+		{name: "negative", ids: []int64{-7}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			manager, err := New(config.ManagerEntry{
+				BotToken: "test-token", AllowedUserIDs: tt.ids,
+			}, nil, &fakeController{})
+			require.EqualError(t, err, "private chat requires exactly one positive allowed user id")
+			assert.Nil(t, manager)
 		})
 	}
 }

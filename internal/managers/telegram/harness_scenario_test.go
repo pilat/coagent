@@ -19,7 +19,7 @@ import (
 
 const (
 	harnessSessionID = 42
-	harnessChatID    = -100123
+	harnessChatID    = 7
 	renderedGolden   = "rendered.json"
 )
 
@@ -179,7 +179,7 @@ func newTelegramHarnessManager(
 ) *Manager {
 	t.Helper()
 	manager, err := New(config.ManagerEntry{
-		ID: "telegram-main", BotToken: "test-token", TargetChatID: new(int64(harnessChatID)),
+		ID: "telegram-main", BotToken: "test-token", AllowedUserIDs: []int64{harnessChatID},
 	}, nil, controller)
 	require.NoError(t, err)
 	manager.httpClient = &http.Client{Transport: telegramHarnessRecorder(t, calls)}

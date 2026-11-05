@@ -67,7 +67,7 @@ func TestOutputTransport_ParseFallbackRetriesOnlyRejectedChunk(t *testing.T) {
 	var texts []string
 	var modes []string
 	manager := &Manager{
-		cfg: config.ManagerEntry{BotToken: "test-token", TargetChatID: new(int64(1))},
+		cfg: config.ManagerEntry{BotToken: "test-token", AllowedUserIDs: []int64{1}},
 		httpClient: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 			var body map[string]any
 			require.NoError(t, json.NewDecoder(req.Body).Decode(&body))
@@ -91,7 +91,7 @@ func TestOutputTransport_ParseFallbackRetriesOnlyRejectedChunk(t *testing.T) {
 func TestOutputTransport_ParseFallbackReportsItsFinalChatFailure(t *testing.T) {
 	calls := 0
 	manager := &Manager{
-		cfg: config.ManagerEntry{BotToken: "test-token", TargetChatID: new(int64(1))},
+		cfg: config.ManagerEntry{BotToken: "test-token", AllowedUserIDs: []int64{1}},
 		httpClient: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 			calls++
 			if calls == 1 {

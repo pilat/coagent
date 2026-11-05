@@ -48,7 +48,7 @@ func TestVoice_TranscribesEchoesAndForwardsToSelectedSession(t *testing.T) {
 		}
 	})}
 	manager.processUpdate(t.Context(), telegramUpdate{Message: &telegramMessage{
-		MessageID: 10, From: &telegramUser{ID: 42}, Chat: telegramChat{ID: harnessChatID},
+		MessageID: 10, From: &telegramUser{ID: harnessChatID}, Chat: telegramChat{ID: harnessChatID},
 		Voice: &telegramVoiceMessage{FileID: "voice-file"},
 	}})
 	assert.Equal(t, []string{"sendChatAction", "getFile", "download", "transcriptions", "sendMessage"}, methods)

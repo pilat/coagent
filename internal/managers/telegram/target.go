@@ -9,14 +9,6 @@ import (
 )
 
 func (m *Manager) resolveChatID() (int64, error) {
-	if m.cfg.TargetChatID != nil {
-		if *m.cfg.TargetChatID == 0 {
-			return 0, errors.New("target chat id must be non-zero")
-		}
-
-		return *m.cfg.TargetChatID, nil
-	}
-
 	if len(m.cfg.AllowedUserIDs) != 1 || m.cfg.AllowedUserIDs[0] <= 0 {
 		return 0, errors.New("private chat requires exactly one positive allowed user id")
 	}
@@ -58,7 +50,7 @@ func (m *Manager) preflightWithRetry(ctx context.Context, policy startupRetryPol
 
 	_, err = m.getChatWithStartupRetry(preflightCtx, policy)
 	if err != nil {
-		if isChatNotFound(err) && m.cfg.TargetChatID == nil {
+		if isChatNotFound(err) {
 			return errors.New("private chat not found; open the bot and send /start first")
 		}
 

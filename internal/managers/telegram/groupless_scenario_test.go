@@ -17,6 +17,47 @@ import (
 	"github.com/pilat/coagent/internal/controllerapi"
 )
 
+func TestHarnessScenario_OnlySoleUserPrivateChatIsAccepted(t *testing.T) {
+	h := newDelayedTelegramHarness(t)
+	id := createChatWork(t, h)
+	chat := h.controller.(controllerapi.ChatFocusController)
+	require.NoError(t, chat.SetChatFocus(t.Context(), strconv.FormatInt(harnessChatID, 10), id))
+	m := newChatTelegramManager(t, h)
+	for _, sender := range []struct {
+		chatID int64
+		user   *telegramUser
+	}{
+		{chatID: -7, user: &telegramUser{ID: harnessChatID}},
+		{chatID: 8, user: &telegramUser{ID: harnessChatID}},
+		{chatID: harnessChatID, user: &telegramUser{ID: 8}},
+		{chatID: harnessChatID},
+	} {
+		m.processUpdate(t.Context(), telegramUpdate{Message: &telegramMessage{
+			Chat: telegramChat{ID: sender.chatID}, From: sender.user, Text: "must be ignored",
+		}})
+	}
+	m.processUpdate(t.Context(), chatTelegramUpdate("private input"))
+	var inputs []string
+	require.NoError(t, h.sessions.WithTx(t.Context(), func(tx *sql.Tx) error {
+		rows, err := tx.QueryContext(t.Context(),
+			`SELECT raw_content FROM session_inbox WHERE session_id = ? ORDER BY id`, id)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var content string
+			if err := rows.Scan(&content); err != nil {
+				return err
+			}
+			inputs = append(inputs, content)
+		}
+		return rows.Err()
+	}))
+	assert.Equal(t, []string{"private input"}, inputs)
+	assert.Empty(t, chatMessages(h))
+}
+
 func TestHarnessScenario_NoFocusAnswersHintOnce(t *testing.T) {
 	h := newDelayedTelegramHarness(t)
 	m := newChatTelegramManager(t, h)
@@ -34,11 +75,11 @@ func TestHarnessScenario_NoFocusAnswersHintOnce(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, m.Stop(context.Background())) })
 	for _, update := range []telegramUpdate{
 		chatTelegramUpdate("plain text"),
-		{Message: &telegramMessage{From: &telegramUser{ID: 7}, Chat: telegramChat{ID: harnessChatID}, Voice: &telegramVoiceMessage{FileID: "voice"}}},
-		{Message: &telegramMessage{From: &telegramUser{ID: 7}, Chat: telegramChat{ID: harnessChatID}, Caption: "caption", Photo: []telegramPhotoSize{{FileID: "photo"}}}},
-		{Message: &telegramMessage{From: &telegramUser{ID: 7}, Chat: telegramChat{ID: harnessChatID}, Document: &telegramDocument{FileID: "document"}}},
-		{Message: &telegramMessage{From: &telegramUser{ID: 7}, Chat: telegramChat{ID: harnessChatID}, Video: &telegramVideo{FileID: "video"}}},
-		{Message: &telegramMessage{From: &telegramUser{ID: 7}, Chat: telegramChat{ID: harnessChatID}, Caption: "audio caption", Audio: &telegramAudio{FileID: "audio"}}},
+		{Message: &telegramMessage{From: &telegramUser{ID: harnessChatID}, Chat: telegramChat{ID: harnessChatID}, Voice: &telegramVoiceMessage{FileID: "voice"}}},
+		{Message: &telegramMessage{From: &telegramUser{ID: harnessChatID}, Chat: telegramChat{ID: harnessChatID}, Caption: "caption", Photo: []telegramPhotoSize{{FileID: "photo"}}}},
+		{Message: &telegramMessage{From: &telegramUser{ID: harnessChatID}, Chat: telegramChat{ID: harnessChatID}, Document: &telegramDocument{FileID: "document"}}},
+		{Message: &telegramMessage{From: &telegramUser{ID: harnessChatID}, Chat: telegramChat{ID: harnessChatID}, Video: &telegramVideo{FileID: "video"}}},
+		{Message: &telegramMessage{From: &telegramUser{ID: harnessChatID}, Chat: telegramChat{ID: harnessChatID}, Caption: "audio caption", Audio: &telegramAudio{FileID: "audio"}}},
 		chatTelegramUpdate("/status"), chatTelegramUpdate("/model"),
 	} {
 		before := len(chatMessages(h))

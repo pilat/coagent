@@ -245,17 +245,9 @@ func (c *UnifiedConfig) validateTelegramManager(m *ManagerEntry) error {
 		return fmt.Errorf("manager %q (driver: telegram) requires \"bot_token\" to be set", m.ID)
 	}
 
-	if len(m.AllowedUserIDs) == 0 {
-		return fmt.Errorf("manager %q (driver: telegram) requires \"allowed_user_ids\" to be non-empty", m.ID)
-	}
-
-	if m.TargetChatID != nil {
-		if *m.TargetChatID == 0 {
-			return fmt.Errorf("manager %q (driver: telegram) requires \"target_chat_id\" to be non-zero", m.ID)
-		}
-	} else if len(m.AllowedUserIDs) != 1 || m.AllowedUserIDs[0] <= 0 {
+	if len(m.AllowedUserIDs) != 1 || m.AllowedUserIDs[0] <= 0 {
 		return fmt.Errorf(
-			"manager %q (driver: telegram) without \"target_chat_id\" requires exactly one positive \"allowed_user_ids\" entry",
+			"manager %q (driver: telegram) requires exactly one positive \"allowed_user_ids\" entry",
 			m.ID,
 		)
 	}

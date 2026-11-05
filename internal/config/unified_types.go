@@ -125,7 +125,6 @@ type (
 
 		BotToken         string  `yaml:"bot_token,omitempty"`
 		AllowedUserIDs   []int64 `yaml:"allowed_user_ids,omitempty"`
-		TargetChatID     *int64  `yaml:"target_chat_id,omitempty"`
 		SendChunkDelayMS int     `yaml:"send_chunk_delay_ms,omitempty"`
 		PollTimeoutSec   int     `yaml:"poll_timeout_sec,omitempty"`
 

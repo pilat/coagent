@@ -1083,10 +1083,11 @@ liveness validation, DTO conversion, focus/cursor operations and project resolut
 `managerdiscovery` owns project, model, skill and filesystem discovery. The
 composition root supplies the daemon backend, store, discovery and session bus.
 
-Each Telegram manager owns one private or group chat. Startup validates the bot
-and chat, binds the chat without overwriting its selection or cursor, and starts
-polling and the send-only chat loop. NULL focus creates no session. Plain text,
-captions, media, voice and focus-scoped commands receive exactly one local line:
+Each Telegram manager owns one private chat with its sole allowed user. Startup
+validates the bot and chat, binds the chat without overwriting its selection or
+cursor, and starts polling and the send-only chat loop. NULL focus creates no
+session. Plain text, captions, media, voice and focus-scoped commands receive
+exactly one local line:
 `No session in focus. /new, /spawn or /switch N.` No-focus voice is not
 transcribed and media is not downloaded. `/new`, `/spawn`, `/sessions`,
 `/switch N`, numbered `/kill N` and `/stop N`, `/help` and `/start` remain

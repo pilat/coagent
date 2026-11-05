@@ -29,6 +29,8 @@ user is in and how far that session has been shown, and nothing more.
 
 **Transport.** Each manager owns exactly one chat. It sends only new text messages
 and reads slash commands. It never edits, never deletes, never shows a keyboard.
+The Telegram manager's chat is the private chat with its sole allowed user;
+groups, including flat groups, are unsupported.
 
 **Focus.** `chat_focus(manager_id, chat_id) → session_id` holds one live
 manager-owned root, or NULL: no session in focus. Start-up binding inserts NULL and
@@ -146,7 +148,7 @@ and `sessions.manager_reply_pending`.
   the tool receipts, command results and notices the user actually sees. Rejected:
   `session_outbox` is the user-visible log.
 - **Skip a permanently failing row unconditionally.** One rule, never stalls.
-  Rejected: a 400 that is really about the chat (lost rights, migrated group) would
+  Rejected: a 400 that is really about the chat (lost rights, blocked bot) would
   silently advance the cursor through the whole tail. The warning probe tells a bad
   row from a dead chat.
 - **Keep a management session reachable by its own command.** It would preserve the

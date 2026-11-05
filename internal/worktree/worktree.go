@@ -20,8 +20,7 @@ import (
 // may already be canceled, and a wedged git there must not block the caller.
 const rollbackTimeout = 30 * time.Second
 
-// maxDisplayNameRunes caps "<repo>/<branch>" so managers with a display limit
-// (Telegram topics: 128) can always create the fork's surface.
+// Bounds a "<repo>/<branch>" row in /sessions.
 const maxDisplayNameRunes = 128
 
 // Result owns a newly created branch and worktree until its root session exists.

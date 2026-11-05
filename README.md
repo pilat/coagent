@@ -49,9 +49,9 @@ sandbox needs only `bwrap` (Bubblewrap) on the host.
 Updating is a manual binary replace plus `coagent restart`.
 
 For Telegram, create a bot with BotFather, send it `/start`, and configure your
-numeric user ID in the manager's allowed users. The default target is the private
-chat with that sole allowed user. To use a group, add the bot and configure its
-numeric `target_chat_id`. Each enabled manager needs its own bot token.
+numeric user ID as the sole entry in the manager's `allowed_user_ids` list. The
+manager uses the private chat with that user. Each enabled manager needs its
+own bot token.
 
 One chat holds the sessions you select with `/switch N`. With no session
 in focus, text and media receive `No session in focus. /new, /spawn or /switch N.`
