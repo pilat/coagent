@@ -30,7 +30,9 @@ func (w *chatLoop) prepare(ctx context.Context, focus int64) error {
 		return fmt.Errorf("read chat entry: %w", err)
 	}
 
-	prelude := []chatPreludeItem{{text: strings.TrimSpace(fmt.Sprintf("→ #%d %s", focus, name))}}
+	header := strings.TrimSpace(fmt.Sprintf("→ #%d %s", focus, strings.ReplaceAll(name, "*", "")))
+
+	prelude := []chatPreludeItem{{text: "**" + header + "**"}}
 	for i := range rows {
 		prelude = append(prelude, chatPreludeItem{row: &rows[i]})
 	}
@@ -41,5 +43,5 @@ func (w *chatLoop) prepare(ctx context.Context, focus int64) error {
 }
 
 func chatRowText(focus int64, row ChatRow) string {
-	return fmt.Sprintf("#%d %s\n%s", focus, row.Name, row.Content)
+	return fmt.Sprintf("**#%d %s**\n\n%s", focus, strings.ReplaceAll(row.Name, "*", ""), row.Content)
 }

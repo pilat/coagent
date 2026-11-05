@@ -286,7 +286,7 @@ including re-switch and clear, reset it to NULL; restart preserves it.
 _Avoid_: per-session read tracking, transport receipt.
 
 **entry**:
-A selected session's `→ #N name` header followed by its last three renderable
+A selected session's bold `→ #N name` header followed by its last three renderable
 output-log rows, oldest first, each with a **session header**. It repeats after
 every selection write, including a re-switch. A compare-and-set then
 acknowledges the newest ID of any type from the same read before live delivery.
@@ -300,9 +300,9 @@ renames it with `/title`. A `/clear` replacement starts untitled. A chat shows
 _Avoid_: label, session name.
 
 **session header**:
-The `#<id> <Name>` line prefixed at delivery to every renderable root row,
-including entry rows, using the same display name as `/sessions`. It is never
-stored in the output log.
+The bold `#<id> <Name>` line, then a blank line, prefixed at delivery to every
+renderable root row, including entry rows. It uses the `/sessions` display name
+with asterisks removed and is never stored in the output log.
 _Avoid_: entry header (the `→ #N <Name>` line that precedes entry rows).
 
 **tool trail**:

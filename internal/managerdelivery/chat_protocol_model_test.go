@@ -69,7 +69,7 @@ func TestHarnessModel_ChatSwitchAwayStopsOldTail(t *testing.T) {
 				require.Zero(t, w.pass(t.Context()))
 				assert.Equal(t, int64(126), fake.cursor)
 				assert.Equal(t, []string{
-					"→ #9 B", "#9 B\nB answer",
+					"**→ #9 B**", "**#9 B**\n\nB answer",
 				}, model.prelude)
 			})
 		}
@@ -99,7 +99,7 @@ func TestChatLoop_KillResetCASPreservesNewSelection(t *testing.T) {
 	w := NewChat(fake, fake).(*chatLoop)
 	require.Zero(t, w.pass(t.Context()))
 	assert.Equal(t, int64(9), fake.focus)
-	assert.Equal(t, []string{"#12 project - 12\nSession killed."}, fake.sent)
+	assert.Equal(t, []string{"**#12 project - 12**\n\nSession killed."}, fake.sent)
 	assert.Zero(t, fake.cursor)
 	assert.False(t, fake.entered)
 }
@@ -119,13 +119,13 @@ func (m *killDeliveryModel) acceptSend(t *testing.T, text string) {
 		t.Fatalf("unexpected send after focus reset: %s", text)
 	}
 
-	expected := []string{"#12 project - 12\nanswer"}
+	expected := []string{"**#12 project - 12**\n\nanswer"}
 	if m.terminating {
-		expected = append(expected, "#12 project - 12\nStopping session...")
+		expected = append(expected, "**#12 project - 12**\n\nStopping session...")
 	}
 
 	if m.killed {
-		expected = append(expected, "#12 project - 12\nSession killed.")
+		expected = append(expected, "**#12 project - 12**\n\nSession killed.")
 	}
 
 	require.Less(t, len(m.delivered), len(expected), "unexpected send after obligations drained")
@@ -137,7 +137,9 @@ func (m *killDeliveryModel) acceptReset(t *testing.T, cursor int64) {
 	t.Helper()
 	require.True(t, m.killed, "the terminating fence is insufficient for reset")
 	require.Equal(t, []string{
-		"#12 project - 12\nanswer", "#12 project - 12\nStopping session...", "#12 project - 12\nSession killed.",
+		"**#12 project - 12**\n\nanswer",
+		"**#12 project - 12**\n\nStopping session...",
+		"**#12 project - 12**\n\nSession killed.",
 	}, m.delivered)
 	require.Equal(t, int64(3), cursor, "close must advance the cursor before reset")
 	m.reset = true
@@ -155,17 +157,17 @@ func (m *switchDeliveryModel) acceptSend(t *testing.T, text string) {
 	if !m.switched {
 		require.Less(t, m.sent, m.cutoff, "old-session sends must stop at the switch")
 		m.sent++
-		require.Equal(t, fmt.Sprintf("#12 A\nA%d", m.sent), text)
+		require.Equal(t, fmt.Sprintf("**#12 A**\n\nA%d", m.sent), text)
 		return
 	}
 
-	if len(m.prelude) == 0 && text == fmt.Sprintf("#12 A\nA%d", m.cutoff+1) {
+	if len(m.prelude) == 0 && text == fmt.Sprintf("**#12 A**\n\nA%d", m.cutoff+1) {
 		require.Equal(t, m.cutoff, m.sent, "at most one old-focus send after the switch")
 		m.sent++
 		return
 	}
 
-	expected := []string{"→ #9 B", "#9 B\nB answer"}
+	expected := []string{"**→ #9 B**", "**#9 B**\n\nB answer"}
 	require.Less(t, len(m.prelude), len(expected), "unexpected send after the new tail")
 	require.Equal(t, expected[len(m.prelude)], text, "a session switch must send only its own tail")
 	m.prelude = append(m.prelude, text)
@@ -233,8 +235,8 @@ func runChatKillInterleaving(t *testing.T, fenceAt, killAt int) {
 	require.Zero(t, fake.focus)
 	require.Zero(t, w.pass(t.Context()))
 	assert.Equal(t, []string{
-		"#12 project - 12\nanswer", "#12 project - 12\nStopping session...",
-		"#12 project - 12\nSession killed.",
+		"**#12 project - 12**\n\nanswer", "**#12 project - 12**\n\nStopping session...",
+		"**#12 project - 12**\n\nSession killed.",
 	}, fake.sent)
 	assert.Zero(t, fake.cursor)
 	assert.False(t, fake.entered)
@@ -252,7 +254,7 @@ func TestHarnessModel_ChatCursorAdvancesOnlyUnderItsFocus(t *testing.T) {
 			fake.onSend = func(string) { fake.selectFocus(target) }
 			loop := NewChat(fake, fake).(*chatLoop)
 			require.Zero(t, loop.pass(t.Context()))
-			assert.Equal(t, []string{"#7 project - 7\nin flight"}, fake.sent)
+			assert.Equal(t, []string{"**#7 project - 7**\n\nin flight"}, fake.sent)
 			assert.Equal(t, target, fake.focus)
 			assert.False(t, fake.entered)
 			assert.Zero(t, fake.cursor)
@@ -271,7 +273,9 @@ func TestHarnessModel_EntryOwedSurvivesRestart(t *testing.T) {
 	require.NoError(t, first.Stop(t.Context()))
 	loop := NewChat(fake, fake).(*chatLoop)
 	require.Zero(t, loop.pass(t.Context()))
-	assert.Equal(t, []string{"→ #12 work ⏰", "#12 work\n3", "#12 work\n4", "#12 work\n5"}, fake.sent)
+	assert.Equal(t, []string{
+		"**→ #12 work ⏰**", "**#12 work**\n\n3", "**#12 work**\n\n4", "**#12 work**\n\n5",
+	}, fake.sent)
 	assert.True(t, fake.entered)
 	assert.EqualValues(t, 5, fake.cursor)
 	require.Zero(t, loop.pass(t.Context()))

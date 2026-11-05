@@ -126,7 +126,7 @@ func TestHarnessScenario_KillFocusLeavesNoFocus(t *testing.T) {
 	require.NotEmpty(t, messages)
 	assert.Equal(
 		t,
-		fmt.Sprintf("#%d project\nSession killed. Cancelled background processes: 0", id),
+		fmt.Sprintf("<b>#%d project</b>\n\nSession killed. Cancelled background processes: 0", id),
 		messages[len(messages)-1],
 	)
 	var selected sql.NullInt64

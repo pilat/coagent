@@ -62,7 +62,7 @@ func TestChatLoop_StartupTailAndFocusChange(t *testing.T) {
 	}
 	w := NewChat(fake, fake).(*chatLoop)
 	require.Zero(t, w.pass(t.Context()))
-	assert.Equal(t, []string{"#12 project - 12\nfirst", "#12 project - 12\nsecond"}, fake.sent)
+	assert.Equal(t, []string{"**#12 project - 12**\n\nfirst", "**#12 project - 12**\n\nsecond"}, fake.sent)
 	assert.Equal(t, int64(4), fake.cursor)
 	assert.Equal(t, int64(12), w.Focus())
 	assert.NotContains(t, fake.reads, int64(9))
@@ -70,14 +70,14 @@ func TestChatLoop_StartupTailAndFocusChange(t *testing.T) {
 	fake.selectFocus(9)
 	require.Zero(t, w.pass(t.Context()))
 	assert.Equal(t, []string{
-		"#12 project - 12\nfirst", "#12 project - 12\nsecond", "→ #9 project - 9",
-		"#9 project - 9\nother tail",
+		"**#12 project - 12**\n\nfirst", "**#12 project - 12**\n\nsecond", "**→ #9 project - 9**",
+		"**#9 project - 9**\n\nother tail",
 	}, fake.sent)
 	assert.EqualValues(t, 10, fake.cursor)
 
 	fake.selectFocus(12)
 	require.Zero(t, w.pass(t.Context()))
-	assert.Equal(t, "→ #12 project - 12", fake.sent[4])
+	assert.Equal(t, "**→ #12 project - 12**", fake.sent[4])
 	assert.Len(t, fake.sent, 7)
 	fake.focus = 0
 	require.Zero(t, w.pass(t.Context()))
@@ -98,7 +98,7 @@ func TestChatLoop_SwitchDuringLongTail(t *testing.T) {
 			{ID: 9, Name: "B"},
 		}
 		fake.onSend = func(text string) {
-			if text == "#12 A\nA1" {
+			if text == "**#12 A**\n\nA1" {
 				fake.selectFocus(9)
 			}
 		}
@@ -110,7 +110,7 @@ func TestChatLoop_SwitchDuringLongTail(t *testing.T) {
 		w := NewChat(fake, fake).(*chatLoop)
 
 		require.Zero(t, w.pass(t.Context()))
-		assert.Equal(t, []string{"#12 A\nA1"}, fake.sent)
+		assert.Equal(t, []string{"**#12 A**\n\nA1"}, fake.sent)
 		assert.Zero(t, fake.cursor)
 		assert.False(t, fake.entered)
 		assert.Equal(t, []int64{12}, fake.reads)
@@ -119,7 +119,7 @@ func TestChatLoop_SwitchDuringLongTail(t *testing.T) {
 		require.True(t, w.wait(t.Context(), 0))
 		assert.Equal(t, before, time.Now(), "switch must wake the next pass without a fallback delay")
 		require.Zero(t, w.pass(t.Context()))
-		assert.Equal(t, []string{"#12 A\nA1", "→ #9 B", "#9 B\nB answer"}, fake.sent)
+		assert.Equal(t, []string{"**#12 A**\n\nA1", "**→ #9 B**", "**#9 B**\n\nB answer"}, fake.sent)
 		assert.Equal(t, int64(126), fake.cursor)
 		assert.Equal(t, []int64{12, 9}, fake.reads)
 	})
@@ -144,7 +144,7 @@ func TestChatLoop_SwitchDuringKilledTailSkipsReset(t *testing.T) {
 	w := NewChat(fake, fake).(*chatLoop)
 
 	require.Zero(t, w.pass(t.Context()))
-	assert.Equal(t, []string{"#12 project - 12\nSession killed."}, fake.sent)
+	assert.Equal(t, []string{"**#12 project - 12**\n\nSession killed."}, fake.sent)
 	assert.Zero(t, fake.cursor)
 	assert.False(t, fake.entered)
 	assert.Equal(t, int64(9), fake.focus)
@@ -167,10 +167,10 @@ func TestChatLoop_TransientRetriesUntilSuccess(t *testing.T) {
 	assert.Equal(
 		t,
 		[]string{
-			"#7 project - 7\nanswer",
-			"#7 project - 7\nanswer",
-			"#7 project - 7\nanswer",
-			"#7 project - 7\nanswer",
+			"**#7 project - 7**\n\nanswer",
+			"**#7 project - 7**\n\nanswer",
+			"**#7 project - 7**\n\nanswer",
+			"**#7 project - 7**\n\nanswer",
 		},
 		fake.sent,
 	)
@@ -197,7 +197,7 @@ func TestChatLoop_PermanentRowProbesBeforeMarking(t *testing.T) {
 			ctx := logger.ToContext(t.Context(), zap.New(core))
 			w := NewChat(fake, fake).(*chatLoop)
 			assert.Equal(t, test.delay, w.pass(ctx))
-			assert.Equal(t, []string{"#7 project - 7\nbad row", "⚠ output #1 not delivered: too long"}, fake.sent)
+			assert.Equal(t, []string{"**#7 project - 7**\n\nbad row", "⚠ output #1 not delivered: too long"}, fake.sent)
 			assert.Equal(t, test.seen, fake.cursor)
 			if test.probe == SendRowPermanent || test.probe == SendChatFailure {
 				assert.Equal(t, 1, logs.FilterMessage("chat delivery paused").Len())
@@ -240,7 +240,7 @@ func TestChatLoop_RestartResendsOnlyUnmarkedRow(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(t.Context())
 	fake.onSend = func(text string) {
-		if text == "#7 project - 7\ncrash here" {
+		if text == "**#7 project - 7**\n\ncrash here" {
 			cancel()
 		}
 	}
@@ -253,10 +253,10 @@ func TestChatLoop_RestartResendsOnlyUnmarkedRow(t *testing.T) {
 	assert.Equal(
 		t,
 		[]string{
-			"#7 project - 7\nbefore",
-			"#7 project - 7\ncrash here",
-			"#7 project - 7\ncrash here",
-			"#7 project - 7\nafter",
+			"**#7 project - 7**\n\nbefore",
+			"**#7 project - 7**\n\ncrash here",
+			"**#7 project - 7**\n\ncrash here",
+			"**#7 project - 7**\n\nafter",
 		},
 		fake.sent,
 	)
@@ -323,7 +323,9 @@ func TestChatLoop_SwitchPreludeResumesWithoutRepeatingHeader(t *testing.T) {
 	assert.Equal(t, 3*time.Second, w.pass(t.Context()))
 	assert.Empty(t, fake.reads[1:])
 	require.Zero(t, w.pass(t.Context()))
-	assert.Equal(t, []string{"→ #7 selected", "#7 selected\ncontext", "#7 selected\ncontext"}, fake.sent)
+	assert.Equal(t, []string{
+		"**→ #7 selected**", "**#7 selected**\n\ncontext", "**#7 selected**\n\ncontext",
+	}, fake.sent)
 }
 
 func TestChatLoop_ProbeSkipContinuesToNextRow(t *testing.T) {
@@ -337,7 +339,7 @@ func TestChatLoop_ProbeSkipContinuesToNextRow(t *testing.T) {
 	require.Zero(t, w.pass(t.Context()))
 	assert.Equal(
 		t,
-		[]string{"#7 project - 7\nbad", "⚠ output #1 not delivered: invalid", "#7 project - 7\nnext"},
+		[]string{"**#7 project - 7**\n\nbad", "⚠ output #1 not delivered: invalid", "**#7 project - 7**\n\nnext"},
 		fake.sent,
 	)
 	assert.Equal(t, int64(2), fake.cursor)
@@ -389,7 +391,7 @@ func TestChatLoop_PortPanicIsRecoveredAndLogged(t *testing.T) {
 			t.Fatal("panicking loop did not finish its lifecycle")
 		}
 
-		assert.Equal(t, []string{"#7 project - 7\nunmarked answer"}, fake.sent)
+		assert.Equal(t, []string{"**#7 project - 7**\n\nunmarked answer"}, fake.sent)
 		assert.Zero(t, fake.cursor)
 		entries := logs.FilterMessage("chat loop panicked").All()
 		require.Len(t, entries, 1)

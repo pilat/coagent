@@ -42,8 +42,11 @@ func TestHarnessScenario_SwitchDeliversHeaderAndTail(t *testing.T) {
 		}
 	}
 	assert.Equal(t, []string{
-		fmt.Sprintf("→ #%d project", one), fmt.Sprintf("#%d project\nstartup", one), fmt.Sprintf("→ #%d project", two),
-		fmt.Sprintf("#%d project\nnew tail one", two), fmt.Sprintf("#%d project\nnew tail two", two),
+		fmt.Sprintf("<b>→ #%d project</b>", one),
+		fmt.Sprintf("<b>#%d project</b>\n\nstartup", one),
+		fmt.Sprintf("<b>→ #%d project</b>", two),
+		fmt.Sprintf("<b>#%d project</b>\n\nnew tail one", two),
+		fmt.Sprintf("<b>#%d project</b>\n\nnew tail two", two),
 	}, messages)
 	for _, text := range messages {
 		assert.NotContains(t, text, fmt.Sprintf("#%d project", three))
@@ -79,8 +82,8 @@ func TestHarnessScenario_SwitchShowsSessionTitles(t *testing.T) {
 		}
 	}
 	assert.Equal(t, []string{
-		fmt.Sprintf("→ #%d project · second work", two),
-		fmt.Sprintf("#%d project · second work\nsecond tail", two),
+		fmt.Sprintf("<b>→ #%d project · second work</b>", two),
+		fmt.Sprintf("<b>#%d project · second work</b>\n\nsecond tail", two),
 	}, messages)
 }
 
@@ -109,12 +112,12 @@ func TestHarnessScenario_ScheduledSessionMarkers(t *testing.T) {
 	}, time.Second, time.Millisecond)
 	manager.processUpdate(t.Context(), chatTelegramUpdate(fmt.Sprintf("/switch %d", work)))
 	awaitChatTail(t, h, work)
-	assert.True(t, hasTelegramMessage(h.recorder.snapshot(), fmt.Sprintf("→ #%d project · daily check ⏰", work)))
+	assert.True(t, hasTelegramMessage(h.recorder.snapshot(), fmt.Sprintf("<b>→ #%d project · daily check ⏰</b>", work)))
 	assert.True(
 		t,
 		hasTelegramMessage(
 			h.recorder.snapshot(),
-			fmt.Sprintf("#%d project · daily check\nscheduled work result", work),
+			fmt.Sprintf("<b>#%d project · daily check</b>\n\nscheduled work result", work),
 		),
 	)
 }
@@ -187,8 +190,8 @@ func TestHarnessScenario_KilledSwitchRefusedAndFocusedKillDrainsClose(t *testing
 		}
 	}
 	assert.Equal(t, []string{
-		fmt.Sprintf("→ #%d project", id),
-		fmt.Sprintf("#%d project\nSession killed. Cancelled background processes: 3", id),
+		fmt.Sprintf("<b>→ #%d project</b>", id),
+		fmt.Sprintf("<b>#%d project</b>\n\nSession killed. Cancelled background processes: 3", id),
 		fmt.Sprintf("#%d is not a live session", id),
 	}, messages)
 	focus, err := chat.ChatFocus(t.Context(), key)
@@ -211,7 +214,7 @@ func TestHarnessScenario_ForbiddenChatPausesWithoutMarking(t *testing.T) {
 	require.NoError(t, manager.Start(t.Context()))
 	t.Cleanup(func() { require.NoError(t, manager.Stop(context.Background())) })
 	require.Eventually(t, func() bool {
-		return hasTelegramMessage(h.recorder.snapshot(), fmt.Sprintf("#%d project\nmust keep the cursor", id))
+		return hasTelegramMessage(h.recorder.snapshot(), fmt.Sprintf("<b>#%d project</b>\n\nmust keep the cursor", id))
 	}, time.Second, time.Millisecond)
 	require.NoError(t, manager.Stop(t.Context()))
 	_, cursor, entered, err := chat.ChatCursor(t.Context(), key)
@@ -248,11 +251,11 @@ func TestHarnessScenario_ParseRejectionFallsBackBeforeMarking(t *testing.T) {
 	assert.Equal(t, []delayedTelegramCall{
 		{
 			Method:    "sendMessage",
-			Text:      fmt.Sprintf("#%d project\n<b>answer</b>", id),
+			Text:      fmt.Sprintf("<b>#%d project</b>\n\n<b>answer</b>", id),
 			ChatID:    harnessChatID,
 			ParseMode: tgParseModeHTML,
 		},
-		{Method: "sendMessage", Text: fmt.Sprintf("#%d project\nanswer", id), ChatID: harnessChatID},
+		{Method: "sendMessage", Text: fmt.Sprintf("#%d project\n\nanswer", id), ChatID: harnessChatID},
 	}, sends)
 	_, cursor, entered, err := chat.ChatCursor(t.Context(), key)
 	require.NoError(t, err)

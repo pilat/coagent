@@ -40,11 +40,11 @@ func TestSwitchObservedBeforeSetReturnsSendsOnePrelude(t *testing.T) {
 		hook.afterWrite = func() {
 			loop.Wake()
 			synctest.Wait()
-			assert.Equal(t, []string{"→ #42 work"}, messages)
+			assert.Equal(t, []string{"<b>→ #42 work</b>"}, messages)
 		}
 		manager.handleChatText(t.Context(), "/switch 42")
 		synctest.Wait()
-		assert.Equal(t, []string{"→ #42 work"}, messages)
+		assert.Equal(t, []string{"<b>→ #42 work</b>"}, messages)
 	})
 }
 

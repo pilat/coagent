@@ -70,9 +70,9 @@ func TestHarnessScenario_NarratedTraceReplaysAllNarrationsAndFinal(t *testing.T)
 	}
 
 	assert.Equal(t, []string{
-		"→ #1 &lt;name&gt;",
-		"#1 &lt;name&gt;\nReading the repo\n\n→ ls: <code>.</code>",
-		"#1 &lt;name&gt;\nUpdating the task list\n\n→ todowrite", "#1 &lt;name&gt;\nAll done.",
+		"<b>→ #1 &lt;name&gt;</b>",
+		"<b>#1 &lt;name&gt;</b>\n\nReading the repo\n\n→ ls: <code>.</code>",
+		"<b>#1 &lt;name&gt;</b>\n\nUpdating the task list\n\n→ todowrite", "<b>#1 &lt;name&gt;</b>\n\nAll done.",
 	}, messages)
 }
 
@@ -85,8 +85,9 @@ func TestHarnessScenario_OutputsRetainOwnershipWithoutCreatedNotification(t *tes
 	}
 
 	assert.Equal(t, []string{
-		"→ #1 &lt;name&gt;",
-		"#1 &lt;name&gt;\n⏳ Stopping…", "#1 &lt;name&gt;\n⏸️ Session stopped\nCancelled background processes: 0",
+		"<b>→ #1 &lt;name&gt;</b>",
+		"<b>#1 &lt;name&gt;</b>\n\n⏳ Stopping…",
+		"<b>#1 &lt;name&gt;</b>\n\n⏸️ Session stopped\nCancelled background processes: 0",
 	}, messages)
 }
 
@@ -103,9 +104,9 @@ func TestHarnessScenario_ReplaySelectsFirstOwnedMessageAndSkipsOtherTails(t *tes
 	}
 	calls := replayDaemonTraceThroughOutbox(t, trace)
 	require.Len(t, calls, 3)
-	assert.Equal(t, "→ #2 &lt;name&gt;", calls[0].Text)
-	assert.Equal(t, "#2 &lt;name&gt;\nselected first", calls[1].Text)
-	assert.Equal(t, "#2 &lt;name&gt;\nselected second", calls[2].Text)
+	assert.Equal(t, "<b>→ #2 &lt;name&gt;</b>", calls[0].Text)
+	assert.Equal(t, "<b>#2 &lt;name&gt;</b>\n\nselected first", calls[1].Text)
+	assert.Equal(t, "<b>#2 &lt;name&gt;</b>\n\nselected second", calls[2].Text)
 	controller := &fakeController{managerID: replayManagerID, listSessions: []controllerapi.SessionInfo{
 		{ID: 1, Attributes: map[string]any{"manager_id": "foreign"}},
 	}}

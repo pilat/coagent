@@ -21,7 +21,7 @@ func TestChatLoop_RenameAppliesToNextOutputBatch(t *testing.T) {
 	require.Zero(t, w.pass(t.Context()))
 	require.Len(t, fake.sent, chatBatchSize+1)
 	for i, text := range fake.sent[:chatBatchSize] {
-		assert.Equal(t, fmt.Sprintf("#12 old title\n%d", i+1), text)
+		assert.Equal(t, fmt.Sprintf("**#12 old title**\n\n%d", i+1), text)
 	}
-	assert.Equal(t, "#12 new title\n101", fake.sent[chatBatchSize])
+	assert.Equal(t, "**#12 new title**\n\n101", fake.sent[chatBatchSize])
 }

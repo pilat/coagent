@@ -1106,10 +1106,15 @@ the display name `<project> · <title>`, or `<project>` when untitled.
 Activity is the later timestamp of the newest output and newest user/agent
 inbox row, falling back to creation for empty roots. It marks the focus with
 ` ◀` and scheduled roots with ` ⏰`, shows at most 30 lines, then `… and N more`.
-An empty list says `No sessions. /new or /spawn.`
+`/sessions <word>` matches the trimmed remainder as one case-insensitive
+substring of the display name before applying the limit. An empty filtered
+list says `No sessions match "<word>".`; an empty unfiltered list says
+`No sessions. /new or /spawn.`
 
-A NULL cursor owes `→ #N name` (plus ` ⏰` when scheduled), followed by the last
-three renderable rows, oldest first, each with its own `#N name` header.
+A NULL cursor owes a bold `→ #N name` (plus ` ⏰` when scheduled), followed by
+the last three renderable rows, oldest first. Each row has a bold `#N name`
+header and a blank line before its content; the entry header has no trailing
+blank line. Both headers strip asterisks from display names only.
 Renderable excludes `session_opened` and `session_replaced`. Entry acknowledges
 the newest ID of any type from the same read, then tails newer rows. A re-switch
 to the same root repeats entry; ordinary wakes and restarts retain an

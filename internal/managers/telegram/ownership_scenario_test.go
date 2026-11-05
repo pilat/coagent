@@ -52,8 +52,9 @@ func TestHarnessScenario_DurableManagerOwnershipReachesOnlyTelegramRenderer(t *t
 		}
 	}
 	assert.Equal(t, []string{
-		fmt.Sprintf("→ #%d project", owned.ID),
-		fmt.Sprintf("#%d project\nowner answer", owned.ID), fmt.Sprintf("#%d project\nowner barrier", owned.ID),
+		fmt.Sprintf("<b>→ #%d project</b>", owned.ID),
+		fmt.Sprintf("<b>#%d project</b>\n\nowner answer", owned.ID),
+		fmt.Sprintf("<b>#%d project</b>\n\nowner barrier", owned.ID),
 	}, messages)
 	for _, text := range messages {
 		assert.NotContains(t, text, fmt.Sprintf("#%d project", foreign.ID))

@@ -66,7 +66,7 @@ func TestHarnessScenario_DelayedTelegramManagerDrainsRealSessionOutput(t *testin
 	t.Cleanup(func() { require.NoError(t, manager.Stop(context.Background())) })
 	awaitChatTail(t, h, sessionID)
 	assert.True(t, hasTelegramMessage(h.recorder.snapshot(), fmt.Sprintf(
-		"#%d project · finish before telegram starts\ndelayed telegram answer", sessionID)))
+		"<b>#%d project · finish before telegram starts</b>\n\ndelayed telegram answer", sessionID)))
 	assert.False(t, hasTelegramMessage(h.recorder.snapshot(), "Task accepted"))
 	assert.NotZero(t, sessionID)
 }

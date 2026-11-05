@@ -32,21 +32,21 @@ func TestHarnessScenario_SwitchSendsHeaderLastThreeThenLive(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, m.Stop(context.Background())) })
 	m.processUpdate(t.Context(), chatTelegramUpdate(fmt.Sprintf("/switch %d", id)))
 	awaitChatTail(t, h, id)
-	want := []string{fmt.Sprintf("→ #%d project", id)}
+	want := []string{fmt.Sprintf("<b>→ #%d project</b>", id)}
 	for row := 3; row <= 5; row++ {
-		want = append(want, fmt.Sprintf("#%d project\n%d", id, row))
+		want = append(want, fmt.Sprintf("<b>#%d project</b>\n\n%d", id, row))
 	}
 	assert.Equal(t, want, chatMessages(h))
 	enqueueChatMessage(t, h, id, "6")
 	m.wakeDelivery()
 	awaitChatTail(t, h, id)
-	want = append(want, fmt.Sprintf("#%d project\n6", id))
+	want = append(want, fmt.Sprintf("<b>#%d project</b>\n\n6", id))
 	assert.Equal(t, want, chatMessages(h))
 	m.processUpdate(t.Context(), chatTelegramUpdate(fmt.Sprintf("/switch %d", id)))
 	awaitChatTail(t, h, id)
-	want = append(want, fmt.Sprintf("→ #%d project", id))
+	want = append(want, fmt.Sprintf("<b>→ #%d project</b>", id))
 	for row := 4; row <= 6; row++ {
-		want = append(want, fmt.Sprintf("#%d project\n%d", id, row))
+		want = append(want, fmt.Sprintf("<b>#%d project</b>\n\n%d", id, row))
 	}
 	assert.Equal(t, want, chatMessages(h))
 }
@@ -64,9 +64,9 @@ func TestHarnessScenario_EntryWithFewerThanThreeRows(t *testing.T) {
 			t.Cleanup(func() { require.NoError(t, m.Stop(context.Background())) })
 			m.processUpdate(t.Context(), chatTelegramUpdate(fmt.Sprintf("/switch %d", id)))
 			awaitChatTail(t, h, id)
-			want := []string{fmt.Sprintf("→ #%d project", id)}
+			want := []string{fmt.Sprintf("<b>→ #%d project</b>", id)}
 			if count == 1 {
-				want = append(want, fmt.Sprintf("#%d project\nonly row", id))
+				want = append(want, fmt.Sprintf("<b>#%d project</b>\n\nonly row", id))
 			}
 			assert.Equal(t, want, chatMessages(h))
 		})
@@ -92,9 +92,9 @@ func TestHarnessScenario_RestartAfterSendResendsNothing(t *testing.T) {
 	second.wakeDelivery()
 	awaitChatTail(t, h, id)
 	assert.Equal(t, []string{
-		fmt.Sprintf("→ #%d project", id),
-		fmt.Sprintf("#%d project\nbefore restart", id),
-		fmt.Sprintf("#%d project\nafter restart", id),
+		fmt.Sprintf("<b>→ #%d project</b>", id),
+		fmt.Sprintf("<b>#%d project</b>\n\nbefore restart", id),
+		fmt.Sprintf("<b>#%d project</b>\n\nafter restart", id),
 	}, chatMessages(h))
 }
 
@@ -128,9 +128,9 @@ func TestHarnessScenario_ClearEntersSuccessor(t *testing.T) {
 	m.wakeDelivery()
 	awaitChatTail(t, h, successor)
 	assert.Equal(t, []string{
-		fmt.Sprintf("→ #%d project", successor),
-		fmt.Sprintf("#%d project\nSession cleared.", successor),
-		fmt.Sprintf("#%d project\nsuccessor barrier", successor),
+		fmt.Sprintf("<b>→ #%d project</b>", successor),
+		fmt.Sprintf("<b>#%d project</b>\n\nSession cleared.", successor),
+		fmt.Sprintf("<b>#%d project</b>\n\nsuccessor barrier", successor),
 	}, chatMessages(h)[before:])
 }
 

@@ -23,7 +23,7 @@ func TestChatEnterSameFocusSendsPrelude(t *testing.T) {
 	require.Empty(t, fake.sent)
 	fake.selectFocus(7)
 	require.Zero(t, w.pass(t.Context()))
-	want := []string{"→ #7 selected", "#7 selected\nwork context"}
+	want := []string{"**→ #7 selected**", "**#7 selected**\n\nwork context"}
 	assert.Equal(t, want, fake.sent)
 	w.Wake()
 	require.Zero(t, w.pass(t.Context()))
@@ -38,10 +38,10 @@ func TestChatEnterBeforeFirstPassSendsPrelude(t *testing.T) {
 	w := NewChat(fake, fake).(*chatLoop)
 	fake.selectFocus(7)
 	require.Zero(t, w.pass(t.Context()))
-	assert.Equal(t, []string{"→ #7 selected"}, fake.sent)
+	assert.Equal(t, []string{"**→ #7 selected**"}, fake.sent)
 	w.Wake()
 	require.Zero(t, w.pass(t.Context()))
-	assert.Equal(t, []string{"→ #7 selected"}, fake.sent)
+	assert.Equal(t, []string{"**→ #7 selected**"}, fake.sent)
 }
 
 func TestChatEnterWaitsForCommittedFocus(t *testing.T) {
@@ -60,7 +60,7 @@ func TestChatEnterWaitsForCommittedFocus(t *testing.T) {
 			require.Zero(t, w.pass(t.Context()))
 			w.Wake()
 			require.Zero(t, w.pass(t.Context()))
-			assert.Equal(t, []string{"→ #12 work"}, fake.sent)
+			assert.Equal(t, []string{"**→ #12 work**"}, fake.sent)
 		})
 	}
 }
@@ -80,10 +80,10 @@ func TestChatEnterPreservesDifferentTargetDuringPreparation(t *testing.T) {
 	require.Zero(t, w.pass(t.Context()))
 	fake.onBoundary = nil
 	require.Zero(t, w.pass(t.Context()))
-	assert.Equal(t, []string{"→ #12 first", "→ #9 second"}, fake.sent)
+	assert.Equal(t, []string{"**→ #12 first**", "**→ #9 second**"}, fake.sent)
 	w.Wake()
 	require.Zero(t, w.pass(t.Context()))
-	assert.Equal(t, []string{"→ #12 first", "→ #9 second"}, fake.sent)
+	assert.Equal(t, []string{"**→ #12 first**", "**→ #9 second**"}, fake.sent)
 }
 
 func TestChatEntry_RowPermanentFailureProbesBeforeEntryCAS(t *testing.T) {
@@ -97,7 +97,9 @@ func TestChatEntry_RowPermanentFailureProbesBeforeEntryCAS(t *testing.T) {
 			fake.onSend = func(string) { assert.False(t, fake.entered) }
 			loop := NewChat(fake, fake).(*chatLoop)
 			delay := loop.pass(t.Context())
-			assert.Equal(t, []string{"→ #7 work", "#7 work\nbad row", "⚠ output #4 not delivered: invalid"}, fake.sent)
+			assert.Equal(t, []string{
+				"**→ #7 work**", "**#7 work**\n\nbad row", "⚠ output #4 not delivered: invalid",
+			}, fake.sent)
 			if probe == SendOK {
 				assert.Zero(t, delay)
 				assert.True(t, fake.entered)
