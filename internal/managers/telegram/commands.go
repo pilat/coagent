@@ -22,7 +22,7 @@ const (
 var publishedCommands = []map[string]string{
 	{tgKeyCommand: "new", tgKeyDescription: "List projects, or create with /new name"},
 	{tgKeyCommand: "spawn", tgKeyDescription: "Create a session with /spawn path"},
-	{tgKeyCommand: "sessions", tgKeyDescription: "List sessions"},
+	{tgKeyCommand: "sessions", tgKeyDescription: "List sessions, optionally filtered by word"},
 	{tgKeyCommand: "switch", tgKeyDescription: "Switch to a session with /switch N"},
 	{tgKeyCommand: "title", tgKeyDescription: "Rename the current session with /title text"},
 	{tgKeyCommand: "kill", tgKeyDescription: "End the current session, or /kill N"},
@@ -73,7 +73,7 @@ func (m *Manager) handleChatText(ctx context.Context, text string) {
 	case "/spawn":
 		m.handleSpawn(ctx, arg)
 	case "/sessions":
-		m.handleSessions(ctx)
+		m.handleSessions(ctx, arg)
 	case "/switch":
 		id, err := strconv.ParseInt(strings.TrimPrefix(arg, "#"), 10, 64)
 		if err != nil || id <= 0 {
@@ -186,7 +186,7 @@ func (m *Manager) handleNumberedControl(ctx context.Context, command, arg string
 	_, _ = m.sendMessage(ctx, strings.ReplaceAll(fmt.Sprintf("#%d is not a live session", id), "\n", " "))
 }
 
-func (m *Manager) handleSessions(ctx context.Context) {
+func (m *Manager) handleSessions(ctx context.Context, word string) {
 	sessions, err := m.chat.ChatSessions(ctx, strconv.FormatInt(m.effectiveChatID(), 10))
 	if err != nil {
 		_, _ = m.sendMessage(ctx, strings.ReplaceAll(err.Error(), "\n", " "))
@@ -199,8 +199,15 @@ func (m *Manager) handleSessions(ctx context.Context) {
 		return
 	}
 
+	sessions = filterSessionNames(sessions, word)
 	if len(sessions) == 0 {
-		_, _ = m.sendMessage(ctx, "No sessions. /new or /spawn.")
+		message := "No sessions. /new or /spawn."
+		if word != "" {
+			message = "No sessions match \"" + word + "\"."
+		}
+
+		_, _ = m.sendMessage(ctx, message)
+
 		return
 	}
 
@@ -223,6 +230,23 @@ func (m *Manager) handleSessions(ctx context.Context) {
 	}
 
 	_, _ = m.sendMessage(ctx, strings.Join(lines, "\n"))
+}
+
+func filterSessionNames(sessions []controllerapi.ChatSessionInfo, word string) []controllerapi.ChatSessionInfo {
+	if word == "" {
+		return sessions
+	}
+
+	filtered := make([]controllerapi.ChatSessionInfo, 0, len(sessions))
+
+	word = strings.ToLower(word)
+	for _, session := range sessions {
+		if strings.Contains(strings.ToLower(session.Name), word) {
+			filtered = append(filtered, session)
+		}
+	}
+
+	return filtered
 }
 
 func (m *Manager) handleHelp(ctx context.Context, sessionID int64) {
