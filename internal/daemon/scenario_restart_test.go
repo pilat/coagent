@@ -524,13 +524,12 @@ func TestScenario_BlockingTaskOrphanedByARestartIsClosedOnce(t *testing.T) {
 		return first.parkedOnChild(sessionID)
 	})
 
-	// The child is held until shutdown; the restart must not resurrect it as a producer.
+	// The child is held until shutdown; without its link, the restart cannot make it this call's producer.
 	link := first.linkByCall(sessionID, orphanTaskCallID)
 	require.NotNil(t, link, "the suspended parent owes its call to a child link")
+	require.Zero(t, link.DeliveredAt, "the child must still be parked when its link is removed")
 	_, err = first.db.ExecContext(first.ctx, `DELETE FROM subagent_links WHERE child_id = ?`, link.ChildID)
 	require.NoError(t, err)
-	require.Zero(t, countToolResultsFor(first.messages(sessionID), tool.IDTask),
-		"the child must still be parked when its link is removed")
 	first.shutdown()
 	second := newExternalCallDaemon(t, dbPath, configDir, seen.wrap(askForBlockingTaskRespond))
 	require.NoError(t, second.mgr.Start(second.ctx))
@@ -549,6 +548,10 @@ func TestScenario_BlockingTaskOrphanedByARestartIsClosedOnce(t *testing.T) {
 			!second.mgr.HasActiveLoop(sessionID)
 	})
 	second.waitUntil("session idle", func() bool { return !second.mgr.HasActiveLoop(sessionID) })
+	second.waitUntil("unlinked child completed", func() bool {
+		record, loadErr := second.store.GetSession(second.ctx, link.ChildID)
+		return loadErr == nil && record.Status == sessionstore.SessionStatusCompleted
+	})
 	final := second.messages(sessionID)
 	require.NoError(t, llm.ValidateToolPairing(final))
 	assert.Equal(t, 1, countAssistantToolCallsFor(final, tool.IDTask),
