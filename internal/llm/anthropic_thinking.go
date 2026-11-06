@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"math"
 
-	"github.com/anthropics/anthropic-sdk-go"
+	"github.com/anthropics/anthropic-sdk-go/v2"
 
 	"github.com/pilat/coagent/internal/catalog"
 	"github.com/pilat/coagent/internal/config"

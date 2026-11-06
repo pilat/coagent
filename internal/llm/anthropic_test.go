@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/anthropics/anthropic-sdk-go"
+	"github.com/anthropics/anthropic-sdk-go/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -19,9 +19,9 @@ func TestAnthropicConvertMessages_UserMessage(t *testing.T) {
 	}
 	result := convertAnthropicMessages(msgs)
 	require.Len(t, result, 1)
-	assert.Equal(t, anthropic.MessageParamRoleUser, result[0].Role)
-	require.Len(t, result[0].Content, 1)
-	assert.Equal(t, "hello", result[0].Content[0].OfText.Text)
+	assert.NotNil(t, result[0].OfUser)
+	require.Len(t, paramBlocks(result[0]), 1)
+	assert.Equal(t, "hello", paramBlocks(result[0])[0].OfText.Text)
 }
 
 func TestAnthropicConvertMessages_EmptyUserSkipped(t *testing.T) {
@@ -38,9 +38,9 @@ func TestAnthropicConvertMessages_AssistantTextOnly(t *testing.T) {
 	}
 	result := convertAnthropicMessages(msgs)
 	require.Len(t, result, 1)
-	assert.Equal(t, anthropic.MessageParamRoleAssistant, result[0].Role)
-	require.Len(t, result[0].Content, 1)
-	assert.Equal(t, "I'll help you", result[0].Content[0].OfText.Text)
+	assert.NotNil(t, result[0].OfAssistant)
+	require.Len(t, paramBlocks(result[0]), 1)
+	assert.Equal(t, "I'll help you", paramBlocks(result[0])[0].OfText.Text)
 }
 
 func TestAnthropicConvertMessages_AssistantToolCallOnly(t *testing.T) {
@@ -56,11 +56,11 @@ func TestAnthropicConvertMessages_AssistantToolCallOnly(t *testing.T) {
 	result := convertAnthropicMessages(msgs)
 	require.Len(t, result, 1)
 	// Should have exactly 1 block: tool_use (no empty text block)
-	require.Len(t, result[0].Content, 1)
-	assert.Nil(t, result[0].Content[0].OfText, "should not have text block for empty content")
-	assert.NotNil(t, result[0].Content[0].OfToolUse)
-	assert.Equal(t, "tc_1", result[0].Content[0].OfToolUse.ID)
-	assert.Equal(t, "bash", result[0].Content[0].OfToolUse.Name)
+	require.Len(t, paramBlocks(result[0]), 1)
+	assert.Nil(t, paramBlocks(result[0])[0].OfText, "should not have text block for empty content")
+	assert.NotNil(t, paramBlocks(result[0])[0].OfToolUse)
+	assert.Equal(t, "tc_1", paramBlocks(result[0])[0].OfToolUse.ID)
+	assert.Equal(t, "bash", paramBlocks(result[0])[0].OfToolUse.Name)
 }
 
 func TestAnthropicConvertMessages_AssistantTextAndToolCalls(t *testing.T) {
@@ -77,10 +77,10 @@ func TestAnthropicConvertMessages_AssistantTextAndToolCalls(t *testing.T) {
 	result := convertAnthropicMessages(msgs)
 	require.Len(t, result, 1)
 	// text + 2 tool_use blocks
-	require.Len(t, result[0].Content, 3)
-	assert.Equal(t, "Let me check", result[0].Content[0].OfText.Text)
-	assert.Equal(t, "read", result[0].Content[1].OfToolUse.Name)
-	assert.Equal(t, "bash", result[0].Content[2].OfToolUse.Name)
+	require.Len(t, paramBlocks(result[0]), 3)
+	assert.Equal(t, "Let me check", paramBlocks(result[0])[0].OfText.Text)
+	assert.Equal(t, "read", paramBlocks(result[0])[1].OfToolUse.Name)
+	assert.Equal(t, "bash", paramBlocks(result[0])[2].OfToolUse.Name)
 }
 
 func TestAnthropicConvertMessages_ToolResult(t *testing.T) {
@@ -89,10 +89,10 @@ func TestAnthropicConvertMessages_ToolResult(t *testing.T) {
 	}
 	result := convertAnthropicMessages(msgs)
 	require.Len(t, result, 1)
-	assert.Equal(t, anthropic.MessageParamRoleUser, result[0].Role)
-	require.Len(t, result[0].Content, 1)
-	assert.NotNil(t, result[0].Content[0].OfToolResult)
-	assert.Equal(t, "tc_1", result[0].Content[0].OfToolResult.ToolUseID)
+	assert.NotNil(t, result[0].OfUser)
+	require.Len(t, paramBlocks(result[0]), 1)
+	assert.NotNil(t, paramBlocks(result[0])[0].OfToolResult)
+	assert.Equal(t, "tc_1", paramBlocks(result[0])[0].OfToolResult.ToolUseID)
 }
 
 func TestAnthropicConvertMessages_ToolResultNonJSON(t *testing.T) {
@@ -101,9 +101,9 @@ func TestAnthropicConvertMessages_ToolResultNonJSON(t *testing.T) {
 	}
 	result := convertAnthropicMessages(msgs)
 	require.Len(t, result, 1)
-	assert.NotNil(t, result[0].Content[0].OfToolResult)
+	assert.NotNil(t, paramBlocks(result[0])[0].OfToolResult)
 	// Non-JSON content gets wrapped in {"output": "..."}
-	assert.Contains(t, result[0].Content[0].OfToolResult.Content[0].OfText.Text, "plain text output")
+	assert.Contains(t, paramBlocks(result[0])[0].OfToolResult.Content[0].OfText.Text, "plain text output")
 }
 
 // The provider conversion has no provenance channel of its own: trusted
@@ -116,7 +116,7 @@ func TestAnthropicConvertMessages_ToolResultWrappingIsTextualOnly(t *testing.T) 
 	}
 	trustedResult := convertAnthropicMessages(trusted)
 	require.Len(t, trustedResult, 1)
-	assert.Contains(t, trustedResult[0].Content[0].OfToolResult.Content[0].OfText.Text, "file contents")
+	assert.Contains(t, paramBlocks(trustedResult[0])[0].OfToolResult.Content[0].OfText.Text, "file contents")
 
 	wrapped := []llmwire.Message{{
 		Role: "tool",
@@ -134,7 +134,7 @@ func TestAnthropicConvertMessages_ToolResultWrappingIsTextualOnly(t *testing.T) 
 		Output string `json:"output"`
 	}
 	require.NoError(t, json.Unmarshal(
-		[]byte(wrappedResult[0].Content[0].OfToolResult.Content[0].OfText.Text), &payload,
+		[]byte(paramBlocks(wrappedResult[0])[0].OfToolResult.Content[0].OfText.Text), &payload,
 	))
 	assert.Equal(t, wrapped[0].Content, payload.Output)
 }
@@ -158,7 +158,7 @@ func TestCacheMarkers_SingleUserMessage(t *testing.T) {
 	addAnthropicNativeCacheMarkers(msgs)
 
 	// First (and only) user message gets cache_control
-	assert.Equal(t, "ephemeral", string(msgs[0].Content[0].OfText.CacheControl.Type))
+	assert.Equal(t, "ephemeral", string(paramBlocks(msgs[0])[0].OfText.CacheControl.Type))
 }
 
 func TestCacheMarkers_TwoUserMessages_NoSlidingWindow(t *testing.T) {
@@ -170,9 +170,9 @@ func TestCacheMarkers_TwoUserMessages_NoSlidingWindow(t *testing.T) {
 	addAnthropicNativeCacheMarkers(msgs)
 
 	// First user gets cache_control
-	assert.Equal(t, "ephemeral", string(msgs[0].Content[0].OfText.CacheControl.Type))
+	assert.Equal(t, "ephemeral", string(paramBlocks(msgs[0])[0].OfText.CacheControl.Type))
 	// Second user is the last — no sliding window (need 3+ user messages for that)
-	assert.Empty(t, string(msgs[2].Content[0].OfText.CacheControl.Type))
+	assert.Empty(t, string(paramBlocks(msgs[2])[0].OfText.CacheControl.Type))
 }
 
 func TestCacheMarkers_ThreeUserMessages_SlidingWindow(t *testing.T) {
@@ -186,11 +186,11 @@ func TestCacheMarkers_ThreeUserMessages_SlidingWindow(t *testing.T) {
 	addAnthropicNativeCacheMarkers(msgs)
 
 	// First user: cache_control
-	assert.Equal(t, "ephemeral", string(msgs[0].Content[0].OfText.CacheControl.Type))
+	assert.Equal(t, "ephemeral", string(paramBlocks(msgs[0])[0].OfText.CacheControl.Type))
 	// Second user (second-to-last): sliding window cache_control
-	assert.Equal(t, "ephemeral", string(msgs[2].Content[0].OfText.CacheControl.Type))
+	assert.Equal(t, "ephemeral", string(paramBlocks(msgs[2])[0].OfText.CacheControl.Type))
 	// Third user (last): no cache_control
-	assert.Empty(t, string(msgs[4].Content[0].OfText.CacheControl.Type))
+	assert.Empty(t, string(paramBlocks(msgs[4])[0].OfText.CacheControl.Type))
 }
 
 func TestCacheMarkers_ToolResultMessage(t *testing.T) {
@@ -200,7 +200,7 @@ func TestCacheMarkers_ToolResultMessage(t *testing.T) {
 	addAnthropicNativeCacheMarkers(msgs)
 
 	// Tool result block should get cache_control
-	assert.Equal(t, "ephemeral", string(msgs[0].Content[0].OfToolResult.CacheControl.Type))
+	assert.Equal(t, "ephemeral", string(paramBlocks(msgs[0])[0].OfToolResult.CacheControl.Type))
 }
 
 func TestCacheMarkers_EmptyMessages(t *testing.T) {
@@ -347,4 +347,15 @@ func convertAnthropicMessages(messages []llmwire.Message) []anthropic.MessagePar
 		}
 	}
 	return result
+}
+
+func paramBlocks(msg anthropic.MessageParam) []anthropic.ContentBlockParamUnion {
+	switch {
+	case msg.OfUser != nil:
+		return msg.OfUser.Content
+	case msg.OfAssistant != nil:
+		return msg.OfAssistant.Content
+	default:
+		return nil
+	}
 }

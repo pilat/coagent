@@ -7,7 +7,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/anthropics/anthropic-sdk-go"
+	"github.com/anthropics/anthropic-sdk-go/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -84,7 +84,7 @@ func TestAnthropicReplaysThinkingBlocksInOrder(t *testing.T) {
 	require.Len(t, converted, 1)
 
 	var sent []map[string]any
-	require.NoError(t, roundTripJSON(converted[0].Content, &sent))
+	require.NoError(t, roundTripJSON(paramBlocks(converted[0]), &sent))
 	require.Len(t, sent, 4)
 
 	assert.Equal(t, "thinking", sent[0]["type"])
@@ -109,7 +109,7 @@ func TestAnthropicDropsAnotherModelsThinking(t *testing.T) {
 	require.Len(t, converted, 1)
 
 	var sent []map[string]any
-	require.NoError(t, roundTripJSON(converted[0].Content, &sent))
+	require.NoError(t, roundTripJSON(paramBlocks(converted[0]), &sent))
 	require.Len(t, sent, 1)
 	assert.Equal(t, "text", sent[0]["type"])
 }

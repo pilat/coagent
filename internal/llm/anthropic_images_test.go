@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/anthropics/anthropic-sdk-go"
+	"github.com/anthropics/anthropic-sdk-go/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -202,7 +202,7 @@ func TestAnthropic_CacheBreakpointSurvivesImageToolResult(t *testing.T) {
 
 	// The breakpoint must remain ON the outer tool_result block — nested image
 	// blocks inside its content array must not move or shadow it.
-	result := params.Messages[len(params.Messages)-1].Content[0]
+	result := paramBlocks(params.Messages[len(params.Messages)-1])[0]
 	require.NotNil(t, result.OfToolResult, "image-bearing result stays a tool_result block")
 	assert.NotNil(t, result.OfToolResult.CacheControl, "sliding-window breakpoint intact")
 	require.Len(t, result.OfToolResult.Content, 2, "nested text+image survive alongside the marker")

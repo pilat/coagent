@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/anthropics/anthropic-sdk-go"
+	"github.com/anthropics/anthropic-sdk-go/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -47,11 +47,11 @@ func TestAnthropicConvertMessages_ToolRunGroupsAndOrdersResults(t *testing.T) {
 	assert.Equal(t, "go", blockText(t, result[0]))
 
 	assistantParam := result[1]
-	require.Len(t, assistantParam.Content, 3, "one tool_use block per call")
+	require.Len(t, paramBlocks(assistantParam), 3, "one tool_use block per call")
 
 	toolUses := make([]string, 0, 3)
 
-	for _, block := range assistantParam.Content {
+	for _, block := range paramBlocks(assistantParam) {
 		if block.OfToolUse != nil {
 			toolUses = append(toolUses, block.OfToolUse.ID)
 		}
@@ -60,7 +60,7 @@ func TestAnthropicConvertMessages_ToolRunGroupsAndOrdersResults(t *testing.T) {
 	assert.Equal(t, []string{"call-b", "call-a", "call-c"}, toolUses, "assistant keeps the call list verbatim")
 
 	grouped := result[2]
-	require.Len(t, grouped.Content, 3, "all three results merge into one user message")
+	require.Len(t, paramBlocks(grouped), 3, "all three results merge into one user message")
 
 	type toolResult struct {
 		id      string
@@ -69,7 +69,7 @@ func TestAnthropicConvertMessages_ToolRunGroupsAndOrdersResults(t *testing.T) {
 
 	var got []toolResult
 
-	for _, block := range grouped.Content {
+	for _, block := range paramBlocks(grouped) {
 		tr := block.OfToolResult
 		require.NotNil(t, tr, "the grouped message carries only tool_result blocks")
 		got = append(got, toolResult{id: tr.ToolUseID, isError: tr.IsError.Value})
@@ -106,7 +106,7 @@ func TestAnthropicConvertMessages_ToolRunOrdersUnknownCallIdsLast(t *testing.T) 
 
 	ids := make([]string, 0, 3)
 
-	for _, block := range result[2].Content {
+	for _, block := range paramBlocks(result[2]) {
 		require.NotNil(t, block.OfToolResult)
 		ids = append(ids, block.OfToolResult.ToolUseID)
 	}
@@ -134,7 +134,7 @@ func TestAnthropicConvertMessages_ToolRunWithoutAssistantCallList(t *testing.T) 
 
 	ids := make([]string, 0, 2)
 
-	for _, block := range result[1].Content {
+	for _, block := range paramBlocks(result[1]) {
 		require.NotNil(t, block.OfToolResult)
 		ids = append(ids, block.OfToolResult.ToolUseID)
 	}
@@ -145,7 +145,7 @@ func TestAnthropicConvertMessages_ToolRunWithoutAssistantCallList(t *testing.T) 
 func blockText(t *testing.T, param anthropic.MessageParam) string {
 	t.Helper()
 
-	for _, block := range param.Content {
+	for _, block := range paramBlocks(param) {
 		if block.OfText != nil {
 			return block.OfText.Text
 		}

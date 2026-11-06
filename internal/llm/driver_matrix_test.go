@@ -240,10 +240,10 @@ func TestDriverMatrix_MultiCallToolRunProjection(t *testing.T) {
 				require.Len(t, params.Messages, 3, "%s: user + assistant + one grouped message", driver)
 
 				grouped := params.Messages[2]
-				require.Len(t, grouped.Content, 3, "all results merge into one user message")
+				require.Len(t, paramBlocks(grouped), 3, "all results merge into one user message")
 
 				var errs []bool
-				for _, block := range grouped.Content {
+				for _, block := range paramBlocks(grouped) {
 					require.NotNil(t, block.OfToolResult, driver)
 					errs = append(errs, block.OfToolResult.IsError.Value)
 				}

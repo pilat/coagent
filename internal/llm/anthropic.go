@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"slices"
 
-	"github.com/anthropics/anthropic-sdk-go"
-	"github.com/anthropics/anthropic-sdk-go/option"
+	"github.com/anthropics/anthropic-sdk-go/v2"
+	"github.com/anthropics/anthropic-sdk-go/v2/option"
 	"go.uber.org/zap"
 
 	"github.com/pilat/coagent/internal/config"
@@ -590,7 +590,7 @@ func addAnthropicNativeCacheMarkers(messages []anthropic.MessageParam) {
 	firstUserIdx := -1
 
 	for i := range messages {
-		if messages[i].Role == anthropic.MessageParamRoleUser {
+		if messages[i].OfUser != nil {
 			firstUserIdx = i
 			break
 		}
@@ -605,7 +605,7 @@ func addAnthropicNativeCacheMarkers(messages []anthropic.MessageParam) {
 	secondLastUserIdx := -1
 
 	for i, msg := range slices.Backward(messages) {
-		if msg.Role != anthropic.MessageParamRoleUser {
+		if msg.OfUser == nil {
 			continue
 		}
 
@@ -624,11 +624,20 @@ func addAnthropicNativeCacheMarkers(messages []anthropic.MessageParam) {
 
 // setMessageCacheControl sets cache_control on the last content block of a message.
 func setMessageCacheControl(msg *anthropic.MessageParam, cc anthropic.CacheControlEphemeralParam) {
-	if len(msg.Content) == 0 {
+	var content []anthropic.ContentBlockParamUnion
+
+	switch {
+	case msg.OfUser != nil:
+		content = msg.OfUser.Content
+	case msg.OfAssistant != nil:
+		content = msg.OfAssistant.Content
+	}
+
+	if len(content) == 0 {
 		return
 	}
 
-	last := &msg.Content[len(msg.Content)-1]
+	last := &content[len(content)-1]
 	if last.OfText != nil {
 		last.OfText.CacheControl = cc
 	} else if last.OfToolResult != nil {
