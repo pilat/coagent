@@ -95,7 +95,7 @@ func TestEnvelopeIdentityIsTheModelIDNotTheProvider(t *testing.T) {
 
 	var blocks []map[string]any
 
-	require.NoError(t, roundTripJSON(anthropicSent[0].Content, &blocks))
+	require.NoError(t, roundTripJSON(paramBlocks(anthropicSent[0]), &blocks))
 	require.Len(t, blocks, 1)
 	assert.Equal(t, "text", blocks[0]["type"], "an unrecognized block type reaches no request")
 

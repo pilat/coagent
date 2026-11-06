@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"slices"
 
-	"github.com/anthropics/anthropic-sdk-go"
-	"github.com/anthropics/anthropic-sdk-go/option"
+	"github.com/anthropics/anthropic-sdk-go/v2"
+	"github.com/anthropics/anthropic-sdk-go/v2/option"
 	"go.uber.org/zap"
 
 	"github.com/pilat/coagent/internal/config"
@@ -590,14 +590,14 @@ func addAnthropicNativeCacheMarkers(messages []anthropic.MessageParam) {
 	firstUserIdx := -1
 
 	for i := range messages {
-		if messages[i].Role == anthropic.MessageParamRoleUser {
+		if messages[i].OfUser != nil {
 			firstUserIdx = i
 			break
 		}
 	}
 
 	if firstUserIdx >= 0 {
-		setMessageCacheControl(&messages[firstUserIdx], cc)
+		setMessageCacheControl(messages[firstUserIdx].OfUser, cc)
 	}
 
 	// Breakpoint 2: sliding window — second-to-last user message
@@ -605,7 +605,7 @@ func addAnthropicNativeCacheMarkers(messages []anthropic.MessageParam) {
 	secondLastUserIdx := -1
 
 	for i, msg := range slices.Backward(messages) {
-		if msg.Role != anthropic.MessageParamRoleUser {
+		if msg.OfUser == nil {
 			continue
 		}
 
@@ -618,12 +618,12 @@ func addAnthropicNativeCacheMarkers(messages []anthropic.MessageParam) {
 	}
 
 	if secondLastUserIdx > firstUserIdx {
-		setMessageCacheControl(&messages[secondLastUserIdx], cc)
+		setMessageCacheControl(messages[secondLastUserIdx].OfUser, cc)
 	}
 }
 
 // setMessageCacheControl sets cache_control on the last content block of a message.
-func setMessageCacheControl(msg *anthropic.MessageParam, cc anthropic.CacheControlEphemeralParam) {
+func setMessageCacheControl(msg *anthropic.UserMessageParam, cc anthropic.CacheControlEphemeralParam) {
 	if len(msg.Content) == 0 {
 		return
 	}
