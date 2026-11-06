@@ -10,25 +10,6 @@ import (
 	"github.com/pilat/coagent/internal/sessionstore"
 )
 
-// ListHiddenProjectDirs exposes hidden project work dirs so /spawn navigation
-// omits their directories without inferring hidden state from a basename.
-func listHiddenProjectDirs(ctx context.Context, backend *sessionstore.Store) ([]string, error) {
-	rows, err := backend.ListProjects(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("list hidden projects: %w", err)
-	}
-
-	var dirs []string
-
-	for _, row := range rows {
-		if row.Hidden {
-			dirs = append(dirs, row.WorkDir)
-		}
-	}
-
-	return dirs, nil
-}
-
 // ListRecentProjects returns the folder-projects that are direct children of
 // root, newest activity first. Only direct children: a pick reconstructs the
 // folder as root/<name>, so a nested project (or a basename collision) would

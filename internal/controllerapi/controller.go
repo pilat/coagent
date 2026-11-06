@@ -31,7 +31,7 @@ type ChatController interface {
 // capability interface such as ChatController instead of this aggregate.
 type Controller interface {
 	ChatController
-	ListDir(ctx context.Context, data FsListDirData) (*FsListDirResultData, error)
+	SpawnFavorites(ctx context.Context) ([]string, error)
 	ListSkills(ctx context.Context, data ConfigSkillsData) (*ConfigSkillsResultData, error)
 	ListRecentProjects(ctx context.Context) (*ProjectListResultData, error)
 }

@@ -123,16 +123,39 @@ func TestHandleNew_ListsProjectsWithAge(t *testing.T) {
 func TestSpawn_PathCreatesAndBareListsFavorites(t *testing.T) {
 	var messages []string
 	ctrl := &fakeController{
-		listDirResult: &controllerapi.FsListDirResultData{Favorites: []string{"/repo/one", "/repo/two"}},
+		spawnFavorites: []string{"/repo/one", "/repo/two"},
 	}
 	m := newCmdTestManager(t, ctrl, &messages)
 	m.handleChatText(t.Context(), "/spawn")
 	require.Len(t, messages, 1)
-	assert.Contains(t, messages[0], "Usage: /spawn")
-	assert.Contains(t, messages[0], "/repo/one\n/repo/two")
+	assert.Equal(t, "Usage: /spawn &lt;path&gt;.\nFavorites:\n/repo/one\n/repo/two", messages[0])
 	m.handleChatText(t.Context(), "/spawn /some path/repo")
 	require.Len(t, ctrl.createSessionCalls, 1)
 	assert.Equal(t, "/some path/repo", ctrl.createSessionCalls[0].WorkDir)
 	assert.Equal(t, int64(1), ctrl.focus)
 	assert.Len(t, messages, 1)
+}
+
+func TestSpawn_BareWithoutFavorites(t *testing.T) {
+	t.Parallel()
+
+	var messages []string
+	ctrl := &fakeController{spawnFavorites: []string{}}
+	m := newCmdTestManager(t, ctrl, &messages)
+	m.handleChatText(t.Context(), "/spawn")
+
+	assert.Equal(t, []string{"Usage: /spawn &lt;path&gt;."}, messages)
+	assert.Empty(t, ctrl.createSessionCalls)
+}
+
+func TestSpawn_FavoritesError(t *testing.T) {
+	t.Parallel()
+
+	var messages []string
+	ctrl := &fakeController{spawnFavoritesErr: errors.New("unavailable")}
+	m := newCmdTestManager(t, ctrl, &messages)
+	m.handleChatText(t.Context(), "/spawn")
+
+	assert.Equal(t, []string{"Failed to list favorites: unavailable"}, messages)
+	assert.Empty(t, ctrl.createSessionCalls)
 }

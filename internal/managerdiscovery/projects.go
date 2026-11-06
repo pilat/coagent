@@ -41,20 +41,3 @@ func (s *Service) ListRecentProjects(ctx context.Context) (*controllerapi.Projec
 
 	return &controllerapi.ProjectListResultData{Projects: recent}, nil
 }
-
-// hiddenDirNames lists work dirs backed by hidden project rows, so /spawn
-// navigation omits exactly those directories without inferring from a basename.
-func (s *Service) hiddenDirNames(ctx context.Context) map[string]bool {
-	dirs, err := listHiddenProjectDirs(ctx, s.backend)
-	if err != nil {
-		return nil
-	}
-
-	hidden := make(map[string]bool, len(dirs))
-
-	for _, dir := range dirs {
-		hidden[filepath.Clean(dir)] = true
-	}
-
-	return hidden
-}

@@ -3,12 +3,7 @@ package managerdiscovery
 import (
 	"context"
 	"fmt"
-	"os"
-	"path/filepath"
-	"sort"
-	"time"
 
-	"github.com/pilat/coagent/internal/coagenthome"
 	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/loader"
 )
@@ -75,10 +70,8 @@ func (s *Service) ListSkills(
 	return &controllerapi.ConfigSkillsResultData{Skills: skills}, nil
 }
 
-func (s *Service) ListDir(
-	ctx context.Context,
-	data controllerapi.FsListDirData,
-) (*controllerapi.FsListDirResultData, error) {
+// SpawnFavorites returns configured paths in order, or a non-nil empty slice.
+func (s *Service) SpawnFavorites(context.Context) ([]string, error) {
 	var favorites []string
 	if unified := s.unifiedConfig(); unified != nil {
 		favorites = unified.SpawnFavorites
@@ -88,72 +81,5 @@ func (s *Service) ListDir(
 		favorites = []string{}
 	}
 
-	home, homeErr := coagenthome.UserHome()
-
-	path := data.Path
-	if path == "" {
-		if homeErr != nil {
-			return nil, fmt.Errorf("home dir: %w", homeErr)
-		}
-
-		path = home
-	}
-
-	dirs, err := s.readSubdirs(ctx, path)
-	if err != nil {
-		return nil, err
-	}
-
-	parent := ""
-	if path != "/" {
-		parent = filepath.Dir(path)
-	}
-
-	return &controllerapi.FsListDirResultData{
-		Dirs: dirs, Favorites: favorites, Home: home, Path: path, Parent: parent,
-	}, nil
-}
-
-func (s *Service) readSubdirs(ctx context.Context, path string) ([]controllerapi.FsDirEntry, error) {
-	entries, err := os.ReadDir(path)
-	if err != nil {
-		return nil, fmt.Errorf("readdir: %w", err)
-	}
-
-	hiddenDirs := s.hiddenDirNames(ctx)
-
-	type dirWithMtime struct {
-		name  string
-		mtime time.Time
-	}
-
-	var filtered []dirWithMtime
-
-	for _, entry := range entries {
-		name := entry.Name()
-		if !entry.IsDir() || name == "" || name[0] == '.' {
-			continue
-		}
-
-		full := filepath.Join(path, name)
-		if hiddenDirs[filepath.Clean(full)] {
-			continue
-		}
-
-		info, infoErr := entry.Info()
-		if infoErr != nil {
-			continue
-		}
-
-		filtered = append(filtered, dirWithMtime{name: name, mtime: info.ModTime()})
-	}
-
-	sort.Slice(filtered, func(i, j int) bool { return filtered[i].mtime.After(filtered[j].mtime) })
-
-	dirs := make([]controllerapi.FsDirEntry, 0, len(filtered))
-	for _, dir := range filtered {
-		dirs = append(dirs, controllerapi.FsDirEntry{Name: dir.name, Path: filepath.Join(path, dir.name)})
-	}
-
-	return dirs, nil
+	return favorites, nil
 }

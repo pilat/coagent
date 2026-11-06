@@ -63,16 +63,16 @@ func (m *Manager) handleSpawn(ctx context.Context, path string) {
 		return
 	}
 
-	result, err := m.controller.ListDir(ctx, controllerapi.FsListDirData{})
+	favorites, err := m.controller.SpawnFavorites(ctx)
 	if err != nil {
 		_, _ = m.sendMessage(ctx, strings.ReplaceAll("Failed to list favorites: "+err.Error(), "\n", " "))
 		return
 	}
 
 	lines := []string{"Usage: /spawn <path>."}
-	if result != nil && len(result.Favorites) > 0 {
+	if len(favorites) > 0 {
 		lines = append(lines, "Favorites:")
-		lines = append(lines, result.Favorites...)
+		lines = append(lines, favorites...)
 	}
 
 	_, _ = m.sendMessage(ctx, strings.Join(lines, "\n"))

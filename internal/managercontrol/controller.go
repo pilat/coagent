@@ -57,13 +57,10 @@ func (c *controller) SetSessionModel(ctx context.Context, data controllerapi.Ses
 	return c.app.setSessionModel(ctx, c.managerID, data)
 }
 
-func (c *controller) ListDir(
-	ctx context.Context,
-	data controllerapi.FsListDirData,
-) (*controllerapi.FsListDirResultData, error) {
-	result, err := c.app.discovery.ListDir(ctx, data)
+func (c *controller) SpawnFavorites(ctx context.Context) ([]string, error) {
+	result, err := c.app.discovery.SpawnFavorites(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("list directory: %w", err)
+		return nil, fmt.Errorf("spawn favorites: %w", err)
 	}
 
 	return result, nil

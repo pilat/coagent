@@ -87,11 +87,6 @@ type ConfigSkillsData struct {
 	SessionID int64 `json:"session_id,omitempty"`
 }
 
-// FsListDirData defines input for listing directories.
-type FsListDirData struct {
-	Path string `json:"path,omitempty"`
-}
-
 // ProjectCreateData provisions a visible folder-project under the configured root.
 type ProjectCreateData struct {
 	Name string `json:"name"`
@@ -182,17 +177,4 @@ type ScheduleInfo struct {
 	LastFiredAt *time.Time `json:"last_fired_at,omitempty"`
 	Fresh       bool       `json:"fresh"`
 	Prompt      string     `json:"prompt,omitempty"`
-}
-
-type FsDirEntry struct {
-	Name string `json:"name"`
-	Path string `json:"path"`
-}
-
-type FsListDirResultData struct {
-	Dirs      []FsDirEntry `json:"dirs"`
-	Favorites []string     `json:"favorites"`
-	Home      string       `json:"home"`
-	Path      string       `json:"path,omitempty"`   // actual resolved path
-	Parent    string       `json:"parent,omitempty"` // parent directory (for ".." navigation)
 }

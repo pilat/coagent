@@ -18,14 +18,15 @@ func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 }
 
 type fakeController struct {
-	mu            sync.Mutex
-	focus         int64
-	boundChats    map[string]bool
-	outputs       map[int64][]controllerapi.ChatOutput
-	cursor        int64
-	entered       bool
-	managerID     string
-	listDirResult *controllerapi.FsListDirResultData
+	mu                sync.Mutex
+	focus             int64
+	boundChats        map[string]bool
+	outputs           map[int64][]controllerapi.ChatOutput
+	cursor            int64
+	entered           bool
+	managerID         string
+	spawnFavorites    []string
+	spawnFavoritesErr error
 
 	listSessions []controllerapi.SessionInfo
 	listSkills   []controllerapi.ConfigSkillInfo
@@ -102,11 +103,8 @@ func (f *fakeController) SetSessionModel(_ context.Context, data controllerapi.S
 	return f.setModelErr
 }
 
-func (f *fakeController) ListDir(
-	context.Context,
-	controllerapi.FsListDirData,
-) (*controllerapi.FsListDirResultData, error) {
-	return f.listDirResult, nil
+func (f *fakeController) SpawnFavorites(context.Context) ([]string, error) {
+	return f.spawnFavorites, f.spawnFavoritesErr
 }
 
 func (f *fakeController) ListModels(context.Context) (*controllerapi.ConfigModelsResultData, error) {

@@ -86,7 +86,7 @@ does not imply a tier except where it expresses an implementation variant.
 - `internal/memory` — curated per-project long-term memory.
 - `internal/managerdelivery` — transport-neutral chat entry, ordered cursor delivery and retry policy.
 - `internal/managercontrol` — manager-bound application use cases and controller adaptation.
-- `internal/managerdiscovery` — manager-facing project, model, skill and filesystem discovery.
+- `internal/managerdiscovery` — manager-facing project, model, skill and spawn-favorites discovery.
 - `internal/migrate` — SQLite opening and schema migration with production backup policy.
 - `internal/progress` — transport-neutral diagnostic status facts and Markdown rendering.
 - `internal/progressruntime` — on-demand status projection and live runner/model/context state.
@@ -1080,7 +1080,7 @@ The manager coordinator isolates manager failures. Telegram submits private
 controller requests and adapts the manager-bound `ChatFocusController` to the
 small local ports owned by `managerdelivery`. `managercontrol` owns ownership,
 liveness validation, DTO conversion, focus/cursor operations and project resolution;
-`managerdiscovery` owns project, model, skill and filesystem discovery. The
+`managerdiscovery` owns project, model, skill and spawn-favorites discovery. The
 composition root supplies the daemon backend, store, discovery and session bus.
 
 Each Telegram manager owns one private chat with its sole allowed user. Startup
