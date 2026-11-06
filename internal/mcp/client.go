@@ -425,7 +425,7 @@ func (c *Client) ToolSchema(name string) (json.RawMessage, error) {
 		return nil, fmt.Errorf("marshal tool schema: %w", err)
 	}
 
-	return schema, nil
+	return normalizeToolSchema(schema)
 }
 
 // refreshTools runs only between stacks, when no tool call holds this client.
