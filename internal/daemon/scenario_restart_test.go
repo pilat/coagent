@@ -508,7 +508,15 @@ func TestScenario_BlockingTaskOrphanedByARestartIsClosedOnce(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "task.db")
 	configDir := newApplyConfigDir(t)
 	var seen modelRequests
-	first := newExternalCallDaemon(t, dbPath, configDir, seen.wrap(askForBlockingTaskRespond))
+	childHeld := make(chan struct{})
+	defer close(childHeld)
+	heldRespond := func(system string, msgs []llmwire.Message) *llmwire.Response {
+		if !hasToolResultFor(msgs, tool.IDTask) && hasUserContaining(msgs, "do the thing") {
+			<-childHeld
+		}
+		return askForBlockingTaskRespond(system, msgs)
+	}
+	first := newExternalCallDaemon(t, dbPath, configDir, seen.wrap(heldRespond))
 	first.startInboxWake()
 	sessionID, err := first.mgr.Send(first.ctx, first.projectID, "do work then spawn", "fake-model", nil)
 	require.NoError(t, err)
@@ -516,9 +524,10 @@ func TestScenario_BlockingTaskOrphanedByARestartIsClosedOnce(t *testing.T) {
 		return first.parkedOnChild(sessionID)
 	})
 
-	// The child never finishes; the restart must not resurrect it as a producer.
+	// The child is held until shutdown; without its link, the restart cannot make it this call's producer.
 	link := first.linkByCall(sessionID, orphanTaskCallID)
 	require.NotNil(t, link, "the suspended parent owes its call to a child link")
+	require.Zero(t, link.DeliveredAt, "the child must still be parked when its link is removed")
 	_, err = first.db.ExecContext(first.ctx, `DELETE FROM subagent_links WHERE child_id = ?`, link.ChildID)
 	require.NoError(t, err)
 	first.shutdown()
@@ -539,6 +548,10 @@ func TestScenario_BlockingTaskOrphanedByARestartIsClosedOnce(t *testing.T) {
 			!second.mgr.HasActiveLoop(sessionID)
 	})
 	second.waitUntil("session idle", func() bool { return !second.mgr.HasActiveLoop(sessionID) })
+	second.waitUntil("unlinked child completed", func() bool {
+		record, loadErr := second.store.GetSession(second.ctx, link.ChildID)
+		return loadErr == nil && record.Status == sessionstore.SessionStatusCompleted
+	})
 	final := second.messages(sessionID)
 	require.NoError(t, llm.ValidateToolPairing(final))
 	assert.Equal(t, 1, countAssistantToolCallsFor(final, tool.IDTask),
