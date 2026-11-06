@@ -19,7 +19,7 @@ jobs:
   verify:
     name: Verify (ubuntu-latest)
     if: github.event_name == 'pull_request' || github.event_name == 'push'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
       - name: Check out repository
@@ -36,6 +36,12 @@ jobs:
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y bubblewrap
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          # Ubuntu 25.04+ confines bwrap children as unpriv_bwrap, which denies a nested userns.
+          if [ -f /etc/apparmor.d/bwrap-userns-restrict ]; then
+            sudo mkdir -p /etc/apparmor.d/disable
+            sudo ln -sf /etc/apparmor.d/bwrap-userns-restrict /etc/apparmor.d/disable/
+            sudo apparmor_parser -R /etc/apparmor.d/bwrap-userns-restrict
+          fi
       - name: Bootstrap pinned tools
         run: make tools
       - name: Validate workflows
@@ -48,7 +54,7 @@ jobs:
   deep:
     name: Scheduled CI
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     timeout-minutes: 360
     steps:
       - name: Check out repository
@@ -65,6 +71,12 @@ jobs:
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y bubblewrap
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          # Ubuntu 25.04+ confines bwrap children as unpriv_bwrap, which denies a nested userns.
+          if [ -f /etc/apparmor.d/bwrap-userns-restrict ]; then
+            sudo mkdir -p /etc/apparmor.d/disable
+            sudo ln -sf /etc/apparmor.d/bwrap-userns-restrict /etc/apparmor.d/disable/
+            sudo apparmor_parser -R /etc/apparmor.d/bwrap-userns-restrict
+          fi
       - name: Bootstrap pinned tools
         run: make tools
       - name: Run deep CI
