@@ -98,13 +98,11 @@ and managers are omitted in that state.
 `native (openrouter)`, `disabled`, or absent when unconfigured.
 
 A manager that is `enabled` but not `running` carries `error` with the reason,
-credential-redacted. A manager failing to start does not take the daemon down —
-its Telegram service topic is how it gets fixed, and it needs the daemon alive
-to happen. `running` means the manager's own loops are up, not that it started
-once. A manager entry may also carry `pending_outputs`, `blocked_output_id`,
-`blocked_for_seconds` and `delivery_error` describing its output-delivery
-backlog; a manager ID no longer in the configuration can still appear with
-driver `removed` until its undelivered backlog drains.
+credential-redacted. A manager failing to start does not take the daemon down;
+the operator can repair configuration by hand while the daemon stays alive.
+`running` means the manager's own loops are up. Output is an append-only log with
+a per-chat cursor, so status reports configured managers without delivery
+backlog or per-row delivery health. Chat-level delivery pauses are logged.
 
 `coagent status` renders this and pins its exit codes: **0** running, **2** not
 running or not ready yet, **1** could not ask. A booting daemon prints

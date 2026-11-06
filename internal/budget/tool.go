@@ -10,9 +10,17 @@ import (
 	"github.com/pilat/coagent/internal/tool"
 )
 
-const ToolID = "set_budget"
+const (
+	ToolID        = "set_budget"
+	budgetCommand = "/budget"
+)
 
 const noActivationMessage = "This change requires a current user message beginning with /budget."
+
+var (
+	_ tool.Tool               = (*budgetTool)(nil)
+	_ tool.ActivationDeclarer = (*budgetTool)(nil)
+)
 
 type budgetTool struct {
 	store  Store
@@ -25,11 +33,6 @@ type toolParams struct {
 	CostUSD  *float64 `json:"cost_usd,omitempty"`
 	Duration string   `json:"duration,omitempty"`
 }
-
-var (
-	_ tool.Tool               = (*budgetTool)(nil)
-	_ tool.ActivationDeclarer = (*budgetTool)(nil)
-)
 
 func NewTool(store Store, rootID int64, priced bool) tool.Tool {
 	return &budgetTool{store: store, rootID: rootID, priced: priced}
@@ -44,7 +47,7 @@ func (t *budgetTool) Description() string {
 		"action=get is read-only; set and clear require the current real user message to begin with /budget."
 }
 
-func (t *budgetTool) ActivationCommands() []string { return []string{"/budget"} }
+func (t *budgetTool) ActivationCommands() []string { return []string{budgetCommand} }
 
 func (t *budgetTool) Parameters() json.RawMessage {
 	return json.RawMessage(
@@ -102,7 +105,7 @@ func (t *budgetTool) set(ctx context.Context, params toolParams) (*tool.Result, 
 		return nil, err
 	}
 
-	grant, err := currentGrant(ctx, t.rootID)
+	mutation, err := t.mutation(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -119,11 +122,9 @@ func (t *budgetTool) set(ctx context.Context, params toolParams) (*tool.Result, 
 
 	receipt := "Budget armed: " + renderLimits(cost, duration)
 
-	record, err := t.store.Arm(ctx, Mutation{
-		RootSessionID: grant.RootID, InputID: grant.InputID, ToolID: grant.ToolID,
-		Command: grant.Command, ToolCallID: grant.ToolCallID,
-		CostLimitUSD: cost, DurationSeconds: seconds, Receipt: receipt,
-	})
+	mutation.CostLimitUSD, mutation.DurationSeconds, mutation.Receipt = cost, seconds, receipt
+
+	record, err := t.store.Arm(ctx, mutation)
 	if err != nil {
 		return nil, err
 	}
@@ -136,17 +137,16 @@ func (t *budgetTool) clear(ctx context.Context, params toolParams) (*tool.Result
 		return nil, errors.New("clear does not accept limit fields")
 	}
 
-	grant, err := currentGrant(ctx, t.rootID)
+	mutation, err := t.mutation(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	const receipt = "Budget cleared"
+	receipt := "Budget cleared"
 
-	record, err := t.store.Clear(ctx, Mutation{
-		RootSessionID: grant.RootID, InputID: grant.InputID, ToolID: grant.ToolID,
-		Command: grant.Command, ToolCallID: grant.ToolCallID, Receipt: receipt,
-	})
+	mutation.Receipt = receipt
+
+	record, err := t.store.Clear(ctx, mutation)
 	if err != nil {
 		return nil, err
 	}
@@ -154,11 +154,23 @@ func (t *budgetTool) clear(ctx context.Context, params toolParams) (*tool.Result
 	return &tool.Result{Output: renderRecord(record), DirectMessages: []string{receipt}}, nil
 }
 
+func (t *budgetTool) mutation(ctx context.Context) (Mutation, error) {
+	grant, err := currentGrant(ctx, t.rootID)
+	if err != nil {
+		return Mutation{}, err
+	}
+
+	return Mutation{
+		RootSessionID: t.rootID, GrantSessionID: grant.RootID, InputID: grant.InputID, ToolID: grant.ToolID,
+		Command: grant.Command, ToolCallID: grant.ToolCallID,
+	}, nil
+}
+
 func currentGrant(ctx context.Context, rootID int64) (Grant, error) {
 	value, ok := tool.ActivationGrantFromContext(ctx)
 
 	callID := tool.CallIDFromContext(ctx)
-	if !ok || value.SessionID != rootID || value.ToolID != ToolID || value.Command != "/budget" ||
+	if !ok || value.SessionID != rootID || value.ToolID != ToolID || value.Command != budgetCommand ||
 		(value.ToolCallID != "" && value.ToolCallID != callID) {
 		//nolint:staticcheck // Exact user-facing contract includes punctuation.
 		return Grant{}, errors.New(noActivationMessage)

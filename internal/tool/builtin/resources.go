@@ -16,22 +16,14 @@ import (
 )
 
 // Resources retains isolated session resources between tool-stack activations.
-type Resources interface {
-	Retire(sessionID int64) error
-	Close() error
-	acquire(StackConfig, bashsandbox.Config) (*resourceLease, error)
-}
-
-var _ Resources = (*resources)(nil)
-
-type resources struct {
+type Resources struct {
 	mu      sync.Mutex
 	entries map[int64]*resourceLease
 	closed  bool
 }
 
 type resourceLease struct {
-	owner       *resources
+	owner       *Resources
 	sessionID   int64
 	projectID   int64
 	key         string
@@ -44,11 +36,11 @@ type resourceLease struct {
 }
 
 // NewResources creates an owner that must close after all session runners join.
-func NewResources() Resources {
-	return &resources{entries: make(map[int64]*resourceLease)}
+func NewResources() *Resources {
+	return &Resources{entries: make(map[int64]*resourceLease)}
 }
 
-func (r *resources) Retire(sessionID int64) error {
+func (r *Resources) Retire(sessionID int64) error {
 	r.mu.Lock()
 	entry := r.entries[sessionID]
 
@@ -69,7 +61,7 @@ func (r *resources) Retire(sessionID int64) error {
 	return nil
 }
 
-func (r *resources) Close() error {
+func (r *Resources) Close() error {
 	r.mu.Lock()
 	r.closed = true
 	var idle []*resourceLease
@@ -92,7 +84,7 @@ func (r *resources) Close() error {
 	return err
 }
 
-func (r *resources) acquire(cfg StackConfig, policy bashsandbox.Config) (*resourceLease, error) {
+func (r *Resources) acquire(cfg StackConfig, policy bashsandbox.Config) (*resourceLease, error) {
 	key, err := resourceKey(cfg, policy)
 	if err != nil {
 		return nil, err

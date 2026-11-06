@@ -78,7 +78,7 @@ func TestBuildToolsSection_ScheduleOnly(t *testing.T) {
 	result := buildToolsSection(reg, false)
 
 	assert.Contains(t, result, "# SCHEDULING")
-	assert.Contains(t, result, "Use schedule only for recurring future work or reminders")
+	assert.Contains(t, result, "Use schedule only for future work or reminders")
 	assert.Contains(t, result, "Never use it to poll the status or completion of already-started work")
 	assert.NotContains(t, result, "waiting for an external process")
 	assert.NotContains(t, result, "sleep")

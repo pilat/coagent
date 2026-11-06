@@ -6,7 +6,8 @@
       "name": "<name>",
       "work_dir": "<workdir>",
       "attributes": {
-        "manager_id": "telegram-main"
+        "manager_id": "telegram-main",
+        "title": "initialize"
       }
     },
     {
@@ -21,6 +22,71 @@
     {
       "type": "message",
       "message": "scheduled turn completed"
+    },
+    {
+      "type": "state_changed",
+      "status": "idle"
     }
-  ]
+  ],
+  "outputs": [
+    {
+      "id": 1,
+      "session_id": 1,
+      "type": "session_opened",
+      "content": "",
+      "source_key": "session:1:opened"
+    },
+    {
+      "id": 2,
+      "session_id": 1,
+      "type": "message",
+      "content": "ready",
+      "source_key": "message:4:final"
+    },
+    {
+      "id": 3,
+      "session_id": 1,
+      "type": "message",
+      "content": "⏳ Stopping…",
+      "source_key": "input:2:stop:started"
+    },
+    {
+      "id": 4,
+      "session_id": 1,
+      "type": "message",
+      "content": "⏸️ Session stopped\nCancelled background processes: 0",
+      "source_key": "input:2:stop:completed"
+    },
+    {
+      "id": 5,
+      "session_id": 1,
+      "type": "message",
+      "content": "⏰ scheduled\n\nscheduled task",
+      "source_key": "schedule:3:announcement"
+    },
+    {
+      "id": 6,
+      "session_id": 1,
+      "type": "message",
+      "content": "scheduled turn completed",
+      "source_key": "message:9:final"
+    },
+    {
+      "id": 7,
+      "session_id": 1,
+      "type": "message",
+      "content": "⏳ Stopping…",
+      "source_key": "input:4:stop:started"
+    },
+    {
+      "id": 8,
+      "session_id": 1,
+      "type": "message",
+      "content": "⏸️ Session stopped\nCancelled background processes: 0",
+      "source_key": "input:4:stop:completed"
+    }
+  ],
+  "owners": {
+    "1": "telegram-main"
+  }
 }

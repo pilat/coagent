@@ -37,7 +37,7 @@ type todoItem struct {
 }
 
 type todoWriteTool struct {
-	store   todo.Service
+	store   *todo.Service
 	replace TodoReplacement
 }
 
@@ -45,7 +45,7 @@ type TodoReplacement interface {
 	ReplaceTodo(ctx context.Context, callID string, items []todo.ReplacementItem) ([]*todo.Item, error)
 }
 
-func newTodoWriteTool(store todo.Service, replace TodoReplacement) *todoWriteTool {
+func newTodoWriteTool(store *todo.Service, replace TodoReplacement) *todoWriteTool {
 	return &todoWriteTool{store: store, replace: replace}
 }
 

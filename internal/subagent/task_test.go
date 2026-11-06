@@ -95,6 +95,31 @@ func TestTaskToolBrowserAvailability(t *testing.T) {
 	assert.NoError(t, task.validateParams(params))
 }
 
+func TestTaskTool_NilLoaderReturnsUnavailable(t *testing.T) {
+	t.Parallel()
+
+	for _, background := range []bool{false, true} {
+		t.Run(fmt.Sprintf("background_%t", background), func(t *testing.T) {
+			t.Parallel()
+
+			sp := &mockSpawner{}
+			task := NewTaskTool(sp, 7, nil, nil)
+			params, err := json.Marshal(TaskParams{
+				Skill: "review", Description: "review task", SubagentType: "general", Background: background,
+			})
+			require.NoError(t, err)
+
+			var result *tool.Result
+			require.NotPanics(t, func() {
+				result, err = task.Execute(tool.WithCallID(t.Context(), "nil-loader"), params)
+			})
+			require.Nil(t, result)
+			require.EqualError(t, err, "resolve task skill: skill catalog is unavailable")
+			assert.Zero(t, sp.spawnCount)
+		})
+	}
+}
+
 func TestTaskTool_SkillSeedsForegroundAndBackground(t *testing.T) {
 	for _, background := range []bool{false, true} {
 		t.Run(fmt.Sprintf("background_%t", background), func(t *testing.T) {

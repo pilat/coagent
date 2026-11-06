@@ -428,7 +428,7 @@ func newScenarioDaemon(
 	schedules schedule.Service,
 	model func() string,
 	db *sql.DB,
-) (*svc, backgroundprocess.Service) {
+) (*Service, backgroundprocess.Service) {
 	bus := sessionbus.New()
 	defaultModel := "fake-model"
 	if model != nil {
@@ -451,13 +451,13 @@ func newScenarioDaemon(
 		store,
 	)
 	service := New(
-		ctx, in, store, links, budgets, backgroundprocess.NewStore(db, store), progressruntime.New(store, bus), bus,
+		ctx, in, store, links, budgets, backgroundprocess.NewStore(db, store), progressruntime.New(store), bus,
 		schedules, in.Config, mcp, applier,
-	).(*svc)
+	)
 	return service, service.processes
 }
 
-func lifecycleInput(ctx context.Context, t *testing.T, s *svc, id int64, command string) *sessionstore.InboxInput {
+func lifecycleInput(ctx context.Context, t *testing.T, s *Service, id int64, command string) *sessionstore.InboxInput {
 	t.Helper()
 	input, err := s.enqueueUserSessionInput(ctx, id, command)
 	require.NoError(t, err)
@@ -524,109 +524,6 @@ func (p *spawnEffortProvider) effortFor(model string) string {
 	return p.efforts[model]
 }
 
-// Production claims are acknowledged in assertion and recording modes, preserving ack-triggered readiness events.
-func drainScenarioClaims(t *testing.T, name string, controller controllerapi.OutputQueueController) {
-	t.Helper()
-	path := harnessTracePath(name)
-	file := harnessTraceFile{SourceTest: t.Name()}
-	if *updateHarnessTraces {
-		if data, err := os.ReadFile(path); err == nil {
-			require.NoError(t, json.Unmarshal(data, &file))
-			file.SourceTest = t.Name()
-		}
-
-		// One drain corresponds to one scenario run: recorded claims are
-		// replaced, never accumulated across recording passes.
-		file.Claims = nil
-	}
-	receipts := map[string]string{}
-	placeholderSeq := 0
-	for {
-		claim, err := controller.ClaimOutput(t.Context())
-		if errors.Is(err, controllerapi.ErrNoOutput) {
-			break
-		}
-		require.NoError(t, err, "production claim must succeed while recording")
-		if *updateHarnessTraces {
-			recorded := harnessTraceClaim{
-				Type:                         claim.Type,
-				Content:                      normalizeClaimContent(claim.Content),
-				Attributes:                   sanitizeClaimAttributes(t, claim.Attributes),
-				SourceKey:                    claim.SourceKey,
-				ModelInputGeneration:         claim.ModelInputGeneration,
-				PreviousMessageType:          claim.PreviousMessageType,
-				PreviousModelInputGeneration: claim.PreviousModelInputGeneration,
-				ReleasesInput:                claim.ReleasesInput,
-			}
-			for _, raw := range previousMessageIDs(claim) {
-				placeholder, ok := receipts[raw]
-				if !ok {
-					placeholderSeq++
-					placeholder = fmt.Sprintf("%s%d>", messagePlaceholderPrefix, placeholderSeq)
-					receipts[raw] = placeholder
-				}
-				recorded.PreviousMessageIDs = append(recorded.PreviousMessageIDs, placeholder)
-			}
-			file.Claims = append(file.Claims, recorded)
-		}
-		if claim.Type == controllerapi.OutputMessageReplaceable ||
-			claim.Type == controllerapi.OutputMessagePersistent {
-			require.NoError(t, controller.AckOutput(t.Context(), controllerapi.OutputAckData{
-				ID: claim.ID, AttemptID: claim.AttemptID,
-				MessageIDs: []string{fmt.Sprintf("recorded-%d", claim.ID)},
-			}), "production ack must succeed while recording")
-		} else {
-			require.NoError(t, controller.AckOutput(t.Context(), controllerapi.OutputAckData{
-				ID: claim.ID, AttemptID: claim.AttemptID,
-			}))
-		}
-	}
-	if *updateHarnessTraces {
-		writeHarnessTrace(t, path, file)
-	}
-}
-
-// Wall time varies between runs; other card content must remain exact in golden claims.
-func normalizeClaimContent(content string) string {
-	return elapsedPattern.ReplaceAllString(content, "⌚ <elapsed>")
-}
-
-// Temporary paths and progress hashes carry no conversation meaning and must not destabilize recorded claims.
-func sanitizeClaimAttributes(t *testing.T, attributes map[string]any) map[string]any {
-	t.Helper()
-	sanitized := make(map[string]any, len(attributes))
-	for key, value := range attributes {
-		if key == "progress_revision" {
-			continue
-		}
-		if key == "work_dir" {
-			sanitized[key] = workDirPlaceholder
-			continue
-		}
-		sanitized[key] = value
-	}
-	if len(sanitized) == 0 {
-		return nil
-	}
-	return sanitized
-}
-
-func previousMessageIDs(claim *controllerapi.OutputClaimData) []string {
-	values, ok := claim.PreviousMessageAttributes["message_ids"].([]any)
-	if !ok {
-		return nil
-	}
-	ids := make([]string, 0, len(values))
-	for _, value := range values {
-		id, ok := value.(string)
-		if !ok {
-			continue
-		}
-		ids = append(ids, id)
-	}
-	return ids
-}
-
 // Keep wake-time formatting exact so production layout changes break the golden.
 const (
 	waitTimeLayout     = "15:04 02 Jan"
@@ -646,27 +543,19 @@ var childRefPattern = regexp.MustCompile(`#(\d+)`)
 // Elapsed card time depends on scheduling and carries no conversation meaning.
 var elapsedPattern = regexp.MustCompile(`⌚ [0-9.]+[a-z0-9.]+`)
 
-// Shared traces preserve ordered notifications and claims; receipt IDs normalize, generations stay exact.
 type harnessTraceFile struct {
-	SourceTest string              `json:"source_test"`
-	Trace      []harnessTraceEvent `json:"trace"`
-	Claims     []harnessTraceClaim `json:"claims,omitempty"`
+	SourceTest string               `json:"source_test"`
+	Trace      []harnessTraceEvent  `json:"trace"`
+	Outputs    []harnessTraceOutput `json:"outputs"`
+	Owners     map[int64]string     `json:"owners,omitempty"`
 }
 
-// Telegram replay maps normalized receipts to real targets so edits and chunk bookkeeping use valid message IDs.
-const messagePlaceholderPrefix = "<msg-"
-
-// Claim generations stay exact; random attempt IDs and raw receipts do not survive normalization.
-type harnessTraceClaim struct {
-	Type                         string         `json:"type"`
-	Content                      string         `json:"content"`
-	Attributes                   map[string]any `json:"attributes,omitempty"`
-	SourceKey                    string         `json:"source_key,omitempty"`
-	ModelInputGeneration         *int64         `json:"model_input_generation,omitempty"`
-	PreviousMessageType          string         `json:"previous_message_type,omitempty"`
-	PreviousModelInputGeneration *int64         `json:"previous_model_input_generation,omitempty"`
-	PreviousMessageIDs           []string       `json:"previous_message_ids,omitempty"`
-	ReleasesInput                bool           `json:"releases_input"`
+type harnessTraceOutput struct {
+	ID        int64  `json:"id"`
+	SessionID int64  `json:"session_id"`
+	Type      string `json:"type"`
+	Content   string `json:"content"`
+	SourceKey string `json:"source_key,omitempty"`
 }
 
 type harnessTraceEvent struct {
@@ -687,35 +576,63 @@ type harnessTraceWait struct {
 	Wake  string `json:"wake,omitempty"`
 }
 
+func scenarioOutputs(t *testing.T, h *harness) ([]harnessTraceOutput, map[int64]string) {
+	t.Helper()
+	rows, err := h.db.QueryContext(t.Context(), `SELECT id, session_id, type, content, COALESCE(source_key, ''),
+		COALESCE(json_extract(attributes, '$.manager_id'), '') FROM session_outbox ORDER BY id`)
+	require.NoError(t, err)
+	defer rows.Close()
+	outputs := make([]harnessTraceOutput, 0)
+	owners := make(map[int64]string)
+	for rows.Next() {
+		var output harnessTraceOutput
+		var owner string
+		require.NoError(
+			t,
+			rows.Scan(&output.ID, &output.SessionID, &output.Type, &output.Content, &output.SourceKey, &owner),
+		)
+		output.Content = elapsedPattern.ReplaceAllString(output.Content, "⌚ <elapsed>")
+		outputs = append(outputs, output)
+		owners[output.SessionID] = owner
+	}
+	require.NoError(t, rows.Err())
+	if len(owners) == 0 {
+		owners = nil
+	}
+	return outputs, owners
+}
+
 func assertHarnessTrace(
 	t *testing.T,
+	h *harness,
 	name string,
 	events []controllerapi.SessionNotification,
 	sessionID int64,
 ) {
 	t.Helper()
-	assertHarnessTraceForScenario(t, t.Name(), name, events, sessionID)
+	assertHarnessTraceForScenario(t, h, t.Name(), name, events, sessionID)
 }
 
 func assertHarnessTraceForScenario(
 	t *testing.T,
+	h *harness,
 	sourceTest, name string,
 	events []controllerapi.SessionNotification,
 	sessionID int64,
 ) {
 	t.Helper()
 	got := harnessTraceFile{SourceTest: sourceTest, Trace: normalizeHarnessTrace(t, events, sessionID)}
+	got.Outputs, got.Owners = scenarioOutputs(t, h)
 	path := harnessTracePath(name)
 	if *updateHarnessTraces {
-		stored := readHarnessTraceFileForUpdate(t, path)
-		stored.SourceTest = sourceTest
-		stored.Trace = got.Trace
-		writeHarnessTrace(t, path, stored)
+		writeHarnessTrace(t, path, got)
 		return
 	}
 	want := readHarnessTraceFile(t, path)
 	assert.Equal(t, want.SourceTest, got.SourceTest, "golden %s belongs to another scenario", name)
 	assert.Equal(t, want.Trace, got.Trace, "controller-visible notification trace")
+	assert.Equal(t, want.Outputs, got.Outputs, "ordered durable output log")
+	assert.Equal(t, want.Owners, got.Owners, "durable output ownership")
 }
 
 // Daemon and manager tests must consume the same trace artifacts to prevent contract drift.
@@ -732,16 +649,6 @@ func readHarnessTraceFile(t *testing.T, path string) harnessTraceFile {
 	var file harnessTraceFile
 	require.NoError(t, decoder.Decode(&file))
 	require.NotEmpty(t, file.Trace)
-	return file
-}
-
-// Recording may read an artifact containing only the notification pass.
-func readHarnessTraceFileForUpdate(t *testing.T, path string) harnessTraceFile {
-	t.Helper()
-	data, err := os.ReadFile(path)
-	require.NoError(t, err, "run the notification trace recording before claim recording")
-	var file harnessTraceFile
-	require.NoError(t, json.Unmarshal(data, &file))
 	return file
 }
 

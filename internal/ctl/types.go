@@ -2,7 +2,6 @@ package ctl
 
 import (
 	"github.com/pilat/coagent/internal/config"
-	"github.com/pilat/coagent/internal/controllerapi"
 )
 
 // ManagerControl is the introspection `status` needs from the managers runtime.
@@ -18,7 +17,6 @@ type Deps struct {
 	Config     *config.Config
 	ConfigPath string
 	Managers   ManagerControl
-	Delivery   controllerapi.OutputStatusFactory
 }
 
 // StatusResult answers `status`: daemon state, and nothing that has to be
@@ -53,13 +51,9 @@ type ProviderStatus struct {
 // ManagerStatus reports one configured manager, including why it is not running
 // — the field that tells a chat "your bot token is wrong" without a probe.
 type ManagerStatus struct {
-	ID                string `json:"id"`
-	Driver            string `json:"driver"`
-	Enabled           bool   `json:"enabled"`
-	Running           bool   `json:"running"`
-	Error             string `json:"error,omitempty"`
-	PendingOutputs    int    `json:"pending_outputs,omitempty"`
-	BlockedOutputID   int64  `json:"blocked_output_id,omitempty"`
-	BlockedForSeconds int64  `json:"blocked_for_seconds,omitempty"`
-	DeliveryError     string `json:"delivery_error,omitempty"`
+	ID      string `json:"id"`
+	Driver  string `json:"driver"`
+	Enabled bool   `json:"enabled"`
+	Running bool   `json:"running"`
+	Error   string `json:"error,omitempty"`
 }

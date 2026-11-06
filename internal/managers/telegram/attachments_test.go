@@ -19,6 +19,7 @@ import (
 // fakeAttachmentAPI serves getFile, the file download endpoint and records
 // every sendMessage text, all through one transport.
 type fakeAttachmentAPI struct {
+	getFileCalls int
 	getFilePath  string
 	payload      []byte
 	downloadCode int // non-zero overrides 200 on the /file/ endpoint
@@ -28,6 +29,7 @@ type fakeAttachmentAPI struct {
 
 func (f *fakeAttachmentAPI) RoundTrip(req *http.Request) (*http.Response, error) {
 	if strings.Contains(req.URL.Path, "/getFile") {
+		f.getFileCalls++
 		return telegramJSONResponse(`{"ok":true,"result":{"file_path":"` + f.getFilePath + `"}}`), nil
 	}
 
@@ -78,8 +80,9 @@ func newAttachmentTestManager(t *testing.T, api *fakeAttachmentAPI, controller *
 
 	return &Manager{
 		id:             "telegram-main",
-		cfg:            config.ManagerEntry{ID: "telegram-main", BotToken: "tok", TargetChatID: new(int64(1))},
+		cfg:            config.ManagerEntry{ID: "telegram-main", BotToken: "tok", AllowedUserIDs: []int64{1}},
 		controller:     controller,
+		chat:           controller,
 		httpClient:     client,
 		downloadClient: client,
 	}
@@ -101,7 +104,7 @@ func TestAttachment_DocumentSavedAndInjected(t *testing.T) {
 		},
 	}
 
-	m.handleAttachment(context.Background(), msg, attachmentOf(msg), 42, 99, true)
+	m.handleAttachment(context.Background(), msg, attachmentOf(msg), 99)
 
 	require.Len(t, controller.messageCalls, 1)
 	text := controller.messageCalls[0].Message
@@ -138,7 +141,7 @@ func TestAttachment_NoCaptionOmitsSection(t *testing.T) {
 		Document: &telegramDocument{FileID: "doc-2", FileName: "doc.bin"},
 	}
 
-	m.handleAttachment(context.Background(), msg, attachmentOf(msg), 42, 99, true)
+	m.handleAttachment(context.Background(), msg, attachmentOf(msg), 99)
 
 	require.Len(t, controller.messageCalls, 1)
 	text := controller.messageCalls[0].Message
@@ -155,19 +158,6 @@ func TestAttachment_NoCaptionOmitsSection(t *testing.T) {
 	t.Cleanup(func() { _ = os.Remove(path) })
 }
 
-func TestAttachment_NoSessionDropsSilently(t *testing.T) {
-	api := &fakeAttachmentAPI{getFilePath: "documents/x.pdf", payload: []byte("%PDF")}
-	controller := &fakeController{}
-	m := newAttachmentTestManager(t, api, controller)
-
-	msg := &telegramMessage{Document: &telegramDocument{FileID: "doc-3"}}
-
-	m.handleAttachment(context.Background(), msg, attachmentOf(msg), 42, 99, false)
-
-	assert.Empty(t, controller.messageCalls)
-	assert.Empty(t, api.sentMessages, "no-session topics produce no echo either")
-}
-
 func TestAttachment_DownloadFailureRepliesWithoutInjection(t *testing.T) {
 	api := &fakeAttachmentAPI{getFilePath: "documents/x.pdf", downloadCode: http.StatusInternalServerError}
 	controller := &fakeController{}
@@ -175,7 +165,7 @@ func TestAttachment_DownloadFailureRepliesWithoutInjection(t *testing.T) {
 
 	msg := &telegramMessage{Document: &telegramDocument{FileID: "doc-4", FileName: "x.pdf"}}
 
-	m.handleAttachment(context.Background(), msg, attachmentOf(msg), 42, 99, true)
+	m.handleAttachment(context.Background(), msg, attachmentOf(msg), 99)
 
 	assert.Empty(t, controller.messageCalls, "a failed save injects nothing")
 	require.Len(t, api.sentMessages, 1)
@@ -228,7 +218,7 @@ func TestAttachment_SavedImageCarriesReadAdviceAndRealType(t *testing.T) {
 
 	msg := &telegramMessage{Photo: []telegramPhotoSize{{FileID: "photo-1", Width: 640, Height: 480}}}
 
-	m.handleAttachment(context.Background(), msg, attachmentOf(msg), 42, 99, true)
+	m.handleAttachment(context.Background(), msg, attachmentOf(msg), 99)
 
 	require.Len(t, controller.messageCalls, 1)
 	text := controller.messageCalls[0].Message

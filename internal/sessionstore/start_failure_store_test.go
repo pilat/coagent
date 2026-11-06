@@ -5,7 +5,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -16,9 +15,6 @@ func TestStartFailureLedgerSurvivesRestartRetryAndDelivery(t *testing.T) {
 	ctx := t.Context()
 	root, err := store.CreateSession(ctx, projectID, "removed-model", "", map[string]any{"manager_id": "telegram"})
 	require.NoError(t, err)
-	require.NoError(t, store.BindManager(ctx, "telegram", "telegram", map[string]any{
-		"bot_user_id": int64(1), "chat_id": int64(2), "topology": "group",
-	}))
 	input, err := enqueueInput(ctx, store, root.ID, InputSourceUser, "preserve this task")
 	require.NoError(t, err)
 	for i := range 100 {
@@ -30,34 +26,31 @@ func TestStartFailureLedgerSurvivesRestartRetryAndDelivery(t *testing.T) {
 	pending, err := store.PeekPending(ctx, root.ID)
 	require.NoError(t, err)
 	assert.Equal(t, input.ID, pending.ID)
-	claim, err := store.ClaimOutputHead(ctx, "telegram")
+	rows, err := store.ChatOutputs(ctx, root.ID, 0, 100)
 	require.NoError(t, err)
-	assert.Equal(t, "failure variant 0", claim.Output.Content)
-	require.NoError(
-		t,
-		store.RetryOutput(
-			ctx,
-			"telegram",
-			claim.Output.ID,
-			claim.Output.AttemptID,
-			"temporary transport failure",
-			time.Now().Add(-time.Second),
-		),
-	)
+	require.Len(t, rows, 1)
+	assert.Equal(t, "failure variant 0", rows[0].Content)
 	store = testStore(db)
-	reported, err := store.RecordSessionStartFailure(ctx, root.ID, "recovered daemon still cannot start")
+	reported, err := store.RecordSessionStartFailure(ctx, root.ID, "retry before send")
 	require.NoError(t, err)
 	assert.False(t, reported)
-	retry, err := store.ClaimOutputHead(ctx, "telegram")
+	replayed, err := store.ChatOutputs(ctx, root.ID, 0, 100)
 	require.NoError(t, err)
-	assert.Equal(t, claim.Output.ID, retry.Output.ID)
-	require.NoError(t, store.AckOutput(ctx, "telegram", retry.Output.ID, retry.Output.AttemptID, []string{"1"}, nil))
+	assert.Equal(t, rows, replayed)
+	require.NoError(t, store.SetChatFocus(ctx, "telegram", "chat", root.ID))
+	entered, err := store.EnterChat(ctx, "telegram", "chat", root.ID, rows[0].ID)
+	require.NoError(t, err)
+	require.True(t, entered)
 	store = testStore(db)
-	reported, err = store.RecordSessionStartFailure(ctx, root.ID, "another retry after delivery")
+	reported, err = store.RecordSessionStartFailure(ctx, root.ID, "retry after send")
 	require.NoError(t, err)
 	assert.False(t, reported)
-	_, err = store.ClaimOutputHead(ctx, "telegram")
-	require.ErrorIs(t, err, ErrNoOutput)
+	_, cursor, entered, err := store.ChatCursor(ctx, "telegram", "chat")
+	require.NoError(t, err)
+	require.True(t, entered)
+	tail, err := store.ChatOutputs(ctx, root.ID, cursor, 100)
+	require.NoError(t, err)
+	assert.Empty(t, tail)
 	_, err = acceptInput(ctx, store, input.ID, input.RawContent)
 	require.NoError(t, err)
 	_, err = enqueueInput(ctx, store, root.ID, InputSourceUser, "new task after recovery")
@@ -91,7 +84,7 @@ func TestStartFailureRespectsStopAndKillFences(t *testing.T) {
 }
 
 func TestStartFailureConcurrentProducersCommitOneReceipt(t *testing.T) {
-	store, _, projectID := newTestStore(t)
+	store, db, projectID := newTestStore(t)
 	root, err := store.CreateSession(t.Context(), projectID, "model", "", map[string]any{"manager_id": "telegram"})
 	require.NoError(t, err)
 	_, err = enqueueInput(t.Context(), store, root.ID, InputSourceUser, "work")
@@ -114,9 +107,13 @@ func TestStartFailureConcurrentProducersCommitOneReceipt(t *testing.T) {
 		require.NoError(t, err)
 	}
 	assert.Equal(t, int64(1), reports.Load())
-	status, err := store.OutputQueueStatus(t.Context(), "telegram")
-	require.NoError(t, err)
-	assert.Equal(t, 1, status.Pending)
+	var outputs int
+	require.NoError(
+		t,
+		db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM session_outbox WHERE session_id = ?`, root.ID).
+			Scan(&outputs),
+	)
+	assert.Equal(t, 1, outputs)
 }
 
 func TestStartFailureRollsBackWhenReceiptCannotBeWritten(t *testing.T) {

@@ -106,7 +106,7 @@ func TestStartDoesNotLaunchRecoveryAfterShutdown(t *testing.T) {
 	}
 	close(links.allowReturn)
 	h.mgr.links = links
-	h.mgr.Shutdown(time.Second)
+	h.mgr.Shutdown(t.Context(), time.Second)
 	require.ErrorIs(t, h.mgr.Start(h.ctx), errDaemonShuttingDown)
 	assert.Never(t, func() bool {
 		select {
@@ -155,7 +155,7 @@ func TestStartFinishesInterruptedStopBeforeRecoverySweep(t *testing.T) {
 	messages, err := mgr.store.LoadActiveMessages(ctx, parent.ID)
 	require.NoError(t, err)
 	assert.Equal(t, 0, countToolResultsFor(toDTO(messages), "process_event"))
-	mgr.Shutdown(3 * time.Second)
+	mgr.Shutdown(t.Context(), 3*time.Second)
 }
 
 // TestSweep_PartialFailureIsNotSuccess: a failed pass used to end in a cheerful

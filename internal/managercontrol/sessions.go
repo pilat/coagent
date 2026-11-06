@@ -8,6 +8,7 @@ import (
 
 	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/sessionevent"
+	"github.com/pilat/coagent/internal/worktree"
 )
 
 func (s *service) createSession(
@@ -23,6 +24,10 @@ func (s *service) createSession(
 		return 0, errors.New("repo root is reserved for created worktrees")
 	}
 
+	if _, supplied := data.Attributes[controllerapi.SessionAttributeTitle]; supplied {
+		return 0, errors.New("title attribute is reserved")
+	}
+
 	if _, supplied := data.Attributes["repo_root"]; supplied {
 		return 0, errors.New("repo_root attribute is reserved for created worktrees")
 	}
@@ -32,21 +37,21 @@ func (s *service) createSession(
 	}
 
 	var (
-		created             createdWorktree
+		created             worktree.Result
 		worktreeProjectName string
 	)
 
 	if data.WorktreeName != "" {
-		next, err := s.createWorktree(ctx, data.WorkDir, data.WorktreeName)
+		next, err := worktree.Create(ctx, s.unifiedConfig(), data.WorkDir, data.WorktreeName, false)
 		if err != nil {
 			return 0, fmt.Errorf("worktree: %w", err)
 		}
 
-		data.WorkDir = next.path
+		data.WorkDir = next.Path
 		// Consumed: the created worktree is registered below under its display name.
 		data.WorktreeName = ""
-		data.RepoRoot = next.repoRoot
-		worktreeProjectName = next.displayName
+		data.RepoRoot = next.RepoRoot
+		worktreeProjectName = next.DisplayName
 		created = next
 	}
 
@@ -57,19 +62,16 @@ func (s *service) createSession(
 
 	data.Attributes[controllerapi.SessionAttributeManagerID] = managerID
 
-	if data.RepoRoot != "" {
-		data.Attributes["repo_root"] = data.RepoRoot
-		data.Attributes[controllerapi.SessionAttributeWorktreeOrigin] = controllerapi.WorktreeOriginController
-	}
+	created.StampAttributes(data.Attributes)
 
 	projectID, err := s.resolveSessionProject(ctx, data, worktreeProjectName)
 	if err != nil {
-		return 0, abandonWorktree(created, fmt.Errorf("resolve project: %w", err))
+		return 0, fmt.Errorf("resolve project: %w", created.Abandon(err))
 	}
 
 	sessionID, err := s.backend.Send(ctx, projectID, data.Prompt, data.Model, data.Attributes)
 	if err != nil {
-		return 0, abandonWorktree(created, fmt.Errorf("send session: %w", err))
+		return 0, fmt.Errorf("send session: %w", created.Abandon(err))
 	}
 
 	if data.Prompt != "" {
@@ -79,41 +81,25 @@ func (s *service) createSession(
 	return sessionID, nil
 }
 
-// abandonWorktree rolls a freshly created worktree back after a later
-// registration or launch failure, folding a rollback failure into the result.
-// A project registered before the failure may stay in the registry; with no
-// session it never surfaces in pickers or session lists.
-func abandonWorktree(created createdWorktree, err error) error {
-	if created.remove == nil {
-		return err
-	}
-
-	if removeErr := created.remove(); removeErr != nil {
-		return errors.Join(err, removeErr)
-	}
-
-	return err
-}
-
 func (s *service) sendSessionMessage(
 	ctx context.Context,
 	managerID string,
 	data controllerapi.SessionMessageData,
-) (int64, error) {
+) error {
 	if err := s.requireOwnedSession(ctx, managerID, data.SessionID); err != nil {
-		return 0, err
+		return err
 	}
 
 	acceptedID, err := s.backend.SendToSessionResolved(ctx, data.SessionID, data.Message)
 	if err != nil {
-		return 0, fmt.Errorf("send resolved session message: %w", err)
+		return fmt.Errorf("send resolved session message: %w", err)
 	}
 
 	if data.Message != "" {
 		s.publishInputReceived(acceptedID, data.Message, "user")
 	}
 
-	return acceptedID, nil
+	return nil
 }
 
 func (s *service) listSessions(
@@ -161,61 +147,12 @@ func (s *service) setSessionModel(
 	return nil
 }
 
-func (s *service) setSessionAttributes(
-	ctx context.Context,
-	managerID string,
-	data controllerapi.SessionSetAttributesData,
-) error {
-	if err := s.authorizeAttributeUpdate(ctx, managerID, &data); err != nil {
-		return err
-	}
-
-	if err := s.backend.SetAttributes(ctx, data.SessionID, data.Attributes); err != nil {
-		return fmt.Errorf("set session attributes: %w", err)
-	}
-
-	return nil
-}
-
-func (s *service) currentProgress(
-	ctx context.Context,
-	managerID string,
-	sessionID int64,
-) (*controllerapi.ProgressData, error) {
-	if err := s.requireOwnedSession(ctx, managerID, sessionID); err != nil {
-		return nil, err
-	}
-
-	current, err := s.progress.Current(ctx, sessionID)
-	if err != nil {
-		return nil, fmt.Errorf("current progress: %w", err)
-	}
-
-	return current, nil
-}
-
-func (s *service) refreshProgress(ctx context.Context, managerID string, sessionID int64) error {
-	if err := s.requireOwnedSession(ctx, managerID, sessionID); err != nil {
-		return err
-	}
-
-	if err := s.progress.Refresh(ctx, sessionID); err != nil {
-		return fmt.Errorf("refresh progress: %w", err)
-	}
-
-	return nil
-}
-
 func (s *service) subscribe(managerID string) <-chan controllerapi.SessionNotification {
 	if managerID == "" {
 		return make(chan controllerapi.SessionNotification)
 	}
 
 	return s.bus.SubscribeManager(managerID)
-}
-
-func (s *service) unsubscribe(ch <-chan controllerapi.SessionNotification) {
-	s.bus.UnsubscribeManager(ch)
 }
 
 func (s *service) publishInputReceived(sessionID int64, message, source string) {

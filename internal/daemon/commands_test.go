@@ -47,11 +47,6 @@ func TestManagerBoundControllerRejectsEveryForeignSessionOperation(t *testing.T)
 				SessionID: betaRecord.ID, Model: "other",
 			})
 		}},
-		{name: "set attributes", call: func() error {
-			return controller.SetSessionAttributes(ctx, controllerapi.SessionSetAttributesData{
-				SessionID: betaRecord.ID, Attributes: map[string]any{"topic": 9},
-			})
-		}},
 		{name: "list skills", call: func() error {
 			_, listErr := controller.ListSkills(ctx, controllerapi.ConfigSkillsData{SessionID: betaRecord.ID})
 			return listErr
@@ -158,7 +153,7 @@ func TestManager_SendToSession_PersistsWhileRunning(t *testing.T) {
 	pending, err := mgr.store.PeekPending(ctx, id)
 	require.NoError(t, err)
 	assert.Equal(t, "do something", pending.RawContent)
-	mgr.Shutdown(3 * time.Second)
+	mgr.Shutdown(t.Context(), 3*time.Second)
 }
 
 func TestManager_SendDuplicateWorkdir(t *testing.T) {
@@ -173,7 +168,7 @@ func TestManager_SendDuplicateWorkdir(t *testing.T) {
 	id2, err := mgr.Send(ctx, pid, "another", "", nil)
 	require.NoError(t, err)
 	assert.NotEqual(t, id1, id2)
-	mgr.Shutdown(3 * time.Second)
+	mgr.Shutdown(t.Context(), 3*time.Second)
 }
 
 func TestManager_InputReceivedPubSub(t *testing.T) {
@@ -185,7 +180,7 @@ func TestManager_InputReceivedPubSub(t *testing.T) {
 	require.NoError(t, err)
 	sub := mgr.bus.Subscribe(id)
 	defer mgr.bus.Unsubscribe(id, sub)
-	mgr.bus.Publish(id, sessionevent.Notification{
+	mgr.bus.Publish(id, "", sessionevent.Notification{
 		Type:    sessionevent.NotifyInputReceived,
 		Message: "hello from agent",
 		Source:  "agent",
@@ -198,7 +193,7 @@ func TestManager_InputReceivedPubSub(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for input_received notification")
 	}
-	mgr.Shutdown(3 * time.Second)
+	mgr.Shutdown(t.Context(), 3*time.Second)
 }
 
 func TestManager_SendCreatesNewSessionAfterCompletion(t *testing.T) {
@@ -226,7 +221,7 @@ func TestManager_SendCreatesNewSessionAfterCompletion(t *testing.T) {
 	ch.waitFor(t, "session state", func(events []controllerapi.SessionNotification) bool {
 		return hasStateEvent(events, id2, controllerapi.StateRunning)
 	})
-	mgr.Shutdown(3 * time.Second)
+	mgr.Shutdown(t.Context(), 3*time.Second)
 }
 
 func TestManager_SendToSession_AlreadyRunningUsesDurableInbox(t *testing.T) {
@@ -258,7 +253,7 @@ func TestManager_SendToSession_AlreadyRunningUsesDurableInbox(t *testing.T) {
 
 	// Only one session should exist
 	assert.True(t, mgr.HasActiveLoop(id))
-	mgr.Shutdown(3 * time.Second)
+	mgr.Shutdown(t.Context(), 3*time.Second)
 }
 
 func TestManager_SecondSendCreatesNewLoop(t *testing.T) {
@@ -293,7 +288,7 @@ func TestManager_SecondSendCreatesNewLoop(t *testing.T) {
 	sessCount := len(factory.sessions)
 	factory.mu.Unlock()
 	assert.GreaterOrEqual(t, sessCount, 2, "factory should have been called at least twice")
-	mgr.Shutdown(3 * time.Second)
+	mgr.Shutdown(t.Context(), 3*time.Second)
 }
 
 func TestManager_SendAlwaysCreatesNew(t *testing.T) {
@@ -322,7 +317,7 @@ func TestManager_SendAlwaysCreatesNew(t *testing.T) {
 	ch.waitFor(t, "session state", func(events []controllerapi.SessionNotification) bool {
 		return hasStateEvent(events, id2, controllerapi.StateRunning)
 	})
-	mgr.Shutdown(3 * time.Second)
+	mgr.Shutdown(t.Context(), 3*time.Second)
 }
 
 func TestManager_SetModel_IdleSession(t *testing.T) {
@@ -451,7 +446,7 @@ func TestNewSessionSettlesTheEffortOnItsModel(t *testing.T) {
 		"a fresh session must ask for its model's default, not a clamped stand-in")
 }
 
-func TestSendSessionMessageResolvedFollowsOwnedReplacement(t *testing.T) {
+func TestSendSessionMessageFollowsOwnedReplacement(t *testing.T) {
 	ctx := context.Background()
 	h := newHarness(t, harnessOptions{configure: withTestModels, clientFor: (&mockFactory{}).client})
 	mgr, store := h.mgr, h.store
@@ -462,13 +457,14 @@ func TestSendSessionMessageResolvedFollowsOwnedReplacement(t *testing.T) {
 	newID, err := mgr.clear(ctx, lifecycleInput(ctx, t, mgr, old.ID, "/clear"))
 	require.NoError(t, err)
 	controller := newTestController(mgr, &config.Config{}, nil, nil).ForManager("cli")
-	router, ok := controller.(controllerapi.SessionMessageRouter)
-	require.True(t, ok)
-	acceptedID, err := router.SendSessionMessageResolved(ctx, controllerapi.SessionMessageData{
+	err = controller.SendSessionMessage(ctx, controllerapi.SessionMessageData{
 		SessionID: old.ID, Message: "racing clear",
 	})
 	require.NoError(t, err)
-	assert.Equal(t, newID, acceptedID)
+	input, err := store.PeekPending(ctx, newID)
+	require.NoError(t, err)
+	assert.Equal(t, newID, input.SessionID)
+	assert.Equal(t, "racing clear", input.RawContent)
 }
 
 // A model that cannot build a client must be reported and leave the existing session resumable.

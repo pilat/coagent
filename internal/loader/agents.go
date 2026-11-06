@@ -24,7 +24,7 @@ type contextArtifact struct {
 // sections; the error joins every failed candidate without blanking the merge.
 // Project and local candidates read through a project-confined root; global
 // candidates are trusted daemon inputs read from the host.
-func (s *svc) LoadAgentsMD(workDir string) (string, error) {
+func (s *Service) LoadAgentsMD(workDir string) (string, error) {
 	var artifacts []contextArtifact
 	var errs []error
 
@@ -68,21 +68,21 @@ func (s *svc) LoadAgentsMD(workDir string) (string, error) {
 	return mergeContextArtifacts(artifacts), errors.Join(errs...)
 }
 
-func (s *svc) findGlobalArtifact() (*contextArtifact, error) {
+func (s *Service) findGlobalArtifact() (*contextArtifact, error) {
 	return s.searchArtifact("global", globalContextCandidates(), nil)
 }
 
-func (s *svc) findProjectArtifact(workDir string, access safefile.Access) (*contextArtifact, error) {
+func (s *Service) findProjectArtifact(workDir string, access *safefile.Access) (*contextArtifact, error) {
 	return s.searchArtifact("project", projectContextCandidates(workDir), access)
 }
 
-func (s *svc) findLocalArtifact(workDir string, access safefile.Access) (*contextArtifact, error) {
+func (s *Service) findLocalArtifact(workDir string, access *safefile.Access) (*contextArtifact, error) {
 	return s.searchArtifact("local", localContextCandidates(workDir), access)
 }
 
 // searchArtifact returns the first non-empty candidate; any other read error
 // is recorded and the search continues, so one failure never blanks the merge.
-func (s *svc) searchArtifact(role string, candidates []string, access safefile.Access) (*contextArtifact, error) {
+func (s *Service) searchArtifact(role string, candidates []string, access *safefile.Access) (*contextArtifact, error) {
 	var errs []error
 
 	for _, path := range candidates {

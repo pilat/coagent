@@ -37,7 +37,9 @@ type Record struct {
 }
 
 type Mutation struct {
-	RootSessionID   int64
+	RootSessionID int64
+	// GrantSessionID receives the receipt; delegated mutations have no input or command.
+	GrantSessionID  int64
 	InputID         int64
 	ToolID          string
 	Command         string
@@ -45,6 +47,24 @@ type Mutation struct {
 	CostLimitUSD    *float64
 	DurationSeconds *int64
 	Receipt         string
+}
+
+// Remaining uses the root tree's cumulative cost and the budget's original baseline.
+func (r Record) Remaining(treeCostUSD float64, now time.Time) (*float64, *time.Duration) {
+	var cost *float64
+	var duration *time.Duration
+
+	if r.CostLimitUSD != nil {
+		remaining := max(*r.CostLimitUSD-(treeCostUSD-r.BaselineCostUSD), 0)
+		cost = &remaining
+	}
+
+	if r.DurationSeconds != nil && !now.Before(r.ArmedAt) {
+		remaining := max(time.Duration(*r.DurationSeconds)*time.Second-now.Sub(r.ArmedAt), 0)
+		duration = &remaining
+	}
+
+	return cost, duration
 }
 
 // CrossingReason compares costs at the same precision as checkpoint receipts.

@@ -11,7 +11,7 @@ import (
 )
 
 type todoReplacement struct {
-	memory todo.Service
+	memory *todo.Service
 }
 
 var _ builtin.TodoReplacement = (*todoReplacement)(nil)

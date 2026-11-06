@@ -1,0 +1,67 @@
+{
+  "source_test": "TestHarnessScenario_WorkToolStepsPublishOneMessageEach",
+  "trace": [
+    {
+      "type": "session_created",
+      "name": "<name>",
+      "work_dir": "<workdir>",
+      "attributes": {
+        "manager_id": "telegram:main",
+        "title": "inspect files"
+      }
+    },
+    {
+      "type": "state_changed",
+      "status": "running"
+    },
+    {
+      "type": "message",
+      "message": "→ ls: `.`\n→ glob: `*.go`"
+    },
+    {
+      "type": "message",
+      "message": "Checking files\n\n→ ls: `.`"
+    },
+    {
+      "type": "message",
+      "message": "Work complete."
+    },
+    {
+      "type": "state_changed",
+      "status": "idle"
+    }
+  ],
+  "outputs": [
+    {
+      "id": 1,
+      "session_id": 1,
+      "type": "session_opened",
+      "content": "",
+      "source_key": "session:1:opened"
+    },
+    {
+      "id": 2,
+      "session_id": 1,
+      "type": "message",
+      "content": "→ ls: `.`\n→ glob: `*.go`",
+      "source_key": "message:2:reply"
+    },
+    {
+      "id": 3,
+      "session_id": 1,
+      "type": "message",
+      "content": "Checking files\n\n→ ls: `.`",
+      "source_key": "message:5:reply"
+    },
+    {
+      "id": 4,
+      "session_id": 1,
+      "type": "message",
+      "content": "Work complete.",
+      "source_key": "message:9:final"
+    }
+  ],
+  "owners": {
+    "1": "telegram:main"
+  }
+}

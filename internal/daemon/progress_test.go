@@ -23,7 +23,15 @@ func TestPublishWaiting_ProjectsOnlyOneShotsOwnedByPendingSleepCalls(t *testing.
 	require.NoError(t, err)
 	now := time.Now().UTC().Truncate(time.Second)
 	standaloneAt := now.Add(10 * time.Minute)
-	_, err = schedules.AddSchedule(ctx, rec.ID, "", &standaloneAt, "standalone reminder", false)
+	_, err = schedules.AddSchedule(
+		ctx,
+		rec.ID,
+		"",
+		&standaloneAt,
+		"standalone reminder",
+		false,
+		schedule.ScheduleMetadata{},
+	)
 	require.NoError(t, err)
 	sleepAt := now.Add(20 * time.Minute)
 	_, err = mgr.store.Commit(ctx, sessionstore.Commit{

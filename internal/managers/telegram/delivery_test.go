@@ -8,381 +8,131 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/pilat/coagent/internal/controllerapi"
+	"github.com/pilat/coagent/internal/config"
 	"github.com/pilat/coagent/internal/managerdelivery"
 )
 
-func TestOutputTransport_ReplacesOnlyAfterAReplaceableReceipt(t *testing.T) {
+func TestOutputTransport_AppendsEveryMessageAndPreservesCloseContent(t *testing.T) {
 	var calls []telegramHarnessCall
 	manager := newTelegramHarnessManager(t, &fakeController{}, &calls)
 	transport := &outputTransport{manager: manager}
-
-	first := transport.Deliver(t.Context(), outputItem(&controllerapi.OutputClaimData{
-		SessionID: 42, Type: "message_replaceable", Content: "first",
-		Attributes: map[string]any{"name": "project", "work_dir": "/tmp/project"},
-	}))
-	require.Empty(t, first.Error)
-	require.Equal(t, []string{"123"}, first.MessageIDs)
-	require.Equal(t, map[string]any{"telegram_topic_id": int64(harnessTopicID)}, first.SessionPatch)
-
-	replaced := transport.Deliver(t.Context(), outputItem(&controllerapi.OutputClaimData{
-		SessionID: 42, Type: "message_persistent", Content: "second",
-		PreviousMessageType:       "message_replaceable",
-		PreviousMessageAttributes: map[string]any{"message_ids": []any{"123"}},
-	}))
-	require.Empty(t, replaced.Error)
-	assert.Equal(t, []string{"123"}, replaced.MessageIDs)
-
-	appended := transport.Deliver(t.Context(), outputItem(&controllerapi.OutputClaimData{
-		SessionID: 42, Type: "message_persistent", Content: "third",
-		PreviousMessageType:       "message_persistent",
-		PreviousMessageAttributes: map[string]any{"message_ids": []any{"123"}},
-	}))
-	require.Empty(t, appended.Error)
-	assert.Equal(t, []string{"123"}, appended.MessageIDs)
-	assert.Equal(t, []string{
-		"createForumTopic", "sendMessage", "editForumTopic", "editMessageText", "editForumTopic", "sendMessage",
-	}, callMethods(calls))
-}
-
-func TestOutputTransport_TreatsMissingEditTargetAsNewMessage(t *testing.T) {
-	manager := newTelegramHarnessManager(t, &fakeController{}, new([]telegramHarnessCall))
-	manager.registerTopic(42, harnessTopicID)
-	manager.httpClient = failingEditClient(t)
-	transport := &outputTransport{manager: manager}
-	result := transport.Deliver(context.Background(), outputItem(&controllerapi.OutputClaimData{
-		SessionID: 42, Type: "message_replaceable", Content: "replacement",
-		PreviousMessageType:       "message_replaceable",
-		PreviousMessageAttributes: map[string]any{"message_ids": []any{"123"}},
-	}))
-	require.Empty(t, result.Error)
-	assert.Equal(t, []string{"456"}, result.MessageIDs)
-}
-
-func TestOutputTransport_RendersProcessCancellationCountBeforeClosingSession(t *testing.T) {
-	var calls []telegramHarnessCall
-	manager := newTelegramHarnessManager(t, &fakeController{}, &calls)
-	manager.serviceTopicID = 6001
-	manager.registerTopic(42, harnessTopicID)
-	transport := &outputTransport{manager: manager}
-
-	result := transport.Deliver(t.Context(), outputItem(&controllerapi.OutputClaimData{
-		SessionID: 42,
-		Type:      controllerapi.OutputSessionClosed,
-		Attributes: map[string]any{
-			"cancelled_processes": float64(3),
-		},
-	}))
-	require.Empty(t, result.Error)
-	require.Len(t, calls, 2)
-	assert.Equal(t, "deleteForumTopic", calls[0].Method)
-	assert.Equal(t, telegramHarnessCall{
-		Method: "sendMessage", ChatID: harnessChatID, ThreadID: 6001,
-		Text: "Session 42 killed. Cancelled background processes: 3", ParseMode: "HTML",
-	}, calls[1])
-}
-
-func TestOutputTransport_RetryDoesNotDuplicateProcessCancellationCount(t *testing.T) {
-	var calls []telegramHarnessCall
-	manager := newTelegramHarnessManager(t, &fakeController{}, &calls)
-	manager.serviceTopicID = 6001
-	manager.registerTopic(42, harnessTopicID)
-
-	record := telegramHarnessRecorder(t, &calls)
-	failDelete := true
-	manager.httpClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		response, err := record(req)
-		if filepath.Base(req.URL.Path) == "deleteForumTopic" && failDelete {
-			failDelete = false
-
-			return harnessResponse(req,
-				`{"ok":false,"error_code":500,"description":"temporary delete failure"}`), nil
-		}
-
-		return response, err
-	})}
-	transport := &outputTransport{manager: manager}
-	claim := &controllerapi.OutputClaimData{
-		SessionID: 42, Type: controllerapi.OutputSessionClosed,
-		Attributes: map[string]any{"cancelled_processes": float64(3)},
+	for _, text := range []string{"first", "second", "Session killed. Cancelled background processes: 3"} {
+		assert.Equal(t, managerdelivery.SendOK, transport.Send(t.Context(), text).Class)
 	}
-
-	first := transport.Deliver(t.Context(), outputItem(claim))
-	require.NotEmpty(t, first.Error)
-	second := transport.Deliver(t.Context(), outputItem(claim))
-	require.Empty(t, second.Error)
-
-	sends := 0
+	require.Len(t, calls, 3)
 	for _, call := range calls {
-		if call.Method == "sendMessage" {
-			sends++
-		}
+		assert.Equal(t, "sendMessage", call.Method)
 	}
-	assert.Equal(t, 1, sends)
+	assert.Equal(t, "first", calls[0].Text)
+	assert.Equal(t, "second", calls[1].Text)
+	assert.Equal(t, "Session killed. Cancelled background processes: 3", calls[2].Text)
 }
 
-// A shorter replaceable edits the common prefix and deletes every surplus
-// chunk, so the receipt shrinks with the content.
-func TestOutputTransport_ShorterReplacementDeletesSurplusChunks(t *testing.T) {
-	var ops []chunkOperation
-	manager := newTelegramHarnessManager(t, &fakeController{}, new([]telegramHarnessCall))
-	manager.registerTopic(42, harnessTopicID)
-	manager.httpClient = chunkClient(t, &ops)
-	transport := &outputTransport{manager: manager}
-
-	result := transport.Deliver(t.Context(), outputItem(&controllerapi.OutputClaimData{
-		SessionID: 42, Type: "message_replaceable", Content: "short now",
-		PreviousMessageType:       "message_replaceable",
-		PreviousMessageAttributes: map[string]any{"message_ids": []any{"111", "222", "333"}},
-	}))
-	require.Empty(t, result.Error)
-	assert.Equal(t, []string{"111"}, result.MessageIDs)
-	assert.Equal(t, []chunkOperation{
-		{Method: "editMessageText", MessageID: 111},
-		{Method: "deleteMessage", MessageID: 222},
-		{Method: "deleteMessage", MessageID: 333},
-	}, ops)
-}
-
-// A longer replaceable edits what exists and sends only the missing tail.
-func TestOutputTransport_LongerReplacementEditsAndAppendsChunks(t *testing.T) {
-	var ops []chunkOperation
-	manager := newTelegramHarnessManager(t, &fakeController{}, new([]telegramHarnessCall))
-	manager.registerTopic(42, harnessTopicID)
-	manager.httpClient = chunkClient(t, &ops)
-	transport := &outputTransport{manager: manager}
-
-	long := strings.Repeat("word ", 1000) // > maxMessageChunk after rendering
-	result := transport.Deliver(t.Context(), outputItem(&controllerapi.OutputClaimData{
-		SessionID: 42, Type: "message_replaceable", Content: long,
-		PreviousMessageType:       "message_replaceable",
-		PreviousMessageAttributes: map[string]any{"message_ids": []any{"111"}},
-	}))
-	require.Empty(t, result.Error)
-	require.Len(t, result.MessageIDs, 2)
-	assert.Equal(t, "111", result.MessageIDs[0])
-	assert.Equal(t, []chunkOperation{
-		{Method: "editMessageText", MessageID: 111},
-		{Method: "sendMessage", MessageID: 500},
-	}, ops)
-}
-
-func TestOutputTransport_DeliveryFailureTruncatesUTF8Safely(t *testing.T) {
-	transport := &outputTransport{}
-	result := transport.deliveryFailure(assert.AnError)
-	assert.True(t, utf8.ValidString(result.Error))
-
-	result = transport.deliveryFailure(errors.New("x" + strings.Repeat("😀", 128)))
-	assert.LessOrEqual(t, len(result.Error), 512)
-	assert.True(t, utf8.ValidString(result.Error))
-}
-
-func outputItem(claim *controllerapi.OutputClaimData) *managerdelivery.Item {
-	return &managerdelivery.Item{Payload: claim}
-}
-
-func failingEditClient(t *testing.T) *http.Client {
-	t.Helper()
-	return &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		if filepath.Base(req.URL.Path) == "editMessageText" {
-			return harnessResponse(
-				req,
-				`{"ok":false,"error_code":400,"description":"Bad Request: message to edit not found"}`,
-			), nil
-		}
-		return harnessResponse(req, `{"ok":true,"result":{"message_id":456}}`), nil
-	})}
-}
-
-type chunkOperation struct {
-	Method    string
-	MessageID int64
-}
-
-// chunkClient records every edit/delete target and hands out fresh IDs for
-// sends, so chunk reconciliation can be asserted operation by operation.
-func chunkClient(t *testing.T, ops *[]chunkOperation) *http.Client {
-	t.Helper()
-
-	next := 500
-
-	return &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		method := filepath.Base(req.URL.Path)
-
-		var body struct {
-			MessageID int64 `json:"message_id"`
-		}
-		require.NoError(t, json.NewDecoder(req.Body).Decode(&body))
-
-		switch method {
-		case "editMessageText", "deleteMessage":
-			*ops = append(*ops, chunkOperation{Method: method, MessageID: body.MessageID})
-		case "sendMessage":
-			*ops = append(*ops, chunkOperation{Method: method, MessageID: int64(next)})
-			next++
-		}
-
-		return harnessResponse(req, `{"ok":true,"result":{"message_id":500}}`), nil
-	})}
-}
-
-func callMethods(calls []telegramHarnessCall) []string {
-	methods := make([]string, 0, len(calls))
-	for _, call := range calls {
-		methods = append(methods, call.Method)
-	}
-	return methods
-}
-
-// When the first chunk's edit target is definitively gone, the fallback renders
-// a full new set — but the still-alive surplus receipts behind the missing one
-// must be deleted too, or they stay visible in the topic forever.
-func TestOutputTransport_MissingFirstChunkStillDeletesSurplusReceipts(t *testing.T) {
-	var ops []chunkOperation
-	manager := newTelegramHarnessManager(t, &fakeController{}, new([]telegramHarnessCall))
-	manager.registerTopic(42, harnessTopicID)
-	manager.httpClient = missingFirstEditClient(t, &ops)
-	transport := &outputTransport{manager: manager}
-
-	result := transport.Deliver(t.Context(), outputItem(&controllerapi.OutputClaimData{
-		SessionID: 42, Type: "message_replaceable", Content: "replacement",
-		PreviousMessageType:       "message_replaceable",
-		PreviousMessageAttributes: map[string]any{"message_ids": []any{"111", "222"}},
-	}))
-	require.Empty(t, result.Error)
-	assert.NotEmpty(t, result.MessageIDs)
-	assert.Equal(t, []chunkOperation{
-		{Method: "editMessageText", MessageID: 111},
-		{Method: "deleteMessage", MessageID: 222},
-		{Method: "sendMessage", MessageID: 500},
-	}, ops)
-}
-
-// missingFirstEditClient fails the first recorded receipt's edit with Telegram's
-// definitive "message to edit not found" and succeeds everywhere else.
-func missingFirstEditClient(t *testing.T, ops *[]chunkOperation) *http.Client {
-	t.Helper()
-
-	next := 500
-
-	return &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		method := filepath.Base(req.URL.Path)
-
-		var body struct {
-			MessageID int64 `json:"message_id"`
-		}
-		require.NoError(t, json.NewDecoder(req.Body).Decode(&body))
-
-		switch method {
-		case "editMessageText", "deleteMessage":
-			*ops = append(*ops, chunkOperation{Method: method, MessageID: body.MessageID})
-		case "sendMessage":
-			*ops = append(*ops, chunkOperation{Method: method, MessageID: int64(next)})
-			next++
-		}
-
-		if method == "editMessageText" && body.MessageID == 111 {
-			return harnessResponse(
-				req,
-				`{"ok":false,"error_code":400,"description":"Bad Request: message to edit not found"}`,
-			), nil
-		}
-
-		return harnessResponse(req, `{"ok":true,"result":{"message_id":500}}`), nil
-	})}
-}
-
-func TestMayReusePreviousReceiptsByAdjacentGenerations(t *testing.T) {
-	current := int64(3)
-	older := int64(2)
-
-	tests := []struct {
-		name     string
-		claim    *controllerapi.OutputClaimData
-		expected bool
+func TestClassifyDeliveryError_ClassesAndRetryAfter(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		err   error
+		class managerdelivery.SendClass
+		retry time.Duration
 	}{
-		{
-			name:     "both legacy rows keep the legacy rule",
-			claim:    &controllerapi.OutputClaimData{PreviousMessageType: "message_replaceable"},
-			expected: true,
-		},
-		{
-			name: "equal generations edit",
-			claim: &controllerapi.OutputClaimData{
-				PreviousMessageType:          "message_replaceable",
-				ModelInputGeneration:         &current,
-				PreviousModelInputGeneration: &current,
-			},
-			expected: true,
-		},
-		{
-			name: "changed generation sends new",
-			claim: &controllerapi.OutputClaimData{
-				PreviousMessageType:          "message_replaceable",
-				ModelInputGeneration:         &current,
-				PreviousModelInputGeneration: &older,
-			},
-			expected: false,
-		},
-		{
-			name: "mixed legacy and current rows send new",
-			claim: &controllerapi.OutputClaimData{
-				PreviousMessageType:          "message_replaceable",
-				ModelInputGeneration:         &current,
-				PreviousModelInputGeneration: nil,
-			},
-			expected: false,
-		},
-		{
-			name: "mixed current predecessor and legacy row sends new",
-			claim: &controllerapi.OutputClaimData{
-				PreviousMessageType:          "message_replaceable",
-				ModelInputGeneration:         nil,
-				PreviousModelInputGeneration: &older,
-			},
-			expected: false,
-		},
-		{
-			name: "persistent predecessor never edits",
-			claim: &controllerapi.OutputClaimData{
-				PreviousMessageType:          "message_persistent",
-				ModelInputGeneration:         &current,
-				PreviousModelInputGeneration: &current,
-			},
-			expected: false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.expected, mayReusePreviousReceipts(tt.claim))
+		{name: "network", err: context.DeadlineExceeded, class: managerdelivery.SendTransient},
+		{name: "rate limit", err: &tgAPIError{ErrorCode: 429, RetryAfter: 12}, class: managerdelivery.SendTransient, retry: 12 * time.Second},
+		{name: "server", err: &tgAPIError{ErrorCode: 503}, class: managerdelivery.SendTransient},
+		{name: "blocked", err: &tgAPIError{ErrorCode: 403}, class: managerdelivery.SendChatFailure},
+		{name: "missing chat", err: &tgAPIError{ErrorCode: 400, Description: "Bad Request: chat not found"}, class: managerdelivery.SendChatFailure},
+		{name: "bad row", err: &tgAPIError{ErrorCode: 400, Description: "message is too long"}, class: managerdelivery.SendRowPermanent},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			result := classifyDeliveryError(test.err)
+			assert.Equal(t, test.class, result.Class)
+			assert.Equal(t, test.retry, result.RetryAfter)
+			assert.NotEmpty(t, result.Reason)
 		})
 	}
 }
 
-func TestOutputTransport_ChangedGenerationSendsNewChunks(t *testing.T) {
-	var ops []chunkOperation
-	manager := newTelegramHarnessManager(t, &fakeController{}, new([]telegramHarnessCall))
-	manager.registerTopic(42, harnessTopicID)
-	manager.httpClient = chunkClient(t, &ops)
-	transport := &outputTransport{manager: manager}
+func TestClassifyDeliveryError_TruncatesUTF8Safely(t *testing.T) {
+	result := classifyDeliveryError(errors.New("x" + strings.Repeat("😀", 128)))
+	assert.LessOrEqual(t, len(result.Reason), 512)
+	assert.True(t, utf8.ValidString(result.Reason))
+}
 
-	current := int64(2)
-	previous := int64(1)
+func TestOutputTransport_ParseFallbackRetriesOnlyRejectedChunk(t *testing.T) {
+	var texts []string
+	var modes []string
+	manager := &Manager{
+		cfg: config.ManagerEntry{BotToken: "test-token", AllowedUserIDs: []int64{1}},
+		httpClient: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			var body map[string]any
+			require.NoError(t, json.NewDecoder(req.Body).Decode(&body))
+			texts = append(texts, body["text"].(string))
+			mode, _ := body["parse_mode"].(string)
+			modes = append(modes, mode)
+			if len(texts) == 2 {
+				return telegramResponse(req, `{"ok":false,"error_code":400,"description":"can't parse entities"}`), nil
+			}
+			return telegramResponse(req, `{"ok":true,"result":{"message_id":1}}`), nil
+		})},
+	}
+	result := (&outputTransport{manager: manager}).Send(t.Context(), strings.Repeat("a", maxMessageChunk)+"\nremaining")
+	assert.Equal(t, managerdelivery.SendOK, result.Class)
+	require.Len(t, texts, 3)
+	assert.NotEqual(t, texts[0], texts[1])
+	assert.Equal(t, texts[1], texts[2])
+	assert.Equal(t, []string{tgParseModeHTML, tgParseModeHTML, ""}, modes)
+}
 
-	result := transport.Deliver(t.Context(), outputItem(&controllerapi.OutputClaimData{
-		SessionID: 42, Type: "message_replaceable", Content: "new chain",
-		PreviousMessageType:          "message_replaceable",
-		PreviousMessageAttributes:    map[string]any{"message_ids": []any{"111"}},
-		ModelInputGeneration:         &current,
-		PreviousModelInputGeneration: &previous,
-	}))
-	require.Empty(t, result.Error)
-	assert.Equal(t, []string{"500"}, result.MessageIDs)
-	assert.Equal(t, []chunkOperation{{Method: "sendMessage", MessageID: 500}}, ops)
+func TestOutputTransport_ParseFallbackReportsItsFinalChatFailure(t *testing.T) {
+	calls := 0
+	manager := &Manager{
+		cfg: config.ManagerEntry{BotToken: "test-token", AllowedUserIDs: []int64{1}},
+		httpClient: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			calls++
+			if calls == 1 {
+				return telegramResponse(req, `{"ok":false,"error_code":400,"description":"can't parse entities"}`), nil
+			}
+			return telegramResponse(req, `{"ok":false,"error_code":403,"description":"bot blocked"}`), nil
+		})},
+	}
+	result := (&outputTransport{manager: manager}).Send(t.Context(), "answer")
+	assert.Equal(t, managerdelivery.SendChatFailure, result.Class)
+	assert.Contains(t, result.Reason, "bot blocked")
+	assert.Equal(t, 2, calls)
+}
+
+func TestTelegramCommandAndPollingContract(t *testing.T) {
+	var commands []string
+	var updates []string
+	manager := &Manager{
+		cfg: config.ManagerEntry{BotToken: "test-token"},
+		httpClient: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			var payload struct {
+				Commands []map[string]string `json:"commands"`
+				Updates  []string            `json:"allowed_updates"`
+			}
+			require.NoError(t, json.NewDecoder(req.Body).Decode(&payload))
+			if filepath.Base(req.URL.Path) == "setMyCommands" {
+				for _, command := range payload.Commands {
+					commands = append(commands, command["command"])
+				}
+				return telegramResponse(req, `{"ok":true,"result":true}`), nil
+			}
+			updates = payload.Updates
+			return telegramResponse(req, `{"ok":true,"result":[]}`), nil
+		})},
+	}
+	require.NoError(t, manager.tg(t.Context(), "setMyCommands", map[string]any{"commands": publishedCommands}, nil))
+	_, err := manager.getUpdates(t.Context(), 0)
+	require.NoError(t, err)
+	assert.Equal(t, []string{
+		"new", "spawn", "sessions", "switch", "title", "kill", "stop", "help", "start",
+		"gwt", "model", "clear", "compact", "status", "budget", "schedules", "config", "skill",
+	}, commands)
+	assert.Equal(t, []string{"message"}, updates)
 }

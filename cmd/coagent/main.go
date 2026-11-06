@@ -92,7 +92,7 @@ type core struct {
 	scheduleStore  schedule.Store
 	scheduleSender schedule.SessionSender
 	sessionStore   *sessionstore.Store
-	applier        configapply.Service
+	applier        *configapply.Service
 }
 
 // ensureLinuxPlatform rejects a non-Linux build before it can reach any
@@ -140,25 +140,15 @@ func run() int {
 	return runWith(
 		runtime.GOOS,
 		os.Args[1:],
-		runModes(
-			backgroundprocess.RunGuardian,
-		),
-		dispatch,
-	)
-}
-
-// runModes chains the hidden mode entry points: the first one that recognizes
-// the invocation handles it.
-func runModes(modes ...func(args []string) (bool, error)) func(args []string) (bool, error) {
-	return func(args []string) (bool, error) {
-		for _, mode := range modes {
-			if handled, err := mode(args); handled {
+		func(args []string) (bool, error) {
+			if handled, err := backgroundprocess.RunGuardian(args); handled {
 				return true, err
 			}
-		}
 
-		return false, nil
-	}
+			return false, nil
+		},
+		dispatch,
+	)
 }
 
 // runWith is the entry seam with the platform injected. The platform guard is
@@ -354,6 +344,10 @@ func logConfigStatus(cfg *config.Config) {
 		zap.Int("sandbox_projects", len(cfg.UnifiedConfig.Sandbox.Projects)),
 	)
 
+	if keys := cfg.UnifiedConfig.RemovedManagerKeys; len(keys) > 0 {
+		log.Warn("removed manager configuration keys ignored", zap.Strings("keys", keys))
+	}
+
 	// coagent ships no built-in deny rule: an allow-only configuration is a
 	// legitimate operator choice, not a default. This warns so nobody assumes
 	// the boundary withholds credentials when it does not.
@@ -428,9 +422,7 @@ func runDaemon(
 
 	mgrRuntime := managers.NewRuntime(cfg, core.controller)
 
-	deliveryStatus, _ := core.controller.(controllerapi.OutputStatusFactory)
-
-	ctlSrv, err := prepareControlSocket(ctx, cfg, mgrRuntime, deliveryStatus)
+	ctlSrv, err := prepareControlSocket(ctx, cfg, mgrRuntime)
 	if err != nil {
 		return err
 	}
@@ -469,7 +461,7 @@ func runDaemon(
 func deliverApplyVerdict(
 	ctx context.Context,
 	sender *sessionstore.Store,
-	applier configapply.Service,
+	applier *configapply.Service,
 	ops configops.Service,
 	outcome *configops.Outcome,
 ) {
@@ -568,10 +560,6 @@ func startCore(
 	budgetSvc := budget.New(budget.PolicyStore(sessionStore))
 	mcpRegistry := mcpstore.NewStore(db)
 
-	if _, err := sessionStore.RecoverInterruptedOutputs(ctx); err != nil {
-		return nil, fmt.Errorf("recover interrupted manager output: %w", err)
-	}
-
 	scheduleSvc := schedule.NewService(scheduleStore, sessionStore)
 
 	buildInput := sessionbuild.BuildInput{
@@ -580,7 +568,7 @@ func startCore(
 	}
 
 	bus := sessionbus.New()
-	progressSvc := progressruntime.New(sessionStore, bus)
+	progressSvc := progressruntime.New(sessionStore)
 	daemonSvc := daemon.New(
 		ctx,
 		buildInput,
@@ -597,7 +585,7 @@ func startCore(
 	)
 
 	discovery := managerdiscovery.New(sessionStore, cfg, cache)
-	controller := managercontrol.New(daemonSvc, sessionStore, discovery, progressSvc, bus, cfg, cache)
+	controller := managercontrol.New(daemonSvc, sessionStore, discovery, bus, cfg, cache)
 
 	noticeSearchUnconfigured(ctx, cfg)
 
@@ -605,7 +593,7 @@ func startCore(
 		return nil, fmt.Errorf("start daemon: %w", err)
 	}
 
-	a.onStop("daemon", func(context.Context) error { daemonSvc.Shutdown(30 * time.Second); return nil })
+	a.onStop("daemon", func(ctx context.Context) error { daemonSvc.Shutdown(ctx, 30*time.Second); return nil })
 
 	return &core{
 		controller:     controller,
@@ -678,7 +666,6 @@ func prepareControlSocket(
 	ctx context.Context,
 	cfg *config.Config,
 	mgrs ctl.ManagerControl,
-	delivery controllerapi.OutputStatusFactory,
 ) (*ctl.Server, error) {
 	path, err := ctl.SocketPath()
 	if err != nil {
@@ -689,7 +676,6 @@ func prepareControlSocket(
 		Config:     cfg,
 		ConfigPath: config.DefaultUnifiedConfigFile,
 		Managers:   mgrs,
-		Delivery:   delivery,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("control socket: %w", err)

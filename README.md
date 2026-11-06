@@ -48,23 +48,21 @@ sandbox needs only `bwrap` (Bubblewrap) on the host.
 
 Updating is a manual binary replace plus `coagent restart`.
 
-For Telegram, create a private bot with BotFather, enable Threaded Mode, and
-disallow users from creating topics; send the bot `/start`, and give the manager
-your numeric user ID. For a shared group, use a forum-enabled supergroup and
-provide its numeric chat ID. Each manager needs its own bot token; changing a
-forum target requires a new manager ID.
+For Telegram, create a bot with BotFather, send it `/start`, and configure your
+numeric user ID as the sole entry in the manager's `allowed_user_ids` list. The
+manager uses the private chat with that user. Each enabled manager needs its
+own bot token.
 
-Each configured manager owns a *service topic* — the daemon's management
-surface. It hosts the management session that reports the daemon's active
-configuration, status, projects, managers and command behavior, and `/config`
-there is the only model-facing configuration mutation: it applies a complete
-candidate `config.yaml` behind an explicit activation, restarts the daemon, and
-rolls back if the new configuration cannot boot. Secrets stay in
-`~/.coagent/secrets`, maintained by hand outside the conversation — never paste
-a credential into a chat.
+One chat holds the sessions you select with `/switch N`. With no session
+in focus, text and media receive `No session in focus. /new, /spawn or /switch N.`
+`/config` in a selected session authorizes reading the current document
+and applying the complete candidate `config.yaml`; an
+accepted edit restarts the daemon and rolls back if the configuration cannot
+boot. Secrets stay in `~/.coagent/secrets`, maintained by hand outside the
+conversation — never paste a credential into a chat.
 
-Then send `/spawn` to the bot, choose an existing checkout, and hand off the
-task:
+Send `/spawn /absolute/path/to/checkout` to select a new session, or
+`/new project-name` for a managed project, then give it the task:
 
 ```text
 Find why TestSettlement occasionally hangs. Reproduce it, fix the root cause,
@@ -137,9 +135,10 @@ opinionated product, not an agent framework with a public plugin API.
   policy allows it.
 - **Schedules:** cron expressions with `CRON_TZ` and one-shot wakes. Fresh
   schedules reset the transcript on every run while curated memory persists.
-- **Telegram:** one forum topic per session, repository picker, git worktrees
-  via `/gwt <name>`, model switching, cost/context status, schedules, and a hard
-  user allow-list.
+- **Telegram:** one chat with session switching. Entry shows a header and the
+  last three messages, followed by the selected session's live output in order.
+  Numbered project/model lists, git worktrees via `/gwt <name>`, status, schedules
+  and a hard user allow-list are built in.
 
 ## Security model
 
@@ -211,7 +210,7 @@ for vulnerability reporting.
 ## Configuration and project context
 
 Configuration is a hand-edited `~/.coagent/config.yaml`, or a whole-document
-`/config` apply from the Telegram service topic's management session. The
+`/config` apply from a selected manager-owned root. The
 underlying state is intentionally inspectable:
 
 - `~/.coagent/config.yaml` — providers, models, managers, marketplaces, and tool
@@ -336,9 +335,9 @@ native injection — while configured MCP search tools coexist alongside it.
 - The first model-catalog lookup needs network access. Later starts try the
   network again but can fall back to the last valid disk snapshot. Arbitrary
   local model IDs need a matching catalog entry.
-- Repository selection lives in Telegram, where `/gwt <name>` inside a session
-  topic forks that repository into a fresh worktree branched off its remote
-  default branch.
+- `/spawn <path>` selects an existing checkout in Telegram; `/gwt <name>` from
+  a selected session forks its repository into a fresh worktree branched
+  off the remote default branch.
 - Shell environment activation is Bash-based. zsh and fish users can still run
   coagent, but do not get automatic per-directory mise/asdf/nvm/direnv capture.
 - Language servers are user- or project-owned. Coagent discovers them through
@@ -357,8 +356,35 @@ coagent uninstall|start|stop|restart   manage the service
 coagent daemon          run in the foreground
 ```
 
-Inside a Telegram session, `/status`, `/stop`, `/clear`, `/compact`, `/model`,
-and `/schedules` are control commands and do not become model instructions.
+Telegram commands operate on the selected session unless they name an ID:
+
+| Command | Effect |
+| --- | --- |
+| `/new [name]` | List recent managed projects, or create/open one and select a new session |
+| `/spawn <path>` | Start and select a session in an existing directory |
+| `/sessions` | Show up to 30 live owned sessions, newest activity first; mark the focus and report any overflow |
+| `/switch N` | Select a live owned session; repeat to see its last three messages again |
+| `/gwt <name>` | Create and select a worktree session from the selected session's repository |
+| `/kill [N]`, `/stop [N]` | Kill a session or stop its loop; an ID leaves focus unchanged |
+| `/model [N [effort]]` | List configured models or select one by its number |
+| `/status`, `/budget <request>`, `/schedules` | Inspect status, authorize a budget change, or list schedules |
+| `/clear`, `/compact [focus]` | Replace a root or compact its context |
+| `/config <request>` | Authorize configuration work in the selected session |
+| `/skill <name> [args]` | Activate a skill in the selected session |
+| `/help`, `/start` | Show command help |
+
+Text and attachments go to the selected session. Without focus, the manager
+replies `No session in focus. /new, /spawn or /switch N.`; voice is not
+transcribed and media is not downloaded. Project/session creation, session
+listing and switching, numbered kill/stop and help remain available.
+
+Switching sends `→ #N name`, then the last three renderable rows, oldest first,
+even when re-selecting the current session. Each row carries its `#N name`
+header. Later rows arrive live in order. Tool-calling steps are new messages
+with a compact tool trail, including steps with no text. Final answers are new
+messages too. Restart preserves the chat cursor; a crash between sending and
+saving it can repeat a message. Killing the focus leaves no session selected;
+`/clear` selects and enters its successor.
 
 ## Development
 

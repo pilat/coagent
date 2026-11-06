@@ -3,7 +3,7 @@ package daemon
 import (
 	"context"
 	"database/sql"
-	"fmt"
+	"errors"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -43,6 +43,17 @@ func TestHarnessModel_ScheduleCapabilityBoundary(t *testing.T) {
 	model := scheduleBoundaryModel{
 		rootStatus: sessionstore.SessionStatusStopped, subagentStatus: sessionstore.SessionStatusCompleted,
 	}
+	due := time.Now().UTC()
+	rootSchedule, err := h.schedules.AddSchedule(
+		t.Context(),
+		rootID,
+		"",
+		&due,
+		"scheduled task",
+		false,
+		schedule.ScheduleMetadata{},
+	)
+	require.NoError(t, err)
 	commands := []scheduleBoundaryCommand{
 		deliverSubagentTick,
 		deliverSubagentFresh,
@@ -53,7 +64,7 @@ func TestHarnessModel_ScheduleCapabilityBoundary(t *testing.T) {
 	}
 	for _, command := range commands {
 		expectedApplied, expectedError := model.step(command)
-		actual := applyScheduleBoundaryCommand(t, h, rootID, subagentID, command)
+		actual := applyScheduleBoundaryCommand(t, h, rootID, subagentID, rootSchedule, command)
 		assert.Equal(t, expectedApplied, actual.applied, "command %d applied", command)
 		assert.Equal(t, expectedError, actual.errored, "command %d error", command)
 		assert.Equal(t, model.rootStatus, actual.rootStatus, "command %d root status", command)
@@ -70,16 +81,21 @@ func TestHarnessScenario_OneShotAckRetrySurvivesDaemonRestartAndRendersOnce(t *t
 	dbPath := filepath.Join(t.TempDir(), "schedule-scenario.db")
 	workDir := t.TempDir()
 	first := newScheduleRestartHarness(t, dbPath, workDir, respond)
-	parentID, events := deliverOneShotBeforeRestart(t, first, releaseScheduledRun)
+	parentID, events := deliverOneShotBeforeRestart(t, first)
 	require.NoError(t, first.close(), "the first daemon must close SQLite before restart")
 	second := newScheduleRestartHarness(t, dbPath, workDir, respond)
-	retryEvents := retryOneShotAfterRestart(t, second, parentID)
-	assertNoRetryPublication(t, retryEvents.snapshot())
+	retryEvents := retryOneShotAfterRestart(t, second, parentID, releaseScheduledRun)
+	retryEvents.waitMessage(parentID, "scheduled work completed")
+	retryEvents.waitIdleAfter(parentID, "scheduled work completed")
 	assert.Equal(t, 1, countToolResultsFor(second.messages(parentID), tool.IDSchedule))
 	assert.Equal(t, "scheduled work completed", lastAssistantTextDTO(second.messages(parentID)))
 	trace := append(events.snapshot(), retryEvents.snapshot()...)
 	// Restart announcements race runner drains; pin message and delivery order instead of activation timing noise.
-	assertHarnessTrace(t, "one_shot_ack_retry_restart.json", dropTransientEvents(trace), parentID)
+	assertHarnessTrace(t, second.harness, "one_shot_ack_retry_restart.json", dropTransientEvents(trace), parentID)
+	require.NoError(t, second.close())
+	third := newScheduleRestartHarness(t, dbPath, workDir, respond)
+	assertNoRetryPublication(t, retryOneShotAfterRestart(t, third, parentID, nil).snapshot())
+	assert.Equal(t, 1, countToolResultsFor(third.messages(parentID), tool.IDSchedule))
 }
 
 func TestHarnessScenario_SleepProjectsWakeAtAndUserInputInterruptsIt(t *testing.T) {
@@ -119,7 +135,7 @@ func TestHarnessScenario_SleepProjectsWakeAtAndUserInputInterruptsIt(t *testing.
 	schedules, err := h.schedules.ListSchedules(h.ctx, parentID)
 	require.NoError(t, err)
 	assert.Empty(t, schedules)
-	assertHarnessTrace(t, "sleep_interrupted_by_input.json", collector.snapshot(), parentID)
+	assertHarnessTrace(t, h, "sleep_interrupted_by_input.json", collector.snapshot(), parentID)
 }
 
 // The real executor, daemon sender and session must attach one exact scheduled result to its original tool call.
@@ -190,7 +206,15 @@ func TestIntegration_UserInterruptCancelsSleepWithoutDeletingStandaloneOneShot(t
 		return listErr == nil && len(schedules) == 1 && !h.mgr.HasActiveLoop(parentID)
 	})
 	standaloneAt := time.Now().Add(2 * time.Hour).UTC()
-	_, err = h.schedules.AddSchedule(h.ctx, parentID, "", &standaloneAt, "standalone future input", false)
+	_, err = h.schedules.AddSchedule(
+		h.ctx,
+		parentID,
+		"",
+		&standaloneAt,
+		"standalone future input",
+		false,
+		schedule.ScheduleMetadata{},
+	)
 	require.NoError(t, err)
 	h.startInboxWake()
 	require.NoError(t, h.mgr.sendToSession(h.ctx, parentID, "interrupt now"))
@@ -219,7 +243,15 @@ func TestIntegration_StandaloneOneShotFlowsThroughExecutorAndDaemonQueue(t *test
 	require.NoError(t, err)
 	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(parentID) })
 	due := time.Now().Add(-time.Minute).UTC()
-	_, err = h.schedules.AddSchedule(h.ctx, parentID, "", &due, "one-time scheduled work", false)
+	_, err = h.schedules.AddSchedule(
+		h.ctx,
+		parentID,
+		"",
+		&due,
+		"one-time scheduled work",
+		false,
+		schedule.ScheduleMetadata{},
+	)
 	require.NoError(t, err)
 	executor := schedule.NewExecutor(h.schedules, h.mgr)
 	executor.Start(h.ctx)
@@ -250,11 +282,19 @@ func TestIntegration_OneShotAckFailureRedeliversWithoutDuplicateTranscriptOrPubl
 	require.NoError(t, err)
 	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(parentID) })
 	due := time.Now().Add(-time.Minute).UTC()
-	_, err = h.schedules.AddSchedule(h.ctx, parentID, "", &due, "one-time retry-safe work", false)
+	_, err = h.schedules.AddSchedule(
+		h.ctx,
+		parentID,
+		"",
+		&due,
+		"one-time retry-safe work",
+		false,
+		schedule.ScheduleMetadata{},
+	)
 	require.NoError(t, err)
 	sub := h.mgr.bus.Subscribe(parentID)
 	defer h.mgr.bus.Unsubscribe(parentID, sub)
-	flaky := &failFirstRemoveScheduleStore{Store: h.schedules, attempted: make(chan struct{})}
+	flaky := failNextScheduleDelivery(t, h)
 	first := schedule.NewExecutor(flaky, h.mgr)
 	first.Start(h.ctx)
 	select {
@@ -267,11 +307,13 @@ func TestIntegration_OneShotAckFailureRedeliversWithoutDuplicateTranscriptOrPubl
 	remaining, err := h.schedules.ListSchedules(h.ctx, parentID)
 	require.NoError(t, err)
 	require.Len(t, remaining, 1, "failed producer ack must leave the one-shot retryable")
+	assert.Zero(t, countToolResultsFor(h.messages(parentID), tool.IDSchedule))
 	second := schedule.NewExecutor(h.schedules, h.mgr)
 	second.Start(h.ctx)
 	h.waitUntil("one-shot retry acknowledged", func() bool {
 		schedules, listErr := h.schedules.ListSchedules(h.ctx, parentID)
-		return listErr == nil && len(schedules) == 0 && !h.mgr.HasActiveLoop(parentID)
+		return listErr == nil && len(schedules) == 0 && !h.mgr.HasActiveLoop(parentID) &&
+			lastAssistantTextDTO(h.messages(parentID)) == "one-shot handled once"
 	})
 	second.Stop()
 	messages := h.messages(parentID)
@@ -304,15 +346,39 @@ func TestIntegration_FreshScheduleDuplicateDoesNotResetOrRunTwice(t *testing.T) 
 	parentID, err := h.mgr.Send(h.ctx, h.projectID, "initialize", "fake-model", nil)
 	require.NoError(t, err)
 	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(parentID) })
-	const deliveryID = "schedule:cron:23:20260814T1200Z"
-	applied, err := enqueueScheduledInput(h.ctx, h.mgr.store, parentID, deliveryID, "fresh scheduled work", true)
+	entry, err := h.schedules.AddSchedule(
+		h.ctx,
+		parentID,
+		"* * * * *",
+		nil,
+		"fresh scheduled work",
+		true,
+		schedule.ScheduleMetadata{},
+	)
+	require.NoError(t, err)
+	minute := time.Now().UTC().Truncate(time.Minute)
+	applied, err := h.schedules.DeliverCron(
+		h.ctx,
+		entry,
+		entry.InputMessage(),
+		map[string]any{"fresh": true},
+		minute,
+		minute,
+	)
 	require.NoError(t, err)
 	assert.True(t, applied)
 	h.waitUntil("fresh schedule completed", func() bool {
 		return countMessageContentContaining(h.messages(parentID), "fresh handled once") == 2
 	})
 	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(parentID) })
-	applied, err = enqueueScheduledInput(h.ctx, h.mgr.store, parentID, deliveryID, "fresh scheduled work", true)
+	applied, err = h.schedules.DeliverCron(
+		h.ctx,
+		entry,
+		entry.InputMessage(),
+		map[string]any{"fresh": true},
+		minute,
+		minute.Add(40*time.Second),
+	)
 	require.NoError(t, err)
 	assert.False(t, applied)
 	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(parentID) })
@@ -349,21 +415,21 @@ func TestHarnessScenario_StoppedRootScheduleStartsOneTurn(t *testing.T) {
 func TestScheduledDeliveryToSubagentIsAcknowledgedWithoutMutation(t *testing.T) {
 	tests := []struct {
 		name    string
-		deliver func(*svc, int64) (bool, error)
+		deliver func(schedule.Store, int64) (bool, error)
 	}{
 		{
 			name: "normal",
-			deliver: func(mgr *svc, sessionID int64) (bool, error) {
+			deliver: func(store schedule.Store, sessionID int64) (bool, error) {
 				return enqueueScheduledInput(
-					t.Context(), mgr.store, sessionID, "schedule:test:normal", "legacy task", false,
+					t.Context(), store, sessionID, "legacy task", false,
 				)
 			},
 		},
 		{
 			name: "fresh",
-			deliver: func(mgr *svc, sessionID int64) (bool, error) {
+			deliver: func(store schedule.Store, sessionID int64) (bool, error) {
 				return enqueueScheduledInput(
-					t.Context(), mgr.store, sessionID, "schedule:test:fresh", "legacy fresh task", true,
+					t.Context(), store, sessionID, "legacy fresh task", true,
 				)
 			},
 		},
@@ -374,7 +440,7 @@ func TestScheduledDeliveryToSubagentIsAcknowledgedWithoutMutation(t *testing.T) 
 			h := newHarness(t, harnessOptions{respond: trivialRespond})
 			childID := createScheduleBoundarySubagent(t, h)
 			before := h.messages(childID)
-			applied, err := tt.deliver(h.mgr, childID)
+			applied, err := tt.deliver(h.schedules, childID)
 			require.NoError(t, err)
 			assert.False(t, applied)
 			assert.False(t, h.mgr.HasActiveLoop(childID))
@@ -390,7 +456,7 @@ func TestIntegration_LegacySubagentOneShotIsDiscardedWithoutRun(t *testing.T) {
 	h := newHarness(t, harnessOptions{respond: trivialRespond})
 	childID := createScheduleBoundarySubagent(t, h)
 	due := time.Now().Add(-time.Minute).UTC()
-	_, err := h.schedules.AddSchedule(t.Context(), childID, "", &due, "legacy task", false)
+	_, err := h.schedules.AddSchedule(t.Context(), childID, "", &due, "legacy task", false, schedule.ScheduleMetadata{})
 	require.NoError(t, err)
 	executor := schedule.NewExecutor(h.schedules, h.mgr)
 	executor.Start(t.Context())
@@ -423,7 +489,15 @@ func TestIntegration_LegacySubagentCronOccurrencesAreAcknowledgedWithoutRun(t *t
 			before := h.messages(childID)
 			collector := collectEvents(t, h.mgr.bus.SubscribeAll())
 			defer collector.stop()
-			entry, err := h.schedules.AddSchedule(t.Context(), childID, "* * * * *", nil, "legacy task", tt.fresh)
+			entry, err := h.schedules.AddSchedule(
+				t.Context(),
+				childID,
+				"* * * * *",
+				nil,
+				"legacy task",
+				tt.fresh,
+				schedule.ScheduleMetadata{},
+			)
 			require.NoError(t, err)
 			executor := schedule.NewExecutor(h.schedules, h.mgr)
 			executor.Start(t.Context())
@@ -466,15 +540,13 @@ func TestHarnessScenario_ScheduledTurnChain(t *testing.T) {
 	// Wait for teardown so the scheduled turn deterministically re-announces its session.
 	h.waitUntil("first runner gone", func() bool { return !h.mgr.HasActiveLoop(root) })
 	delivered, err := enqueueScheduledInput(
-		h.ctx, h.mgr.store, root, "delivery-chain-1", "produce the weekly report", false,
+		h.ctx, h.schedules, root, "produce the weekly report", false,
 	)
 	require.NoError(t, err)
 	require.True(t, delivered)
 	collector.waitMessage(root, "Report ready.")
-	controller := newChainController(t, h)
-	drainScenarioClaims(t, "scheduled_turn_chain.json", controller)
 	collector.waitIdleAfter(root, "Report ready.")
-	assertHarnessTrace(t, "scheduled_turn_chain.json", collector.snapshot(), root)
+	assertHarnessTrace(t, h, "scheduled_turn_chain.json", collector.snapshot(), root)
 }
 
 func scheduleLastToolResultContent(msgs []llmwire.Message, toolName string) string {
@@ -486,22 +558,36 @@ func scheduleLastToolResultContent(msgs []llmwire.Message, toolName string) stri
 	return ""
 }
 
-type failFirstRemoveScheduleStore struct {
+type failFirstScheduleDeliveryStore struct {
 	schedule.Store
+	db        *sql.DB
 	once      sync.Once
 	attempted chan struct{}
 }
 
-func (s *failFirstRemoveScheduleStore) RemoveSchedule(ctx context.Context, id int64) error {
-	failed := false
-	s.once.Do(func() {
-		failed = true
-		close(s.attempted)
-	})
-	if failed {
-		return assert.AnError
+func failNextScheduleDelivery(t *testing.T, h *harness) *failFirstScheduleDeliveryStore {
+	t.Helper()
+	_, err := h.db.ExecContext(t.Context(), `CREATE TRIGGER fail_schedule_delivery BEFORE INSERT ON session_inbox
+		WHEN NEW.source = 'schedule' BEGIN SELECT RAISE(ABORT, 'forced enqueue failure'); END`)
+	require.NoError(t, err)
+	return &failFirstScheduleDeliveryStore{Store: h.schedules, db: h.db, attempted: make(chan struct{})}
+}
+
+func (s *failFirstScheduleDeliveryStore) DeliverOneShot(
+	ctx context.Context,
+	sched *schedule.Schedule,
+	content string,
+	attrs map[string]any,
+) (bool, error) {
+	first := false
+	s.once.Do(func() { first = true })
+	applied, err := s.Store.DeliverOneShot(ctx, sched, content, attrs)
+	if !first {
+		return applied, err
 	}
-	return s.Store.RemoveSchedule(ctx, id)
+	_, dropErr := s.db.ExecContext(ctx, `DROP TRIGGER fail_schedule_delivery`)
+	close(s.attempted)
+	return applied, errors.Join(err, dropErr)
 }
 
 type scheduleBoundaryCommand uint8
@@ -564,10 +650,11 @@ func applyScheduleBoundaryCommand(
 	t *testing.T,
 	h *harness,
 	rootID, subagentID int64,
+	rootSchedule *schedule.Schedule,
 	command scheduleBoundaryCommand,
 ) scheduleBoundaryObservation {
 	t.Helper()
-	applied, err := executeScheduleBoundaryCommand(t, h, rootID, subagentID, command)
+	applied, err := executeScheduleBoundaryCommand(t, h, rootID, subagentID, rootSchedule, command)
 	wantPending := 0
 	if command == deliverPendingResult {
 		wantPending = 1
@@ -596,20 +683,21 @@ func executeScheduleBoundaryCommand(
 	t *testing.T,
 	h *harness,
 	rootID, subagentID int64,
+	rootSchedule *schedule.Schedule,
 	command scheduleBoundaryCommand,
 ) (bool, error) {
 	t.Helper()
 	switch command {
 	case deliverSubagentTick:
 		return enqueueScheduledInput(
-			t.Context(), h.mgr.store, subagentID, "schedule:model:subagent-tick", "legacy task", false,
+			t.Context(), h.schedules, subagentID, "legacy task", false,
 		)
 	case deliverSubagentFresh:
 		return enqueueScheduledInput(
-			t.Context(), h.mgr.store, subagentID, "schedule:model:subagent-fresh", "legacy fresh task", true,
+			t.Context(), h.schedules, subagentID, "legacy fresh task", true,
 		)
 	case deliverStoppedRoot, deliverDuplicateRoot:
-		return enqueueScheduledInput(t.Context(), h.mgr.store, rootID, "schedule:model:root", "scheduled task", false)
+		return h.schedules.DeliverOneShot(t.Context(), rootSchedule, "scheduled task", map[string]any{"fresh": false})
 	case stopRootAgain:
 		return false, h.mgr.sendToSession(t.Context(), rootID, "/stop")
 	case deliverPendingResult:
@@ -633,7 +721,7 @@ type scheduleRestartHarness struct {
 }
 
 type scheduleRunningObserver struct {
-	source       sessionbus.Source
+	source       *sessionbus.Bus
 	subscription <-chan controllerapi.SessionNotification
 	running      chan struct{}
 	done         chan struct{}
@@ -663,22 +751,16 @@ func dropTransientEvents(events []controllerapi.SessionNotification) []controlle
 func deliverOneShotBeforeRestart(
 	t *testing.T,
 	h *scheduleRestartHarness,
-	release chan<- struct{},
 ) (int64, *eventCollector) {
 	t.Helper()
 	events := collectEvents(t, h.mgr.bus.SubscribeManager("telegram-main"))
 	t.Cleanup(events.stop)
 	parentID := createScheduleSession(t, h, events)
 	flaky := addFlakyDueOneShot(t, h, parentID)
-	observer := newScheduleRunningObserver(t, h.mgr.bus)
-	sender := &orderedScheduleSender{SessionSender: h.mgr, running: observer.running, done: observer.done}
-	executor := schedule.NewExecutor(flaky, sender)
+	executor := schedule.NewExecutor(flaky, h.mgr)
 	executor.Start(h.ctx)
 	t.Cleanup(executor.Stop)
-	waitForScheduledInput(t, events, parentID)
 	requireSignal(t, flaky.attempted)
-	close(release)
-	events.waitMessage(parentID, "scheduled work completed")
 	executor.Stop()
 	requireOneShotRemainsRetryable(t, h, parentID)
 	return parentID, events
@@ -693,12 +775,12 @@ func createScheduleSession(t *testing.T, h *scheduleRestartHarness, events *even
 	return parentID
 }
 
-func addFlakyDueOneShot(t *testing.T, h *scheduleRestartHarness, sessionID int64) *failFirstRemoveScheduleStore {
+func addFlakyDueOneShot(t *testing.T, h *scheduleRestartHarness, sessionID int64) *failFirstScheduleDeliveryStore {
 	t.Helper()
 	due := time.Now().Add(-time.Minute).UTC()
-	_, err := h.schedules.AddSchedule(h.ctx, sessionID, "", &due, "scheduled once", false)
+	_, err := h.schedules.AddSchedule(h.ctx, sessionID, "", &due, "scheduled once", false, schedule.ScheduleMetadata{})
 	require.NoError(t, err)
-	return &failFirstRemoveScheduleStore{Store: h.schedules, attempted: make(chan struct{})}
+	return failNextScheduleDelivery(t, h.harness)
 }
 
 func waitForScheduledInput(t *testing.T, events *eventCollector, sessionID int64) {
@@ -718,26 +800,34 @@ func requireOneShotRemainsRetryable(t *testing.T, h *scheduleRestartHarness, ses
 	t.Helper()
 	remaining, err := h.schedules.ListSchedules(h.ctx, sessionID)
 	require.NoError(t, err)
-	require.Len(t, remaining, 1, "failed acknowledgement must leave the accepted one-shot retryable")
-	assert.Equal(t, 1, countToolResultsFor(h.messages(sessionID), tool.IDSchedule))
+	require.Len(t, remaining, 1, "failed transaction must leave the one-shot retryable")
+	assert.Zero(t, countToolResultsFor(h.messages(sessionID), tool.IDSchedule))
 }
 
 func retryOneShotAfterRestart(
 	t *testing.T,
 	h *scheduleRestartHarness,
 	sessionID int64,
+	release chan<- struct{},
 ) *eventCollector {
 	t.Helper()
 	// Subscribe before recovery starts to retain its session-created announcement.
 	events := collectEvents(t, h.mgr.bus.SubscribeManager("telegram-main"))
 	t.Cleanup(events.stop)
 	require.NoError(t, h.mgr.Start(h.ctx))
-	executor := schedule.NewExecutor(h.schedules, h.mgr)
+	observer := newScheduleRunningObserver(t, h.mgr.bus)
+	sender := &orderedScheduleSender{SessionSender: h.mgr, running: observer.running, done: observer.done}
+	executor := schedule.NewExecutor(h.schedules, sender)
 	executor.Start(h.ctx)
 	t.Cleanup(executor.Stop)
+	if release != nil {
+		waitForScheduledInput(t, events, sessionID)
+		close(release)
+	}
 	h.waitUntil("restart retry acknowledged", func() bool {
 		schedules, err := h.schedules.ListSchedules(h.ctx, sessionID)
-		return err == nil && len(schedules) == 0 && !h.mgr.HasActiveLoop(sessionID)
+		return err == nil && len(schedules) == 0 && !h.mgr.HasActiveLoop(sessionID) &&
+			lastAssistantTextDTO(h.messages(sessionID)) == "scheduled work completed"
 	})
 	executor.Stop()
 	return events
@@ -753,7 +843,7 @@ func assertNoRetryPublication(t *testing.T, events []controllerapi.SessionNotifi
 	}
 }
 
-func newScheduleRunningObserver(t *testing.T, source sessionbus.Source) *scheduleRunningObserver {
+func newScheduleRunningObserver(t *testing.T, source *sessionbus.Bus) *scheduleRunningObserver {
 	t.Helper()
 	o := &scheduleRunningObserver{
 		source: source, subscription: source.SubscribeManager("telegram-main"),
@@ -851,13 +941,13 @@ func runStoppedRootScheduleScenario(t *testing.T, tc stoppedRootScheduleCase) {
 	_, err = h.db.ExecContext(t.Context(),
 		`UPDATE sessions SET episode_started_at = ? WHERE id = ?`, oldEpisode, rootID)
 	require.NoError(t, err)
-	deliveryID := runDueStoppedRootSchedule(t, h, rootID, collector, tc, started, release)
+	entry := runDueStoppedRootSchedule(t, h, rootID, collector, tc, started, release)
 	successfulTrace := collector.snapshot()
 	newEpisode := sessionEpisodeStart(t, h, rootID)
 	assert.True(t, newEpisode.After(oldEpisode))
 	assertStoppedRootScheduleResult(t, h, rootID, tc)
-	assertStoppedRootScheduleDuplicate(t, h, rootID, deliveryID, tc, newEpisode)
-	assertHarnessTrace(t, tc.trace, successfulTrace, rootID)
+	assertStoppedRootScheduleDuplicate(t, h, rootID, entry, tc, newEpisode)
+	assertHarnessTrace(t, h, tc.trace, successfulTrace, rootID)
 }
 
 func scheduledTurnRequested(tc stoppedRootScheduleCase, messages []llmwire.Message) bool {
@@ -875,10 +965,18 @@ func runDueStoppedRootSchedule(
 	tc stoppedRootScheduleCase,
 	started <-chan struct{},
 	release chan<- struct{},
-) string {
+) *schedule.Schedule {
 	t.Helper()
 	due := time.Now().Add(-time.Minute).UTC()
-	entry, err := h.schedules.AddSchedule(t.Context(), rootID, "", &due, tc.prompt, tc.fresh)
+	entry, err := h.schedules.AddSchedule(
+		t.Context(),
+		rootID,
+		"",
+		&due,
+		tc.prompt,
+		tc.fresh,
+		schedule.ScheduleMetadata{},
+	)
 	require.NoError(t, err)
 	observer := newScheduleRunningObserver(t, h.mgr.bus)
 	sender := &orderedScheduleSender{SessionSender: h.mgr, running: observer.running, done: observer.done}
@@ -895,7 +993,7 @@ func runDueStoppedRootSchedule(
 	})
 	executor.Stop()
 	collector.waitMessage(rootID, tc.answer)
-	return fmt.Sprintf("schedule:one-shot:%d", entry.ID())
+	return entry
 }
 
 func assertStoppedRootActive(t *testing.T, h *harness, rootID int64) {
@@ -934,13 +1032,13 @@ func assertStoppedRootScheduleDuplicate(
 	t *testing.T,
 	h *harness,
 	rootID int64,
-	deliveryID string,
+	entry *schedule.Schedule,
 	tc stoppedRootScheduleCase,
 	episodeStartedAt time.Time,
 ) {
 	t.Helper()
 	require.NoError(t, h.mgr.sendToSession(t.Context(), rootID, "/stop"))
-	applied, err := deliverStoppedRootSchedule(t, h.mgr, rootID, deliveryID, tc)
+	applied, err := h.schedules.DeliverOneShot(t.Context(), entry, tc.prompt, map[string]any{"fresh": tc.fresh})
 	require.NoError(t, err)
 	assert.False(t, applied, "an acknowledged retry must not create another turn")
 	h.waitUntil("duplicate acknowledged", func() bool { return !h.mgr.HasActiveLoop(rootID) })
@@ -961,20 +1059,6 @@ func sessionEpisodeStart(t *testing.T, h *harness, rootID int64) time.Time {
 	require.NoError(t, h.db.QueryRowContext(t.Context(),
 		`SELECT episode_started_at FROM sessions WHERE id = ?`, rootID).Scan(&startedAt))
 	return startedAt
-}
-
-func deliverStoppedRootSchedule(
-	t *testing.T,
-	mgr *svc,
-	rootID int64,
-	deliveryID string,
-	tc stoppedRootScheduleCase,
-) (bool, error) {
-	t.Helper()
-	if tc.fresh {
-		return enqueueScheduledInput(t.Context(), mgr.store, rootID, deliveryID, tc.prompt, true)
-	}
-	return enqueueScheduledInput(t.Context(), mgr.store, rootID, deliveryID, tc.prompt, false)
 }
 
 func createScheduleBoundarySubagent(t *testing.T, h *harness) int64 {
@@ -1012,18 +1096,17 @@ func stoppedRootScheduleResponder(
 	}
 }
 
-func enqueueScheduledInput(ctx context.Context, store Store, id int64, key, content string, fresh bool) (bool, error) {
-	result, err := store.Enqueue(
-		ctx, sessionstore.Input{
-			SessionID:   id,
-			Source:      sessionstore.InputSourceSchedule,
-			Content:     content,
-			DeliveryKey: key,
-			Attributes:  map[string]any{"fresh": fresh},
-		},
-	)
+func enqueueScheduledInput(
+	ctx context.Context,
+	store schedule.Store,
+	id int64,
+	content string,
+	fresh bool,
+) (bool, error) {
+	due := time.Now().UTC()
+	entry, err := store.AddSchedule(ctx, id, "", &due, content, fresh, schedule.ScheduleMetadata{})
 	if err != nil {
 		return false, err
 	}
-	return result.Applied, nil
+	return store.DeliverOneShot(ctx, entry, content, map[string]any{"fresh": fresh})
 }

@@ -76,8 +76,7 @@ func TestMigrationCreatesTableAndPartialIndexes(t *testing.T) {
 	}
 }
 
-// Rewinding every version from 00016 up reproduces an existing database; goose
-// refuses to fill a gap below the recorded version, so they go together.
+// Start at the actual prior schema so later retirements do not distort the upgrade fixture.
 func TestMigrationsApplyToAnExistingDatabase(t *testing.T) {
 	ctx := context.Background()
 	dbPath := filepath.Join(t.TempDir(), "existing.db")
@@ -85,63 +84,11 @@ func TestMigrationsApplyToAnExistingDatabase(t *testing.T) {
 	db, err := migrate.OpenDB(ctx, dbPath)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
-	require.NoError(t, migrate.Run(ctx, db, dbPath))
+	require.NoError(t, migrate.RunUpTo(ctx, db, 15))
 
 	// Seed a row the migration must not disturb.
 	_, err = db.ExecContext(ctx, `INSERT INTO projects (work_dir, name) VALUES (?, ?)`, t.TempDir(), "kept")
 	require.NoError(t, err)
-
-	for _, stmt := range []string{
-		`DROP TABLE mcp_servers`,
-		`ALTER TABLE messages DROP COLUMN reasoning_raw`,
-		`ALTER TABLE messages DROP COLUMN attachments`,
-		`ALTER TABLE subagent_links DROP COLUMN delivered_input_id`,
-		`DROP TABLE session_inbox`,
-		`ALTER TABLE sessions DROP COLUMN episode_started_at`,
-		`ALTER TABLE subagent_links DROP COLUMN activation_seq`,
-		`DROP TABLE session_deliveries`,
-		`DROP TABLE session_tool_activations`,
-		`DROP TABLE session_budgets`,
-		`DROP TABLE session_outbox`,
-		`DROP TABLE manager_bindings`,
-		// Restore what migrations 28 and 31 dropped, and drop what migrations
-		// 29, 30, 32 and 33 added, so re-running them from the rewound version
-		// sees the prior schema.
-		`ALTER TABLE messages ADD COLUMN cleared_at DATETIME`,
-		`ALTER TABLE messages DROP COLUMN tool_error`,
-		`ALTER TABLE subagent_links ADD COLUMN timeout_sec INTEGER NOT NULL DEFAULT 0`,
-		`ALTER TABLE sessions ADD COLUMN compaction_brief TEXT DEFAULT ''`,
-		`ALTER TABLE sessions DROP COLUMN model_input_generation`,
-		`ALTER TABLE sessions DROP COLUMN model_input_boundary`,
-		`ALTER TABLE sessions DROP COLUMN context_baseline_model`,
-		`ALTER TABLE sessions DROP COLUMN context_baseline_prompt_tokens`,
-		`ALTER TABLE sessions DROP COLUMN context_baseline_message_count`,
-		// 00034 added the background-process ledger.
-		`DROP TABLE background_processes`,
-		// 00038 added the read-before-write ledger.
-		`DROP TABLE session_file_reads`,
-		// 00039 added message finish-integrity columns. rejected_reason's CHECK
-		// references finish_type, so it must be dropped before finish_type.
-		`ALTER TABLE messages DROP COLUMN rejected_reason`,
-		`ALTER TABLE messages DROP COLUMN finish_type`,
-		`ALTER TABLE messages DROP COLUMN provider_finish_reason`,
-		`ALTER TABLE messages DROP COLUMN retry_of_message_id`,
-		// 00040 added the hidden-project flag; 00041 added the management-root index.
-		`ALTER TABLE projects DROP COLUMN hidden`,
-		`DROP INDEX IF EXISTS idx_sessions_management_root`,
-		// 00042 added durable completion-check state to sessions.
-		`ALTER TABLE sessions DROP COLUMN completion_check_candidate_id`,
-		`ALTER TABLE sessions DROP COLUMN manager_reply_pending`,
-		`ALTER TABLE sessions DROP COLUMN empty_stop_streak`,
-		// 00043 added the confirmed-answer pointer to the candidate row.
-		`ALTER TABLE sessions DROP COLUMN completion_check_confirmed_answer_id`,
-		`ALTER TABLE sessions DROP COLUMN completion_nudge_generation`,
-		// 00044 drops the column 00033 added; net effect across both is none.
-		`DELETE FROM goose_db_version WHERE version_id BETWEEN 16 AND 46`,
-	} {
-		_, err = db.ExecContext(ctx, stmt)
-		require.NoError(t, err, stmt)
-	}
 
 	require.Equal(t, 0, countMCPServersTable(t, db), "the table must be absent before 00016 re-applies")
 

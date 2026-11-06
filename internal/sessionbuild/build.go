@@ -11,6 +11,7 @@ import (
 	"sync"
 
 	"github.com/pilat/coagent/internal/backgroundprocess"
+	"github.com/pilat/coagent/internal/catalog"
 	"github.com/pilat/coagent/internal/config"
 	"github.com/pilat/coagent/internal/git"
 	"github.com/pilat/coagent/internal/llm"
@@ -35,10 +36,10 @@ type BuildInput struct {
 	Store                    session.Store
 	GitClient                git.Client
 	MCPStore                 mcpstore.Store
-	MarketplaceCache         loader.MarketplaceCache
+	MarketplaceCache         *loader.MarketplaceCache
 	ProcessService           backgroundprocess.Service
-	Resources                builtin.Resources
-	Loader                   loader.Service
+	Resources                *builtin.Resources
+	Loader                   *loader.Service
 	OwnerTools               []tool.Tool
 	ExternalCalls            map[string]string
 	Events                   session.Events
@@ -48,6 +49,7 @@ type BuildInput struct {
 	Schedules                string
 	Status                   string
 	OutputEnabled            bool
+	ToolTrail                bool
 	PreserveStoppedStatus    bool
 	ActiveSubagents          []sessionprompt.ActiveSubagentInfo
 	ActiveProcesses          []sessionprompt.ActiveProcessInfo
@@ -60,32 +62,17 @@ func Build(ctx context.Context, in BuildInput) (*session.Session, func(), error)
 		return nil, nil, errors.New("session record, workdir and store are required")
 	}
 
-	cfg := *in.Config
-
-	cfg.WorkDir, cfg.RepoRoot = in.WorkDir, in.RepoRoot
-	if in.Record.AgentType == tool.BrowserAgentType && cfg.UnifiedConfig != nil {
-		unified := *cfg.UnifiedConfig
-		disabled := false
-		unified.Tools.Search.Enabled = &disabled
-		cfg.UnifiedConfig = &unified
+	set, agentConfig, err := prepareClientInput(ctx, &in)
+	if err != nil {
+		return nil, nil, err
 	}
 
-	cfg.Model = in.Record.Model
-	if cfg.Model == "" {
-		cfg.Model = cfg.DefaultModel()
-	}
-
-	in.Config = &cfg
-	if in.Loader == nil {
-		in.Loader = loader.New(in.MarketplaceCache)
-	}
-
-	client, err := llm.NewClient(&cfg)
+	client, err := llm.NewClient(in.Config)
 	if err != nil {
 		return nil, nil, fmt.Errorf("create LLM client: %w", err)
 	}
 
-	sess, cleanup, err := build(ctx, in, client)
+	sess, cleanup, err := build(ctx, in, client, set, agentConfig)
 	if err != nil {
 		_ = client.Close()
 		return nil, nil, err
@@ -95,7 +82,7 @@ func Build(ctx context.Context, in BuildInput) (*session.Session, func(), error)
 }
 
 // RetireToolResources releases cached tools after a stopped session joins.
-func RetireToolResources(resources builtin.Resources, sessionID int64) error {
+func RetireToolResources(resources *builtin.Resources, sessionID int64) error {
 	if resources == nil {
 		return nil
 	}
@@ -108,7 +95,7 @@ func RetireToolResources(resources builtin.Resources, sessionID int64) error {
 }
 
 // CloseToolResources releases the shared cache after all runners join.
-func CloseToolResources(resources builtin.Resources) error {
+func CloseToolResources(resources *builtin.Resources) error {
 	if resources == nil {
 		return nil
 	}
@@ -120,19 +107,13 @@ func CloseToolResources(resources builtin.Resources) error {
 	return nil
 }
 
-func build(ctx context.Context, in BuildInput, client llm.Client) (*session.Session, func(), error) {
-	set := registry.NewSet(loadProjectSubagents(ctx, in, in.WorkDir))
-
-	agentType := registry.AgentType(in.Record.AgentType)
-	if agentType == "" {
-		agentType = registry.AgentTypeBuild
-	}
-
-	agentConfig, ok := set.Get(agentType)
-	if !ok {
-		return nil, nil, fmt.Errorf("unknown agent type: %s", agentType)
-	}
-
+func build(
+	ctx context.Context,
+	in BuildInput,
+	client llm.Client,
+	set *registry.Set,
+	agentConfig registry.AgentTypeConfig,
+) (*session.Session, func(), error) {
 	openingContext, skills := loadOpeningContext(ctx, in, agentConfig)
 
 	todos, err := restoreTodos(in.Record.TodoItems)
@@ -147,8 +128,8 @@ func build(ctx context.Context, in BuildInput, client llm.Client) (*session.Sess
 	var once sync.Once
 	cleanup := func() { once.Do(func() { _ = stack.Close() }) }
 
-	attachImageAuthorizer(client, stack)
-	configureClient(client, in.Record)
+	imageAuthorizer := attachImageAuthorizer(client, stack)
+	level := configureClient(client, in.Record)
 	registerSessionTools(reg, in)
 
 	browserAvailable := slices.ContainsFunc(reg.IDs(), tool.IsBrowserToolID)
@@ -163,7 +144,7 @@ func build(ctx context.Context, in BuildInput, client llm.Client) (*session.Sess
 		reg.Register(builtin.NewBatchTool(reg))
 	}
 
-	prompt := preparePrompt(in, agentConfig, skills, todos, reg, stack)
+	prompt := preparePrompt(in, agentConfig, skills, todos, reg, stack, level)
 
 	sess, err := session.New(ctx, session.Input{
 		Record:                   in.Record,
@@ -176,12 +157,13 @@ func build(ctx context.Context, in BuildInput, client llm.Client) (*session.Sess
 		ExternalCalls:            in.ExternalCalls,
 		OpeningContext:           openingContext,
 		OutputEnabled:            in.OutputEnabled,
+		ToolTrail:                in.ToolTrail,
 		PreserveStopped:          in.PreserveStoppedStatus,
 		Schedules:                in.Schedules,
 		Status:                   in.Status,
 		BackgroundSnapshot:       sessionprompt.BuildActiveBackgroundSection(in.ActiveProcesses, in.ActiveSubagents),
 		CompactionDeferAnnounced: in.CompactionDeferAnnounced,
-		ImageAuthorizer:          stack.Access(),
+		ImageAuthorizer:          imageAuthorizer,
 	})
 	if err != nil {
 		cleanup()
@@ -208,7 +190,7 @@ func loadOpeningContext(ctx context.Context, in BuildInput, cfg registry.AgentTy
 	return openingContext, in.ExtraSkills
 }
 
-func restoreTodos(raw string) (todo.Service, error) {
+func restoreTodos(raw string) (*todo.Service, error) {
 	todos := todo.New()
 	if raw == "" {
 		return todos, nil
@@ -224,12 +206,9 @@ func restoreTodos(raw string) (todo.Service, error) {
 	return todos, nil
 }
 
-func configureClient(client llm.Client, record *sessionstore.SessionRecord) {
-	client.SetReasoningLevel(string(llm.ReasoningMedium))
-
-	if record.ReasoningLevel != "" {
-		client.SetReasoningLevel(record.ReasoningLevel)
-	}
+func configureClient(client llm.Client, record *sessionstore.SessionRecord) string {
+	level := catalog.StoredEffort(record.ReasoningLevel)
+	client.SetReasoningLevel(level)
 
 	sessionID := strconv.FormatInt(record.ID, 10)
 	if record.RootID != 0 && record.RootID != record.ID {
@@ -237,17 +216,20 @@ func configureClient(client llm.Client, record *sessionstore.SessionRecord) {
 	}
 
 	client.SetSessionID(sessionID)
+
+	return level
 }
 
 func preparePrompt(
 	in BuildInput,
 	cfg registry.AgentTypeConfig,
 	skills []*loader.Skill,
-	todos todo.Service,
-	reg tool.Registry,
+	todos *todo.Service,
+	reg *tool.Registry,
 	stack *builtin.Stack,
+	level string,
 ) *sessionprompt.Builder {
-	prompt := buildPrompt(in, cfg, skills)
+	prompt := buildPrompt(in, cfg, skills, level)
 
 	prompt.Todos, prompt.WorkDir = todos, in.WorkDir
 	if !cfg.OmitProjectContext {
@@ -267,7 +249,7 @@ func preparePrompt(
 	return prompt
 }
 
-func buildRegistry(ctx context.Context, in BuildInput, todos todo.Service) (tool.Registry, *builtin.Stack, error) {
+func buildRegistry(ctx context.Context, in BuildInput, todos *todo.Service) (*tool.Registry, *builtin.Stack, error) {
 	rootID := in.Record.RootID
 	if rootID == 0 {
 		rootID = in.Record.ID
@@ -298,7 +280,7 @@ func buildRegistry(ctx context.Context, in BuildInput, todos todo.Service) (tool
 	return stack.Registry, stack, nil
 }
 
-func registerSessionTools(reg tool.Registry, in BuildInput) {
+func registerSessionTools(reg *tool.Registry, in BuildInput) {
 	reg.Register(builtin.NewSkillTool(in.Loader))
 
 	if in.Record.ProjectID != 0 && in.MemoryStore != nil {
@@ -311,11 +293,16 @@ func registerSessionTools(reg tool.Registry, in BuildInput) {
 	}
 }
 
-func filterRegistryForAgent(set *registry.Set, reg tool.Registry, cfg registry.AgentTypeConfig) tool.Registry {
+func filterRegistryForAgent(set *registry.Set, reg *tool.Registry, cfg registry.AgentTypeConfig) *tool.Registry {
 	return reg.Filter(set.FilterTools(reg.IDs(), cfg.Name))
 }
 
-func buildPrompt(in BuildInput, cfg registry.AgentTypeConfig, skills []*loader.Skill) *sessionprompt.Builder {
+func buildPrompt(
+	in BuildInput,
+	cfg registry.AgentTypeConfig,
+	skills []*loader.Skill,
+	level string,
+) *sessionprompt.Builder {
 	base := cfg.Prompt + fmt.Sprintf(
 		"\n\n# Environment\n- Working directory: %s\n- Platform: %s/%s\n- Timestamped user input is prefixed with `[+elapsed DOW YYYY-MM-DD HH:MM ZONE ±HH:MM]`, where `+elapsed` is optional. Use it for temporal reasoning.",
 		in.WorkDir,
@@ -323,10 +310,7 @@ func buildPrompt(in BuildInput, cfg registry.AgentTypeConfig, skills []*loader.S
 		runtime.GOARCH,
 	)
 
-	models := ""
-	if !cfg.OmitProjectContext {
-		models = sessionprompt.BuildModelsSection(in.Config.Model)
-	}
+	models := modelSection(in.Config, in.Config.Model, level)
 
 	prompt := sessionprompt.NewBuilder(base, models, skills...)
 	prompt.SetNativeSearch(in.Config.UnifiedConfig.SearchNativeActive(in.Config.Model))
@@ -334,8 +318,15 @@ func buildPrompt(in BuildInput, cfg registry.AgentTypeConfig, skills []*loader.S
 	return prompt
 }
 
-func attachImageAuthorizer(client llm.Client, stack *builtin.Stack) {
-	client.SetImageAuthorizer(stack.Access())
+func attachImageAuthorizer(client llm.Client, stack *builtin.Stack) llm.ImageAuthorizer {
+	var authorizer llm.ImageAuthorizer
+	if access := stack.Access(); access != nil {
+		authorizer = access
+	}
+
+	client.SetImageAuthorizer(authorizer)
+
+	return authorizer
 }
 
 func confineGitClient(client git.Client, stack *builtin.Stack) git.Client {

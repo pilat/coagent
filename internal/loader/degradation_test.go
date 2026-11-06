@@ -30,11 +30,11 @@ func TestMarketplaceCache_ResolverErrorIsNegativelyCached(t *testing.T) {
 	cache := newMarketplaceCache(resolver, 10*time.Minute)
 	entry := config.MarketplaceEntry{URL: "github.com/owner/repo", Plugins: []string{"plugin-a"}}
 
-	_, _, err := cache.Resolve(context.Background(), entry)
+	_, _, err := cache.resolve(context.Background(), entry)
 	require.Error(t, err)
 	require.ErrorIs(t, err, assert.AnError)
 
-	_, _, err = cache.Resolve(context.Background(), entry)
+	_, _, err = cache.resolve(context.Background(), entry)
 	require.Error(t, err, "the failure must still be reported to the caller")
 	require.ErrorIs(t, err, assert.AnError)
 
@@ -58,18 +58,17 @@ func TestMarketplaceCache_NegativeEntryExpiresBeforeSuccessTTL(t *testing.T) {
 
 	now := time.Now()
 	cache := newMarketplaceCache(resolver, 30*time.Minute)
-	impl, ok := cache.(*marketplaceCache)
-	require.True(t, ok)
+	impl := cache
 	impl.now = func() time.Time { return now }
 
 	entry := config.MarketplaceEntry{URL: "github.com/owner/repo", Plugins: []string{"plugin-a"}}
 
-	_, _, err := cache.Resolve(context.Background(), entry)
+	_, _, err := cache.resolve(context.Background(), entry)
 	require.Error(t, err)
 
 	impl.now = func() time.Time { return now.Add(failedMarketplaceTTL + time.Second) }
 
-	skills, _, err := cache.Resolve(context.Background(), entry)
+	skills, _, err := cache.resolve(context.Background(), entry)
 	require.NoError(t, err)
 	assert.Len(t, skills, 1)
 	assert.Equal(t, int32(2), callCount.Load())
@@ -90,7 +89,7 @@ func TestMarketplaceCache_SameURLDisjointPluginLists(t *testing.T) {
 
 	cache := newMarketplaceCache(resolver, 10*time.Minute)
 
-	skillsA, agentsA, err := cache.Resolve(context.Background(), config.MarketplaceEntry{
+	skillsA, agentsA, err := cache.resolve(context.Background(), config.MarketplaceEntry{
 		URL: "github.com/owner/repo", Plugins: []string{"plugin-a"},
 	})
 	require.NoError(t, err)
@@ -98,7 +97,7 @@ func TestMarketplaceCache_SameURLDisjointPluginLists(t *testing.T) {
 	assert.Equal(t, "plugin-a", skillsA[0].pluginName)
 	require.Len(t, agentsA, 1)
 
-	skillsB, agentsB, err := cache.Resolve(context.Background(), config.MarketplaceEntry{
+	skillsB, agentsB, err := cache.resolve(context.Background(), config.MarketplaceEntry{
 		URL: "github.com/owner/repo", Plugins: []string{"plugin-b"},
 	})
 	require.NoError(t, err)

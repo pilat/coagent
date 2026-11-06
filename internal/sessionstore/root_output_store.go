@@ -1,4 +1,3 @@
-// nosemgrep: semgrep.coagent-no-preamble-before-package
 package sessionstore
 
 import (
@@ -14,6 +13,24 @@ func (s *Store) CreateManagerRoot(
 	ctx context.Context,
 	create ManagerRootCreate,
 ) (*SessionRecord, *OutputCommit, error) {
+	var record *SessionRecord
+	var output *OutputCommit
+	err := s.WithTx(ctx, func(tx *sql.Tx) error {
+		var err error
+		record, output, err = CreateManagerRootTx(ctx, tx, create)
+
+		return err
+	})
+
+	return record, output, err
+}
+
+// CreateManagerRootTx composes root creation with other writes in a Store.WithTx transaction.
+func CreateManagerRootTx(
+	ctx context.Context,
+	tx *sql.Tx,
+	create ManagerRootCreate,
+) (*SessionRecord, *OutputCommit, error) {
 	err := requireManagerOwner(create.Attributes)
 	if err != nil {
 		return nil, nil, err
@@ -26,41 +43,33 @@ func (s *Store) CreateManagerRoot(
 	if create.ReasoningLevel == "" {
 		create.ReasoningLevel = defaultReasoningLevel
 	}
-	var record *SessionRecord
-	var output *OutputCommit
-	err = s.WithTx(ctx, func(tx *sql.Tx) error {
-		now := time.Now().UTC()
-		var err error
 
-		record, err = insertManagerRoot(ctx, tx, create, now)
-		if err != nil {
-			return err
-		}
+	now := time.Now().UTC()
 
-		output, err = insertLifecycleOutput(
-			ctx,
-			tx,
-			record.ID,
-			OutputSessionOpened,
-			"",
+	record, err := insertManagerRoot(ctx, tx, create, now)
+	if err != nil {
+		return nil, nil, err
+	}
 
-			map[string]any{
-				outputAttributeName:    create.Name,
-				outputAttributeWorkDir: create.WorkDir,
-			},
-			fmt.Sprintf("session:%d:opened", record.ID),
-			now,
-		)
-		if err != nil {
-			return err
-		}
+	output, err := insertLifecycleOutput(
+		ctx,
+		tx,
+		record.ID,
+		OutputSessionOpened,
+		map[string]any{
+			outputAttributeName:    create.Name,
+			outputAttributeWorkDir: create.WorkDir,
+		},
+		fmt.Sprintf("session:%d:opened", record.ID),
+		now,
+	)
+	if err != nil {
+		return record, nil, err
+	}
 
-		if create.Prompt != "" {
-			_, err = EnqueueTx(ctx, tx, Input{SessionID: record.ID, Source: InputSourceUser, Content: create.Prompt})
-		}
-
-		return err
-	})
+	if create.Prompt != "" {
+		_, err = EnqueueTx(ctx, tx, Input{SessionID: record.ID, Source: InputSourceUser, Content: create.Prompt})
+	}
 
 	return record, output, err
 }
@@ -85,7 +94,6 @@ func (s *Store) ReplaceManagerRootForInput(
 	return s.replaceManagerRoot(ctx, oldSessionID, inputID, name, workDir)
 }
 
-//nolint:funlen // Replacement preserves a single transaction across old root, new root, and lifecycle output.
 func (s *Store) replaceManagerRoot(
 	ctx context.Context,
 	oldSessionID, inputID int64,
@@ -109,8 +117,7 @@ func (s *Store) replaceManagerRoot(
 		return nil, nil, fmt.Errorf("load replacement root: %w", err)
 	}
 
-	err = requireManagerOwner(old.Attributes)
-	if err != nil {
+	if err := requireManagerOwner(old.Attributes); err != nil {
 		return nil, nil, err
 	}
 
@@ -132,11 +139,11 @@ func (s *Store) replaceManagerRoot(
 		return nil, nil, err
 	}
 
-	if inputID > 0 {
-		if err := handleReplacementInput(ctx, tx, inputID, oldSessionID, now); err != nil {
-			return nil, nil, err
-		}
+	if err := handleReplacementInput(ctx, tx, inputID, oldSessionID, now); err != nil {
+		return nil, nil, err
 	}
+
+	delete(old.Attributes, TitleAttribute)
 
 	newRecord, err := insertManagerRoot(ctx, tx, ManagerRootCreate{
 		ProjectID: old.ProjectID, Model: old.Model, ReasoningLevel: old.ReasoningLevel, Attributes: old.Attributes,
@@ -152,16 +159,14 @@ func (s *Store) replaceManagerRoot(
 		outputAttributeWorkDir: workDir,
 	}
 
-	commit, err := insertLifecycleOutput(ctx, tx, newRecord.ID, OutputSessionReplaced, "", attrs,
+	commit, err := insertLifecycleOutput(ctx, tx, newRecord.ID, OutputSessionReplaced, attrs,
 		fmt.Sprintf("session:%d:replaced:%d", oldSessionID, newRecord.ID), now)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	if inputID > 0 {
-		if err := insertClearNotice(ctx, tx, newRecord.ID, inputID, now); err != nil {
-			return nil, nil, err
-		}
+	if err := replaceChatTx(ctx, tx, oldSessionID, newRecord.ID, inputID, now); err != nil {
+		return nil, nil, err
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -172,6 +177,10 @@ func (s *Store) replaceManagerRoot(
 }
 
 func handleReplacementInput(ctx context.Context, tx *sql.Tx, inputID, sessionID int64, now time.Time) error {
+	if inputID == 0 {
+		return nil
+	}
+
 	result, err := tx.ExecContext(ctx, `
 		UPDATE session_inbox SET state = 'handled', resolved_at = ?, resolution_reason = 'clear'
 		WHERE id = ? AND session_id = ? AND state = 'pending'`, now, inputID, sessionID)
@@ -182,13 +191,22 @@ func handleReplacementInput(ctx context.Context, tx *sql.Tx, inputID, sessionID 
 	return requireOnePendingResolution(ctx, tx, result, inputID)
 }
 
-func insertClearNotice(ctx context.Context, tx *sql.Tx, sessionID, inputID int64, now time.Time) error {
-	_, err := insertOutputTx(ctx, tx, OutputDraft{
-		SessionID: sessionID, Type: OutputMessagePersistent, Content: "Session cleared.",
-		SourceKey: fmt.Sprintf("input:%d:clear:result", inputID), ReleasesInput: true, CreatedAt: now,
-	}, CommitLifecycle)
+func replaceChatTx(ctx context.Context, tx *sql.Tx, oldID, newID, inputID int64, now time.Time) error {
+	if inputID > 0 {
+		if _, err := insertOutputTx(ctx, tx, OutputDraft{
+			SessionID: newID, Type: OutputMessage, Content: "Session cleared.",
+			SourceKey: fmt.Sprintf("input:%d:clear:result", inputID), ReleasesInput: true, CreatedAt: now,
+		}, CommitLifecycle); err != nil {
+			return err
+		}
+	}
 
-	return err
+	if _, err := tx.ExecContext(ctx, `UPDATE chat_focus SET session_id = ?, last_sent_id = NULL WHERE session_id = ?`,
+		newID, oldID); err != nil {
+		return fmt.Errorf("transfer replacement chat focus: %w", err)
+	}
+
+	return nil
 }
 
 func requireManagerOwner(attrs map[string]any) error {
@@ -243,13 +261,12 @@ func insertLifecycleOutput(
 	tx *sql.Tx,
 	sessionID int64,
 	kind OutputType,
-	content string,
 	attrs map[string]any,
 	key string,
 	now time.Time,
 ) (*OutputCommit, error) {
 	return insertOutputTx(ctx, tx, OutputDraft{
-		SessionID: sessionID, Type: kind, Content: content, Attributes: attrs,
+		SessionID: sessionID, Type: kind, Attributes: attrs,
 		SourceKey: key, CreatedAt: now,
 	}, CommitLifecycle)
 }

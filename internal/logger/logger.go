@@ -111,12 +111,6 @@ func Ctx(ctx context.Context) *zap.Logger {
 	return L
 }
 
-// With returns a new context with the logger enriched with fields.
-func With(ctx context.Context, fields ...zap.Field) context.Context {
-	l := Ctx(ctx).With(fields...)
-	return context.WithValue(ctx, ctxKey{}, l)
-}
-
 // ToContext returns a new context with the given logger.
 func ToContext(ctx context.Context, l *zap.Logger) context.Context {
 	return context.WithValue(ctx, ctxKey{}, l)

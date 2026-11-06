@@ -14,7 +14,6 @@ import (
 
 	"github.com/pilat/coagent/internal/llmwire"
 	"github.com/pilat/coagent/internal/logger"
-	"github.com/pilat/coagent/internal/sessionevent"
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/tool"
 	"github.com/pilat/coagent/internal/transcript"
@@ -252,8 +251,7 @@ func mapExecutorReport(
 	return results
 }
 
-// executeToolCalls orchestrates tool execution with loop detection.
-func executeToolCalls(ctx context.Context, agent *Session, toolCalls []llmwire.ToolCall) error {
+func runToolCalls(ctx context.Context, agent *Session, toolCalls []llmwire.ToolCall) error {
 	log := logger.Ctx(ctx).Named("session.toolexec")
 
 	action := agent.loopDetector.check()
@@ -367,7 +365,7 @@ func recordToolResults(
 			c.Outputs = append(
 				c.Outputs,
 				sessionstore.Output{
-					Type:        sessionstore.OutputMessagePersistent,
+					Type:        sessionstore.OutputMessage,
 					Content:     text,
 					Key:         fmt.Sprintf("tool:%s:direct:%d", r.toolCall.ID, j),
 					PersistOnly: true,
@@ -380,7 +378,12 @@ func recordToolResults(
 	return commitToolState(ctx, agent, c, results)
 }
 
-func commitToolState(ctx context.Context, agent *Session, c sessionstore.Commit, results []toolCallResultItem) error {
+func commitToolState(
+	ctx context.Context,
+	agent *Session,
+	c sessionstore.Commit,
+	results []toolCallResultItem,
+) error {
 	data, err := json.Marshal(agent.prompt.Todos.List())
 	if err != nil {
 		return fmt.Errorf("record tool results: %w", err)
@@ -394,48 +397,31 @@ func commitToolState(ctx context.Context, agent *Session, c sessionstore.Commit,
 	}
 
 	agent.stamper.Touch()
+
 	// All rows are durable; user-facing semantics fire only now.
 	for _, r := range results {
 		if r.outcome != tool.OutcomeExecuted {
 			continue
 		}
 
-		if activated := consumeActivation(agent, r); activated {
-			if err := publishProgressSnapshot(ctx, agent); err != nil {
-				return err
-			}
-		}
+		consumeActivation(agent, r)
 	}
 
 	return nil
 }
 
-// consumeActivation clears the current activation grant when its owning tool
-// just executed and reports whether the progress snapshot must republish.
-func consumeActivation(agent *Session, r toolCallResultItem) bool {
+func consumeActivation(agent *Session, r toolCallResultItem) {
 	activatedDirect := len(r.directMessages) > 0 && agent.currentActivation != nil &&
 		r.toolCall.Name == agent.currentActivation.ToolID
 
 	if activatedDirect {
 		agent.currentActivation = nil
 	}
-
-	return r.toolCall.Name == "todowrite" || activatedDirect
-}
-
-// publishProgressSnapshot enqueues the TODO progress snapshot through the
-// boundary and notifies through the loop's channel, superseding tolerated.
-func publishProgressSnapshot(_ context.Context, agent *Session) error {
-	agent.emit(sessionevent.Notification{Type: sessionevent.NotifyProgressChanged})
-	return nil
 }
 
 func (s *Session) toolStep(ctx context.Context, calls []llmwire.ToolCall) error {
-	if narratedToolCalls(s.ms.getMessages(), calls) {
-		s.emit(sessionevent.Notification{Type: sessionevent.NotifyProgressChanged})
-	}
+	err := runToolCalls(ctx, s, calls)
 
-	err := executeToolCalls(ctx, s, calls)
 	if s.suspended {
 		if s.stagedCalls == nil {
 			s.stagedCalls = map[string]string{}
@@ -449,22 +435,6 @@ func (s *Session) toolStep(ctx context.Context, calls []llmwire.ToolCall) error 
 	}
 
 	return err
-}
-
-func narratedToolCalls(messages []llmwire.Message, calls []llmwire.ToolCall) bool {
-	if len(calls) == 0 {
-		return false
-	}
-
-	for _, message := range slices.Backward(messages) {
-		for _, call := range message.ToolCalls {
-			if call.ID == calls[0].ID {
-				return strings.TrimSpace(message.Content) != ""
-			}
-		}
-	}
-
-	return false
 }
 
 // capDirectOutput trims one result row's direct output to the store's per-row
@@ -566,11 +536,11 @@ func countUniqueOutcomes(window []toolRecord) int {
 // External titles and notices share the payload budget; local results retain
 // their historical output-only truncation.
 func formatToolResult(result *tool.Result, contextWindow int, browserFrame bool) string {
-	budget := tool.DynamicToolResultBudgetForWindow(contextWindow)
+	budget := tool.ToolResultBudgetForWindow(contextWindow, tool.MaxToolResultSize)
 	hint := ""
 
 	if browserFrame {
-		budget = tool.BrowserFrameBudgetForWindow(contextWindow)
+		budget = tool.ToolResultBudgetForWindow(contextWindow, tool.MaxBrowserFrameSize)
 		hint = " Read an omitted part with browser_snapshot target (a CSS selector or a visible container ref) and/or depth."
 	}
 
@@ -587,7 +557,7 @@ func formatToolResult(result *tool.Result, contextWindow int, browserFrame bool)
 	var sb strings.Builder
 
 	appendResultTitle(&sb, result.Title)
-	sb.WriteString(truncateHeadTailWithHint(result.Output, budget, hint))
+	sb.WriteString(truncateHeadTail(result.Output, budget, hint))
 	appendTruncationNotice(&sb, result)
 
 	return sb.String()
@@ -610,14 +580,18 @@ func appendTruncationNotice(sb *strings.Builder, result *tool.Result) {
 
 // Truncate before escaping so a cut cannot recreate a boundary token.
 func wrapUntrustedContent(payload string, contextWindow int) string {
-	return wrapUntrustedContentWithBudget(payload, tool.DynamicToolResultBudgetForWindow(contextWindow), "")
+	return wrapUntrustedContentWithBudget(
+		payload,
+		tool.ToolResultBudgetForWindow(contextWindow, tool.MaxToolResultSize),
+		"",
+	)
 }
 
 func wrapUntrustedContentWithBudget(payload string, budget int, hint string) string {
 	begin := tool.UntrustedContentBegin
 	end := tool.UntrustedContentEnd
 
-	payload = truncateHeadTailWithHint(payload, budget, hint)
+	payload = truncateHeadTail(payload, budget, hint)
 
 	for _, marker := range []string{begin, end} {
 		prefix := strings.TrimSuffix(marker, ">>>")
@@ -642,18 +616,9 @@ func identifyUntrustedContent(content string) string {
 		strings.TrimSuffix(tool.UntrustedContentEnd, ">>>"), markerID)
 }
 
-// truncateHeadTail truncates s to maxRunes using a head+tail strategy,
-// splitting 70% head / 30% tail by default. If the tail contains
-// error/stack-trace patterns, the split is adjusted to 50/50 to preserve
-// more tail context.
-// Cut points are snapped to the nearest newline boundary when possible.
-// A middle marker showing omitted size is counted inside the limit.
-// Returns s unchanged if under maxRunes.
-func truncateHeadTail(s string, maxRunes int) string {
-	return truncateHeadTailWithHint(s, maxRunes, "")
-}
-
-func truncateHeadTailWithHint(s string, maxRunes int, hint string) string {
+// truncateHeadTail preserves more tail context for errors and stack traces;
+// the omission marker and hint count toward the rune limit.
+func truncateHeadTail(s string, maxRunes int, hint string) string {
 	const defaultHeadRatio = 0.7
 
 	headRatio := defaultHeadRatio

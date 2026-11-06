@@ -1,7 +1,6 @@
 package telegram
 
 import (
-	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -11,7 +10,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/pilat/coagent/internal/config"
 	"github.com/pilat/coagent/internal/controllerapi"
 )
 
@@ -22,194 +20,76 @@ func TestNormalizeTextCommand(t *testing.T) {
 }
 
 func TestHandleCommandsPreservesCanonicalSkillNames(t *testing.T) {
-	tests := []struct {
-		name string
-		run  func(*Manager)
-		want []string
-	}{
-		{
-			name: "commands",
-			run: func(m *Manager) {
-				m.handleCommands(context.Background(), 42, 99)
-			},
-			want: []string{"<b>Skills:</b>\n  /skill pilat:plan-handoff&lt;&amp;&gt; — Use &lt;plan&gt; &amp; ship"},
-		},
-		{
-			name: "session help",
-			run: func(m *Manager) {
-				m.handleHelp(context.Background(), 42, 99)
-			},
-			want: []string{
-				"<b>Commands:</b>\n" +
-					"  /new — new dialog project by name (/new &lt;name&gt;), or bare /new to pick one\n" +
-					"  /spawn — open folder picker for new session\n" +
-					"  /gwt &lt;name&gt; — fork this project into a git worktree (session topic only)\n" +
-					"  /kill — end this session (terminal)\n" +
-					"  /stop — stop the current run (session stays, resumable)\n" +
-					"  /clear — clear session (fresh start, same topic)\n" +
-					"  /compact — compact context now; /compact &lt;focus&gt; to steer the summary\n" +
-					"  /model — choose LLM model\n" +
-					"  /status — show session stats (tokens, cost, context)\n" +
-					"  /schedules — list this session's schedules (ask me to add/change them)\n" +
-					"  /budget &lt;request&gt; — arm or clear a one-shot cost/wall-time checkpoint\n" +
-					"  /help — this message",
-				"<b>Skills:</b>\n  /skill pilat:plan-handoff&lt;&amp;&gt; — Use &lt;plan&gt; &amp; ship",
-			},
-		},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			messages := make([]string, 0, len(tc.want))
-			m := &Manager{
-				cfg: config.ManagerEntry{
-					BotToken:     "token",
-					TargetChatID: new(int64(-100123)),
-				},
-				controller: &fakeController{
-					listSkills: []controllerapi.ConfigSkillInfo{{
-						Name:        "pilat:plan-handoff<&>",
-						Description: "Use <plan> & ship",
-					}},
-				},
-				httpClient: &http.Client{Transport: telegramMessageRecorder(t, &messages)},
-			}
-
-			tc.run(m)
-
-			assert.Equal(t, tc.want, messages)
-		})
-	}
-}
-
-// Generic commands are durable inbox rows: the manager only forwards the
-// canonical text and never calls a direct lifecycle/schedule capability.
-func TestSchedulesCommandEntersDurableInbox(t *testing.T) {
 	var messages []string
-	ctrl := &fakeController{}
-	m := &Manager{
-		cfg:        config.ManagerEntry{BotToken: "token", TargetChatID: new(int64(-100123))},
-		controller: ctrl,
-		httpClient: &http.Client{Transport: telegramMessageRecorder(t, &messages)},
-	}
-
-	m.handleSessionTopicMessage(context.Background(), 42, 99, "/schedules")
-
-	require.Equal(t, []controllerapi.SessionMessageData{
-		{SessionID: 42, Message: "/schedules"},
-	}, ctrl.messageCalls)
+	ctrl := &fakeController{focus: 42, listSkills: []controllerapi.ConfigSkillInfo{{
+		Name: "pilat:plan-handoff<&>", Description: "Use <plan> & ship",
+	}}}
+	m := newCmdTestManager(t, ctrl, &messages)
+	m.handleChatText(t.Context(), "/help")
+	require.Len(t, messages, 2)
+	assert.Contains(t, messages[0], "/switch")
+	assert.Contains(t, messages[0], "/title")
+	assert.Contains(t, messages[0], "/sessions — List sessions, optionally filtered by word")
+	assert.Equal(
+		t,
+		"<b>Skills:</b>\n  /skill pilat:plan-handoff&lt;&amp;&gt; — Use &lt;plan&gt; &amp; ship",
+		messages[1],
+	)
+	m.handleChatText(t.Context(), "/start")
+	assert.Equal(t, messages[:2], messages[2:])
 }
 
-func TestStopCommandStopsWithoutSteering(t *testing.T) {
+func TestFocusedCommandsEnterDurableInboxVerbatim(t *testing.T) {
 	var messages []string
-	ctrl := &fakeController{}
-	m := &Manager{
-		cfg:        config.ManagerEntry{BotToken: "token", TargetChatID: new(int64(-100123))},
-		controller: ctrl,
-		httpClient: &http.Client{Transport: telegramMessageRecorder(t, &messages)},
+	ctrl := &fakeController{focus: 42}
+	m := newCmdTestManager(t, ctrl, &messages)
+	inputs := []string{
+		"/schedules",
+		"/stop",
+		"/clear",
+		"/kill",
+		"/compact keep tests",
+		"/status",
+		"/budget 1 usd",
+		"/skill pilat:plan-handoff",
+		"/pilat:plan-handoff /pilat___plan__handoff",
 	}
-
-	m.handleSessionTopicMessage(context.Background(), 42, 99, "/stop")
-
-	// /stop is forwarded as a durable generic command; it must never be sent to
-	// the model as ordinary steering text beyond that canonical command.
-	require.Equal(t, []controllerapi.SessionMessageData{
-		{SessionID: 42, Message: "/stop"},
-	}, ctrl.messageCalls)
+	for _, text := range inputs {
+		m.handleChatText(t.Context(), text)
+	}
+	require.Len(t, ctrl.messageCalls, len(inputs))
+	for i, text := range inputs {
+		assert.Equal(t, controllerapi.SessionMessageData{SessionID: 42, Message: text}, ctrl.messageCalls[i])
+	}
+	assert.Empty(t, messages)
+	m.handleChatText(t.Context(), "/config")
+	require.Len(t, ctrl.messageCalls, len(inputs)+1)
+	assert.Equal(t, controllerapi.SessionMessageData{SessionID: 42, Message: "/config"}, ctrl.messageCalls[len(inputs)])
+	assert.Empty(t, messages)
 }
 
-func TestHandleSessionTopicMessagePreservesCanonicalText(t *testing.T) {
-	ctrl := &fakeController{}
-	m := &Manager{controller: ctrl}
-	text := "/pilat:plan-handoff /pilat___plan__handoff"
-
-	m.handleSessionTopicMessage(context.Background(), 42, 99, text)
-
-	require.Len(t, ctrl.messageCalls, 1)
-	assert.Equal(t, controllerapi.SessionMessageData{SessionID: 42, Message: text}, ctrl.messageCalls[0])
-}
-
-func TestParseCallbackDataMatrix(t *testing.T) {
-	tests := []struct {
-		name   string
-		data   string
-		want   callbackAction
-		wantOK bool
-	}{
-		{name: "nav", data: "nav:7", want: callbackAction{Kind: callbackNav, DirID: 7}, wantOK: true},
-		{name: "launch", data: "launch:9", want: callbackAction{Kind: callbackLaunch, DirID: 9}, wantOK: true},
-		{
-			name:   "more",
-			data:   "more:11:20",
-			want:   callbackAction{Kind: callbackMore, DirID: 11, Offset: 20},
-			wantOK: true,
-		},
-		{name: "spawn", data: "spawn", want: callbackAction{Kind: callbackSpawn}, wantOK: true},
-		{
-			name:   "newpick",
-			data:   "newpick:7",
-			want:   callbackAction{Kind: callbackNewPick, ProjectID: 7},
-			wantOK: true,
-		},
-		{
-			name:   "newpage",
-			data:   "newpage:20",
-			want:   callbackAction{Kind: callbackNewPage, Offset: 20},
-			wantOK: true,
-		},
-		{name: "newpick_bad", data: "newpick:x", wantOK: false},
-		{name: "kill", data: "kill:42", want: callbackAction{Kind: callbackKill, Session: 42}, wantOK: true},
-		{
-			name:   "model",
-			data:   "model:local:gpt-5",
-			want:   callbackAction{Kind: callbackModel, ModelID: "local:gpt-5"},
-			wantOK: true,
-		},
-		{name: "invalid_more", data: "more:bad", wantOK: false},
-		{name: "unknown", data: "noop", wantOK: false},
+func TestNumberedControlsDoNotChangeSelection(t *testing.T) {
+	var messages []string
+	ctrl := &fakeController{focus: 42, listSessions: []controllerapi.SessionInfo{
+		{ID: 42, Name: "selected", Attributes: map[string]any{"manager_id": "telegram-main"}},
+		{ID: 9, Name: "other", Attributes: map[string]any{"manager_id": "telegram-main"}},
+		{ID: 8, Name: "foreign", Attributes: map[string]any{"manager_id": "other"}},
+	}}
+	m := newCmdTestManager(t, ctrl, &messages)
+	m.handleChatText(t.Context(), "/kill 9")
+	m.handleChatText(t.Context(), "/stop 9")
+	assert.Equal(
+		t,
+		[]controllerapi.SessionMessageData{{SessionID: 9, Message: "/kill"}, {SessionID: 9, Message: "/stop"}},
+		ctrl.messageCalls,
+	)
+	assert.Equal(t, int64(42), ctrl.focus)
+	for _, text := range []string{"/kill 8", "/stop 0", "/kill absent"} {
+		m.handleChatText(t.Context(), text)
 	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			got, ok := parseCallbackData(tc.data)
-			assert.Equal(t, tc.wantOK, ok)
-			if !tc.wantOK {
-				return
-			}
-			assert.Equal(t, tc.want.Kind, got.Kind)
-			assert.Equal(t, tc.want.DirID, got.DirID)
-			assert.Equal(t, tc.want.Offset, got.Offset)
-			assert.Equal(t, tc.want.Session, got.Session)
-			assert.Equal(t, tc.want.ModelID, got.ModelID)
-			assert.Equal(t, tc.want.ProjectID, got.ProjectID)
-		})
-	}
-}
-
-func TestDirPageBounds(t *testing.T) {
-	start, end, hasMore := dirPageBounds(25, 0)
-	assert.Equal(t, 0, start)
-	assert.Equal(t, 10, end)
-	assert.True(t, hasMore)
-
-	start, end, hasMore = dirPageBounds(25, 20)
-	assert.Equal(t, 20, start)
-	assert.Equal(t, 25, end)
-	assert.False(t, hasMore)
-
-	start, end, hasMore = dirPageBounds(25, 999)
-	assert.Equal(t, 0, start)
-	assert.Equal(t, 10, end)
-	assert.True(t, hasMore)
-
-	start, end, hasMore = dirPageBounds(0, 0)
-	assert.Equal(t, 0, start)
-	assert.Equal(t, 0, end)
-	assert.False(t, hasMore)
-
-	require.NotPanics(t, func() {
-		_, _, _ = dirPageBounds(10, -5)
-	})
+	assert.Len(t, ctrl.messageCalls, 2)
+	assert.Len(t, messages, 3)
+	assert.Equal(t, int64(42), ctrl.focus)
 }
 
 func telegramMessageRecorder(t *testing.T, messages *[]string) roundTripFunc {

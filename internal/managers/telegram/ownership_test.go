@@ -27,14 +27,14 @@ func TestManagerOwnsOnlyExplicitlyAttributedSessions(t *testing.T) {
 			name: "owned by another manager",
 			attributes: map[string]any{
 				controllerapi.SessionAttributeManagerID: "telegram-secondary",
-				"telegram_topic_id":                     int64(7001),
+				"channel":                               "telegram",
 			},
 		},
 		{
-			name:       "ownerless legacy topic is not proof of ownership",
-			attributes: map[string]any{"telegram_topic_id": int64(7001)},
+			name:       "channel alone is not proof of ownership",
+			attributes: map[string]any{"channel": "telegram"},
 		},
-		{name: "ownerless without topic"},
+		{name: "ownerless without metadata"},
 	}
 
 	for _, tt := range tests {

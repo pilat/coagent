@@ -29,7 +29,6 @@ import (
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/todo"
 	"github.com/pilat/coagent/internal/tool"
-	"github.com/pilat/coagent/internal/tool/builtin"
 	"github.com/pilat/coagent/internal/transcript"
 )
 
@@ -921,7 +920,7 @@ func runCompactionSequence(t *testing.T, sequence []compactionCommand) {
 				"step %d (%v): compaction ran while a call was pending", step, command)
 		}
 
-		assert.Equal(t, model.externalPending, s.HasPendingExternalCall(),
+		assert.Equal(t, model.externalPending, len(s.PendingExternalCalls()) > 0,
 			"step %d (%v): external-pending diverged from the model", step, command)
 		assert.Equal(t, model.workPending, len(s.pendingInLoopCalls()) > 0,
 			"step %d (%v): pending work diverged from the model", step, command)
@@ -943,7 +942,7 @@ func applyToSession(t *testing.T, s *Session, runner *runState, command compacti
 	case cmdQueueCompact:
 		s.RequestCompaction()
 	case cmdStartExternalCall:
-		if s.HasPendingExternalCall() || len(s.pendingInLoopCalls()) > 0 {
+		if len(s.PendingExternalCalls()) > 0 || len(s.pendingInLoopCalls()) > 0 {
 			return
 		}
 
@@ -961,7 +960,7 @@ func applyToSession(t *testing.T, s *Session, runner *runState, command compacti
 			})
 		}
 	case cmdEmitToolCall:
-		if s.HasPendingExternalCall() || len(s.pendingInLoopCalls()) > 0 {
+		if len(s.PendingExternalCalls()) > 0 || len(s.pendingInLoopCalls()) > 0 {
 			return
 		}
 
@@ -1206,7 +1205,7 @@ func skillMessage(t *testing.T, name, content string) llmwire.Message {
 
 	return llmwire.Message{
 		Role:    llmwire.RoleUser,
-		Content: builtin.RenderSkill(&loader.Skill{Name: name, Content: content}, ""),
+		Content: loader.RenderSkillInvocation(&loader.Skill{Name: name, Content: content}, ""),
 	}
 }
 
@@ -1296,6 +1295,10 @@ func runTestLoop(t *testing.T, s *Session) (RunResult, error) {
 		setTestMessages(s, []llmwire.Message{usr("task")})
 	}
 	return s.Run(t.Context())
+}
+
+func executeToolCalls(ctx context.Context, agent *Session, calls []llmwire.ToolCall) error {
+	return runToolCalls(ctx, agent, calls)
 }
 
 func textResponse(text string) *llmwire.Response {

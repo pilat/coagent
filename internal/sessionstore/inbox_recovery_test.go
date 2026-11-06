@@ -31,8 +31,13 @@ func TestInboxStore_PromoteReactivatesOnlyFirstAcceptance(t *testing.T) {
 
 	require.NoError(t, store.UpdateSessionStatus(ctx, rec.ID, SessionStatusCompleted))
 	second, err := acceptInput(ctx, store, input.ID, "ignored retry content")
+	require.ErrorIs(t, err, ErrInputResolved)
+	assert.Nil(t, second)
+	messages, err := store.LoadActiveMessages(ctx, rec.ID)
 	require.NoError(t, err)
-	assert.Equal(t, first.ID, second.ID)
+	require.Len(t, messages, 1)
+	assert.Equal(t, first.ID, messages[0].ID)
+	assert.Equal(t, "[stamp] durable input", messages[0].Content)
 
 	reloaded, err = store.GetSession(ctx, rec.ID)
 	require.NoError(t, err)

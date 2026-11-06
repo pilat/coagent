@@ -12,44 +12,23 @@ import (
 
 const subscriberBufferSize = 64
 
-// Source is the subscription side exposed by the daemon.
-type Source interface {
-	Subscribe(sessionID int64) <-chan sessionevent.Notification
-	SubscribeManager(managerID string) <-chan controllerapi.SessionNotification
-	SubscribeAll() <-chan controllerapi.SessionNotification
-	Unsubscribe(sessionID int64, ch <-chan sessionevent.Notification)
-	UnsubscribeManager(ch <-chan controllerapi.SessionNotification)
-	UnsubscribeAll(ch <-chan controllerapi.SessionNotification)
-}
-
-// Bus adds host-owned publication to the subscription surface.
-type Bus interface {
-	Source
-	Publish(sessionID int64, notification sessionevent.Notification)
-	PublishOwned(sessionID int64, managerID string, notification sessionevent.Notification)
-}
-
-var _ Bus = (*bus)(nil)
-
-// bus is a fan-out notification hub for session notifications.
-// Per-session subscribers receive notifications for a specific session.
-// Global subscribers receive notifications from all sessions (with session ID).
-type bus struct {
+// Bus publishes session notifications to session, manager and global subscribers.
+type Bus struct {
 	mu       sync.RWMutex
 	subs     map[int64][]chan sessionevent.Notification // per-session subscribers
 	globals  []chan controllerapi.SessionNotification   // wildcard subscribers (carry session ID)
 	managers map[string][]chan controllerapi.SessionNotification
 }
 
-func New() Bus {
-	return &bus{
+func New() *Bus {
+	return &Bus{
 		subs:     make(map[int64][]chan sessionevent.Notification),
 		managers: make(map[string][]chan controllerapi.SessionNotification),
 	}
 }
 
 // SubscribeManager receives only sessions durably owned by managerID.
-func (ps *bus) SubscribeManager(managerID string) <-chan controllerapi.SessionNotification {
+func (ps *Bus) SubscribeManager(managerID string) <-chan controllerapi.SessionNotification {
 	ch := make(chan controllerapi.SessionNotification, subscriberBufferSize)
 	if managerID == "" {
 		return ch
@@ -63,7 +42,7 @@ func (ps *bus) SubscribeManager(managerID string) <-chan controllerapi.SessionNo
 }
 
 // Subscribe creates a buffered channel that receives notifications for a specific session.
-func (ps *bus) Subscribe(sessionID int64) <-chan sessionevent.Notification {
+func (ps *Bus) Subscribe(sessionID int64) <-chan sessionevent.Notification {
 	ch := make(chan sessionevent.Notification, subscriberBufferSize)
 
 	ps.mu.Lock()
@@ -75,7 +54,7 @@ func (ps *bus) Subscribe(sessionID int64) <-chan sessionevent.Notification {
 }
 
 // SubscribeAll creates a buffered channel that receives notifications from all sessions.
-func (ps *bus) SubscribeAll() <-chan controllerapi.SessionNotification {
+func (ps *Bus) SubscribeAll() <-chan controllerapi.SessionNotification {
 	ch := make(chan controllerapi.SessionNotification, subscriberBufferSize)
 
 	ps.mu.Lock()
@@ -87,7 +66,7 @@ func (ps *bus) SubscribeAll() <-chan controllerapi.SessionNotification {
 }
 
 // Unsubscribe removes a per-session subscriber. Does NOT close the channel.
-func (ps *bus) Unsubscribe(sessionID int64, ch <-chan sessionevent.Notification) {
+func (ps *Bus) Unsubscribe(sessionID int64, ch <-chan sessionevent.Notification) {
 	ps.mu.Lock()
 	defer ps.mu.Unlock()
 
@@ -105,7 +84,7 @@ func (ps *bus) Unsubscribe(sessionID int64, ch <-chan sessionevent.Notification)
 }
 
 // UnsubscribeAll removes a global subscriber. Does NOT close the channel.
-func (ps *bus) UnsubscribeAll(ch <-chan controllerapi.SessionNotification) {
+func (ps *Bus) UnsubscribeAll(ch <-chan controllerapi.SessionNotification) {
 	ps.mu.Lock()
 	defer ps.mu.Unlock()
 
@@ -118,7 +97,7 @@ func (ps *bus) UnsubscribeAll(ch <-chan controllerapi.SessionNotification) {
 }
 
 // UnsubscribeManager removes a manager-scoped subscriber. It does not close it.
-func (ps *bus) UnsubscribeManager(ch <-chan controllerapi.SessionNotification) {
+func (ps *Bus) UnsubscribeManager(ch <-chan controllerapi.SessionNotification) {
 	ps.mu.Lock()
 	defer ps.mu.Unlock()
 
@@ -138,16 +117,9 @@ func (ps *bus) UnsubscribeManager(ch <-chan controllerapi.SessionNotification) {
 	}
 }
 
-// Publish sends a notification to all per-session subscribers for the given session
-// and to all global subscribers. Non-blocking: if a subscriber's channel is full, the
-// notification is dropped with a warning log.
-func (ps *bus) Publish(sessionID int64, n sessionevent.Notification) {
-	ps.PublishOwned(sessionID, "", n)
-}
-
-// PublishOwned fans an event out to observers and to the session's one owning
+// Publish fans an event out to observers and to the session's one owning
 // manager. An empty owner reaches no manager subscription.
-func (ps *bus) PublishOwned(sessionID int64, managerID string, n sessionevent.Notification) {
+func (ps *Bus) Publish(sessionID int64, managerID string, n sessionevent.Notification) {
 	log := logger.Named("sessionbus")
 
 	ps.mu.RLock()

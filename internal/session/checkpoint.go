@@ -283,7 +283,7 @@ func rawCutLegal(rawTail []llmwire.Message) bool {
 		return true
 	}
 
-	repaired := repairTranscript(rawTail)
+	repaired := repairTranscript(rawTail, nil)
 	if len(repaired) != len(rawTail) {
 		return false
 	}
@@ -362,12 +362,6 @@ func tailLevels() []tailLimit {
 	return []tailLimit{{floor: true, ceilings: true}, {ceilings: true}, {}}
 }
 
-// minTailTokens is the token floor the tail should meet: a tenth of the window,
-// degrading to half the raw history estimate when less history exists (D3).
-func minTailTokens(messages []llmwire.Message, base, window int) int {
-	return min(window/10, estimateTokens(messages[base:])/2)
-}
-
 // selectCheckpointSplit picks the maximal oldest raw prefix whose repaired
 // native projection plus instruction and schemas fits the request bound,
 // while the verbatim tail keeps the minimum tail estimate. The request
@@ -387,7 +381,7 @@ func selectCheckpointSplit(
 		return 0, false
 	}
 
-	minTail := minTailTokens(messages, base, window)
+	minTail := min(window/10, estimateTokens(messages[base:])/2)
 
 	// The pinned pair's first row defines the hard tail boundary; before it
 	// sits the nudge, and past it nothing may summarize. A candidate at index
@@ -445,7 +439,7 @@ func selectTailSplit(args selectTailSplitArgs) (int, bool) {
 			continue
 		}
 
-		if args.requestBaseEstimate+estimateTokens(repairTranscript(args.messages[:split])) > bound {
+		if args.requestBaseEstimate+estimateTokens(repairTranscript(args.messages[:split], nil)) > bound {
 			continue
 		}
 

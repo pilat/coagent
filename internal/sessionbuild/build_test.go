@@ -45,15 +45,11 @@ func TestBuildPrompt_AgentInventory(t *testing.T) {
 			require.True(t, ok)
 			reg = filterRegistryForAgent(set, reg, agent)
 			in := BuildInput{Config: &config.Config{Model: "current-model"}, Loader: ldr, WorkDir: t.TempDir()}
-			prompt := preparePrompt(in, agent, nil, todo.New(), reg, nil)
+			prompt := preparePrompt(in, agent, nil, todo.New(), reg, nil, "medium")
 			text := prompt.SystemPrompt()
 			assert.Equal(t, tc.wantSkills, containsText(text, "## Available Skills"))
 			assert.Equal(t, tc.wantSubagents, containsText(text, "## Available Subagents"))
-			if tc.agent == registry.AgentTypeExplore {
-				assert.NotContains(t, text, "Model: current-model")
-			} else {
-				assert.Contains(t, text, "Model: current-model")
-			}
+			assert.Contains(t, text, "You are running on current-model.")
 			assert.NotContains(t, text, "# Active background work")
 		})
 	}

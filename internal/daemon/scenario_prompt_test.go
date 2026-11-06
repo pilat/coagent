@@ -280,13 +280,11 @@ func TestHarnessScenario_HelpIncludesGWT(t *testing.T) {
 	h.startInboxWake()
 	require.NoError(t, h.mgr.sendToSession(h.ctx, sessionID, "/help"))
 	collector.waitMessage(sessionID, helpWithGWT)
-	controller := newChainController(t, h)
-	drainScenarioClaims(t, "help_includes_gwt.json", controller)
 	collector.waitIdleAfter(sessionID, helpWithGWT)
 
 	// The opener completes its candidate/confirmation pair; help itself must never invoke the model.
 	assert.Equal(t, int64(2), modelCalls.Load(), "/help must not invoke the model")
-	assertHarnessTrace(t, "help_includes_gwt.json", collector.snapshot(), sessionID)
+	assertHarnessTrace(t, h, "help_includes_gwt.json", collector.snapshot(), sessionID)
 }
 
 func promptLastToolResultContent(msgs []llmwire.Message, toolName string) string {
@@ -369,8 +367,11 @@ func assertInitialRegistryProjection(
 ) {
 	t.Helper()
 	firstSchemas := schemas.first(t, parentID)
-	for _, id := range append(dynamicRootTools(), configToolsForPromptScenario()...) {
+	for _, id := range dynamicRootTools() {
 		assert.Contains(t, firstSchemas, id, "root activation must expose daemon-registered %q", id)
+	}
+	for _, id := range configToolsForPromptScenario() {
+		assert.NotContains(t, firstSchemas, id)
 	}
 	assert.NotContains(t, firstSchemas, "mcp__fake__ping")
 	firstPrompt := prompts.first(t, strconv.FormatInt(parentID, 10))
@@ -379,7 +380,7 @@ func assertInitialRegistryProjection(
 	assert.Contains(t, firstPrompt, "# SCHEDULING")
 	assert.NotContains(t, firstPrompt, "mcp__fake__ping")
 	childSchemas := schemas.first(t, childID)
-	for _, id := range []string{tool.IDTask, tool.IDSchedule, tool.IDSleep, tool.IDMCPAdd, tool.IDConfigEdit} {
+	for _, id := range []string{tool.IDTask, tool.IDSchedule, tool.IDSleep, tool.IDMCPAdd, tool.IDConfigEdit, tool.IDConfigRead} {
 		assert.NotContains(t, childSchemas, id, "child registry must gate %q", id)
 	}
 	childPrompt := prompts.first(t, strconv.FormatInt(childID, 10))
@@ -398,7 +399,9 @@ func assertNextRegistryProjection(
 	lastSchemas := schemas.last(t, parentID)
 	assert.Contains(t, lastSchemas, "mcp__fake__ping")
 	assert.Contains(t, lastSchemas, tool.IDTask)
-	assert.Contains(t, lastSchemas, tool.IDConfigEdit)
+	for _, id := range configToolsForPromptScenario() {
+		assert.NotContains(t, lastSchemas, id)
+	}
 	assert.Contains(t, toolResultForCallID(h.messages(parentID), "ping-next-activation").Content, "pong from registry")
 	lastPrompt := prompts.last(t, strconv.FormatInt(parentID, 10))
 	assert.Contains(t, lastPrompt, "Sub-agents: task")
@@ -413,7 +416,7 @@ func dynamicRootTools() []string {
 }
 
 func configToolsForPromptScenario() []string {
-	return []string{tool.IDConfigEdit}
+	return []string{tool.IDConfigEdit, tool.IDConfigRead}
 }
 
 // activationSchemas stores each request's inventory separately. A union would
@@ -514,7 +517,7 @@ const helpWithGWT = "## Session commands\n" +
 	"`/compact [focus]` — compact the context\n" +
 	"`/schedules` — list schedules\n" +
 	"`/budget <request>` — arm, replace, inspect, or clear a one-shot cost/wall-time checkpoint\n" +
-	"`/gwt <name>` — fork into a worktree (Telegram session topics only)"
+	"`/gwt <name>` — fork into a worktree"
 
 type registryPromptLLM struct {
 	scriptedLLM

@@ -53,32 +53,24 @@ type ProcessStatus struct {
 }
 
 type Snapshot struct {
-	RootID               int64
-	Revision             string
-	DurableWatermark     int64
-	OutboxWatermark      int64
-	RuntimeState         string
-	PersistedReason      string
-	ObservedAt           time.Time
-	Model                string
-	RootIteration        int
-	MainModelWorking     bool
-	ChildCount           int
-	ChildIterations      int
-	Context              Context
-	Lifetime             Usage
-	EpisodeElapsed       *time.Duration
-	Todos                []TodoItem
-	LatestModelProgress  string
-	Waiting              []WaitingItem
-	ActiveSubagents      int
-	BackgroundSubagents  int
-	BackgroundProcesses  []ProcessStatus
-	Budget               *Budget
-	LastSemanticOutputAt *time.Time
-	// IsBackgroundYield marks final output released to a wake source; the
-	// compact final renderer prepends the 🟣 badge from it. See FinalFacts.
-	IsBackgroundYield bool
+	RootID              int64
+	Revision            string
+	RuntimeState        string
+	PersistedReason     string
+	ObservedAt          time.Time
+	Model               string
+	RootIteration       int
+	ChildCount          int
+	ChildIterations     int
+	Context             Context
+	Lifetime            Usage
+	EpisodeElapsed      *time.Duration
+	Todos               []TodoItem
+	Waiting             []WaitingItem
+	ActiveSubagents     int
+	BackgroundSubagents int
+	BackgroundProcesses []ProcessStatus
+	Budget              *Budget
 }
 
 // TodoCounts applies the operator-visible arithmetic: active counts only

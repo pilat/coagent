@@ -57,7 +57,7 @@ func decide(entries []Entry, path string) (Action, Mode, int, bool) {
 	matched := false
 
 	for i, entry := range entries {
-		if !entryMatches(entry, clean) {
+		if !pathWithin(entry.Path, clean) {
 			continue
 		}
 
@@ -65,8 +65,4 @@ func decide(entries []Entry, path string) (Action, Mode, int, bool) {
 	}
 
 	return action, mode, winner, matched
-}
-
-func entryMatches(entry Entry, path string) bool {
-	return pathWithin(entry.Path, path)
 }

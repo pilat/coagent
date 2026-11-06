@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/pilat/coagent/internal/progress"
 	"github.com/pilat/coagent/internal/transcript"
 )
 
@@ -18,13 +17,13 @@ func (s *Store) Commit(ctx context.Context, c Commit) (*CommitResult, error) {
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	c, replay, err := prepareCommitTx(ctx, tx, c)
+	c, err = prepareCommitTx(ctx, tx, c)
 	if err != nil {
 		return nil, err
 	}
 
 	result := &CommitResult{}
-	if err := applyCommitTx(ctx, tx, c, replay, result); err != nil {
+	if err := applyCommitTx(ctx, tx, c, result); err != nil {
 		return nil, err
 	}
 
@@ -109,24 +108,8 @@ func commitOutputsTx(ctx context.Context, tx *sql.Tx, c Commit, outputs []Output
 			key = fmt.Sprintf("message:%d:%s", result.MessageIDs[output.MessageRef], output.Phase)
 		}
 
-		content := output.Content
-		if output.FinalFooter != nil {
-			facts, err := CaptureProgressTx(ctx, tx, target)
-			if err != nil {
-				return err
-			}
-
-			final, err := finalFactsFromProgress(facts, c.At)
-			if err != nil {
-				return err
-			}
-
-			final.IsBackgroundYield = output.FinalFooter.BackgroundYield
-			content = progress.RenderFinalFromFacts(content, final)
-		}
-
 		out, err := insertOutputTx(ctx, tx, OutputDraft{
-			SessionID: target, Type: output.Type, Content: content,
+			SessionID: target, Type: output.Type, Content: output.Content,
 			Attributes: output.Attributes, SourceKey: key, ReleasesInput: output.ReleasesInput, CreatedAt: c.At,
 		}, c.Mode)
 		if err != nil {
@@ -136,6 +119,7 @@ func commitOutputsTx(ctx context.Context, tx *sql.Tx, c Commit, outputs []Output
 		if out != nil {
 			out.LiveContent = output.Content
 			out.PersistOnly = output.PersistOnly
+
 			result.Outputs = append(result.Outputs, out)
 		}
 	}

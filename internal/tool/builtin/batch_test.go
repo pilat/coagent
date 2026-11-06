@@ -344,20 +344,20 @@ func TestBatchToolUntrustedProvenance(t *testing.T) {
 
 	tests := []struct {
 		name  string
-		setup func(tool.Registry)
+		setup func(*tool.Registry)
 		calls []string
 		want  bool
 	}{
 		{
 			name: "all local stays trusted",
-			setup: func(reg tool.Registry) {
+			setup: func(reg *tool.Registry) {
 				reg.Register(local)
 			},
 			calls: []string{"local", "local"},
 		},
 		{
 			name: "one external nested result marks the batch",
-			setup: func(reg tool.Registry) {
+			setup: func(reg *tool.Registry) {
 				reg.Register(local)
 				reg.Register(&scriptedTool{id: "webfetch", result: &tool.Result{Output: "page", Untrusted: true}})
 			},
@@ -366,7 +366,7 @@ func TestBatchToolUntrustedProvenance(t *testing.T) {
 		},
 		{
 			name: "external typed failure with a result marks the batch",
-			setup: func(reg tool.Registry) {
+			setup: func(reg *tool.Registry) {
 				reg.Register(
 					&scriptedTool{id: "webfetch", result: &tool.Result{Output: "err", IsError: true, Untrusted: true}},
 				)
@@ -377,7 +377,7 @@ func TestBatchToolUntrustedProvenance(t *testing.T) {
 		{
 			// The classifier keys on the call, not on a result that never existed.
 			name: "external nested error without a result marks the batch",
-			setup: func(reg tool.Registry) {
+			setup: func(reg *tool.Registry) {
 				reg.Register(&scriptedTool{id: "mcp__fake__ping", err: errors.New("boom")})
 			},
 			calls: []string{"mcp__fake__ping"},

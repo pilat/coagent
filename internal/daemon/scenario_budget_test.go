@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/pilat/coagent/internal/budget"
+	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/llmwire"
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/tool"
@@ -124,7 +125,7 @@ func TestHarnessScenario_AgentInputCannotActivateBudget(t *testing.T) {
 	require.ErrorIs(t, err, sessionstore.ErrActivationConflict)
 }
 
-func TestHarnessScenario_FinalIncludesNonEmptyTodoAndBudget(t *testing.T) {
+func TestHarnessScenario_FinalOmitsTodoAndBudget(t *testing.T) {
 	release := make(chan struct{})
 	entered := make(chan struct{})
 	var enterOnce, releaseOnce sync.Once
@@ -155,12 +156,7 @@ func TestHarnessScenario_FinalIncludesNonEmptyTodoAndBudget(t *testing.T) {
 		VALUES (?, 'armed', 1, ?, 0, 1)`, sessionID, time.Now().UTC())
 	require.NoError(t, err)
 	releaseModel()
-	// Confirmation is the second model call; the compact footer preserves model, metrics, TODO and budget ordering.
-	want := "task answer\n\n" +
-		"🤖 `fake-model` · iteration 2\n" +
-		"📋 TODO · 1 active · 1 remaining · 0 done\n" +
-		"ℹ️ /status shows the full TODO list\n" +
-		"💸 Budget: armed (generation 1) · $0.000000 / $1.000000 · $1.000000 remaining"
+	want := "task answer"
 	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(sessionID) })
 	var finals []string
 	for _, row := range h.outbox(sessionID) {
@@ -225,9 +221,17 @@ func TestHarnessScenario_CompletionCheckBudgetCrossingOnCandidateHidesText(t *te
 		}
 	}
 	assert.Zero(t, leaks, "the unconfirmed candidate text never publishes")
+	collector.waitFor(
+		t,
+		"budget park becomes idle without output acknowledgement",
+		func(events []controllerapi.SessionNotification) bool {
+			return hasStateEvent(events, root, controllerapi.StateIdle)
+		},
+	)
 	record, err := h.store.Get(h.ctx, root)
 	require.NoError(t, err)
 	assert.Equal(t, budget.Fired, record.State)
+	assert.Equal(t, "parked", record.ParkPhase)
 }
 
 // A user turn racing the park drain must be rejected with an actionable

@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
-	"unicode/utf8"
 
 	"gopkg.in/yaml.v3"
 
@@ -26,11 +25,8 @@ const (
 	// DefaultUnifiedConfigFile is the default path for unified config.
 	DefaultUnifiedConfigFile = "~/" + coagenthome.DirName + "/" + coagenthome.ConfigFileName
 
-	defaultTelegramServiceTopicName        = "Coagent"
-	defaultTelegramServiceTopicIconEmojiID = "5309832892262654231"
-	defaultTelegramSessionTopicIconEmojiID = "5312016608254762256"
-	defaultTelegramSendChunkDelayMS        = 100
-	defaultTelegramPollTimeoutSec          = 30
+	defaultTelegramSendChunkDelayMS = 100
+	defaultTelegramPollTimeoutSec   = 30
 
 	driverAnthropic  = "anthropic"
 	driverOpenAI     = "openai"
@@ -105,12 +101,17 @@ func LoadRawUnifiedConfig(configPath string) (*UnifiedConfig, error) {
 // fields are fatal: a typo that silently disables a section is worse than a
 // refusal.
 func ParseUnifiedConfig(data []byte) (*UnifiedConfig, error) {
+	data, removed, err := stripRemovedManagerKeys(data)
+	if err != nil {
+		return nil, err
+	}
+
 	decoder := yaml.NewDecoder(bytes.NewReader(data))
 	decoder.KnownFields(true)
 
 	// Write confinement is enabled unless explicitly disabled. Initializing the
 	// field before decoding also covers configs that omit the sandbox section.
-	cfg := UnifiedConfig{Sandbox: SandboxConfig{Enabled: true}}
+	cfg := UnifiedConfig{Sandbox: SandboxConfig{Enabled: true}, RemovedManagerKeys: removed}
 	if err := decoder.Decode(&cfg); err != nil && !errors.Is(err, io.EOF) {
 		return nil, fmt.Errorf("parsing config file: %w", err)
 	}
@@ -244,26 +245,14 @@ func (c *UnifiedConfig) validateTelegramManager(m *ManagerEntry) error {
 		return fmt.Errorf("manager %q (driver: telegram) requires \"bot_token\" to be set", m.ID)
 	}
 
-	if len(m.AllowedUserIDs) == 0 {
-		return fmt.Errorf("manager %q (driver: telegram) requires \"allowed_user_ids\" to be non-empty", m.ID)
-	}
-
-	if m.TargetChatID != nil {
-		if *m.TargetChatID == 0 {
-			return fmt.Errorf("manager %q (driver: telegram) requires \"target_chat_id\" to be non-zero", m.ID)
-		}
-	} else if len(m.AllowedUserIDs) != 1 || m.AllowedUserIDs[0] <= 0 {
+	if len(m.AllowedUserIDs) != 1 || m.AllowedUserIDs[0] <= 0 {
 		return fmt.Errorf(
-			"manager %q (driver: telegram) without \"target_chat_id\" requires exactly one positive \"allowed_user_ids\" entry",
+			"manager %q (driver: telegram) requires exactly one positive \"allowed_user_ids\" entry",
 			m.ID,
 		)
 	}
 
 	applyTelegramDefaults(m)
-
-	if utf8.RuneCountInString(m.ServiceTopicName) > 128 {
-		return fmt.Errorf("manager %q (driver: telegram) service_topic_name exceeds 128 characters", m.ID)
-	}
 
 	if m.SendChunkDelayMS < 0 {
 		return fmt.Errorf("manager %q (driver: telegram) requires \"send_chunk_delay_ms\" to be >= 0", m.ID)
@@ -282,18 +271,6 @@ func (c *UnifiedConfig) validateTelegramManager(m *ManagerEntry) error {
 }
 
 func applyTelegramDefaults(m *ManagerEntry) {
-	if m.ServiceTopicName == "" {
-		m.ServiceTopicName = defaultTelegramServiceTopicName
-	}
-
-	if m.ServiceTopicIconEmojiID == "" {
-		m.ServiceTopicIconEmojiID = defaultTelegramServiceTopicIconEmojiID
-	}
-
-	if m.SessionTopicIconEmojiID == "" {
-		m.SessionTopicIconEmojiID = defaultTelegramSessionTopicIconEmojiID
-	}
-
 	if m.SendChunkDelayMS == 0 {
 		m.SendChunkDelayMS = defaultTelegramSendChunkDelayMS
 	}

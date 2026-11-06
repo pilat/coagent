@@ -22,8 +22,7 @@ func TestPreflightWithRetry_RetriesEachTransientRemoteCall(t *testing.T) {
 	attempts := make(map[string]int)
 
 	manager := &Manager{
-		cfg:    config.ManagerEntry{BotToken: "token", TargetChatID: new(int64(-100123))},
-		target: forumTarget{chatID: -100123, topology: forumTopologyGroup},
+		cfg: config.ManagerEntry{BotToken: "token", AllowedUserIDs: []int64{7}},
 		httpClient: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 			method := filepath.Base(req.URL.Path)
 			attempts[method]++
@@ -37,12 +36,7 @@ func TestPreflightWithRetry_RetriesEachTransientRemoteCall(t *testing.T) {
 			case "getChat":
 				return telegramResponse(
 					req,
-					`{"ok":true,"result":{"id":-100123,"type":"supergroup","is_forum":true}}`,
-				), nil
-			case "getChatMember":
-				return telegramResponse(
-					req,
-					`{"ok":true,"result":{"status":"administrator","can_manage_topics":true,"can_delete_messages":true}}`,
+					`{"ok":true,"result":{"id":7,"type":"private"}}`,
 				), nil
 			default:
 				t.Fatalf("unexpected Telegram method %q", method)
@@ -60,17 +54,15 @@ func TestPreflightWithRetry_RetriesEachTransientRemoteCall(t *testing.T) {
 
 	require.NoError(t, manager.preflightWithRetry(context.Background(), policy))
 	assert.Equal(t, map[string]int{
-		"getMe":         2,
-		"getChat":       2,
-		"getChatMember": 2,
+		"getMe":   2,
+		"getChat": 2,
 	}, attempts)
 }
 
 func TestPreflightWithRetry_RetriesHTTPServerError(t *testing.T) {
 	calls := 0
 	manager := &Manager{
-		cfg:    config.ManagerEntry{BotToken: "token", AllowedUserIDs: []int64{7}},
-		target: forumTarget{chatID: 7, topology: forumTopologyBot},
+		cfg: config.ManagerEntry{BotToken: "token", AllowedUserIDs: []int64{7}},
 		httpClient: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 			method := filepath.Base(req.URL.Path)
 			if method == "getMe" {
@@ -85,7 +77,7 @@ func TestPreflightWithRetry_RetriesHTTPServerError(t *testing.T) {
 					}, nil
 				}
 
-				return telegramResponse(req, `{"ok":true,"result":{"id":42,"has_topics_enabled":true}}`), nil
+				return telegramResponse(req, `{"ok":true,"result":{"id":42}}`), nil
 			}
 
 			return telegramResponse(req, `{"ok":true,"result":{"id":7,"type":"private"}}`), nil
@@ -273,8 +265,7 @@ func (permanentNetworkError) Temporary() bool { return false }
 func managerBlockedInPreflight(requestStarted chan<- struct{}) *Manager {
 	return &Manager{
 		id:         "telegram-test",
-		cfg:        config.ManagerEntry{BotToken: "token", TargetChatID: new(int64(-100123))},
-		target:     forumTarget{chatID: -100123, topology: forumTopologyGroup},
+		cfg:        config.ManagerEntry{BotToken: "token", AllowedUserIDs: []int64{7}},
 		controller: &fakeController{},
 		httpClient: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 			select {

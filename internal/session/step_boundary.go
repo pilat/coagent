@@ -227,19 +227,9 @@ func (s *Session) commitBoundaryBatch(
 	batch *boundaryBatch,
 	inputCount int,
 ) (bool, error) {
+	s.prepareBoundaryBatch(r, batch, inputCount)
+
 	c := &batch.commit
-	if batch.fresh && !batch.accepted && inputCount == 0 {
-		c.Messages = append(c.Messages, hostUserMessage(s.stamper.Stamp(noTaskPrompt)))
-		batch.accepted = true
-	}
-
-	willModel := batch.accepted || s.unansweredWork() || len(c.ToolResults) > 0
-	if willModel && !r.boundaryAgain && len(batch.pending) == 0 && !r.backgroundInserted &&
-		s.activeBackgroundSnapshot != "" {
-		c.Messages = append(c.Messages, hostUserMessage(s.activeBackgroundSnapshot))
-		r.backgroundInserted = true
-	}
-
 	if len(c.Accept) == 0 && len(c.Messages) == 0 && len(c.ToolResults) == 0 && len(c.Outputs) == 0 {
 		return batch.accepted, nil
 	}
@@ -266,6 +256,22 @@ func (s *Session) commitBoundaryBatch(
 	}
 
 	return batch.accepted, nil
+}
+
+func (s *Session) prepareBoundaryBatch(r *runState, batch *boundaryBatch, inputCount int) {
+	c := &batch.commit
+
+	if batch.fresh && !batch.accepted && inputCount == 0 {
+		c.Messages = append(c.Messages, hostUserMessage(s.stamper.Stamp(noTaskPrompt)))
+		batch.accepted = true
+	}
+
+	willModel := batch.accepted || s.unansweredWork() || len(c.ToolResults) > 0
+	if willModel && !r.boundaryAgain && len(batch.pending) == 0 && !r.backgroundInserted &&
+		s.activeBackgroundSnapshot != "" {
+		c.Messages = append(c.Messages, hostUserMessage(s.activeBackgroundSnapshot))
+		r.backgroundInserted = true
+	}
 }
 
 func (s *Session) acceptBoundaryCommand(
@@ -298,7 +304,7 @@ func (s *Session) acceptBoundaryCommand(
 	c.Outputs = append(
 		c.Outputs,
 		sessionstore.Output{
-			Type:          sessionstore.OutputMessagePersistent,
+			Type:          sessionstore.OutputMessage,
 			Content:       output,
 			Key:           fmt.Sprintf("input:%d:%s:result", input.ID, strings.TrimPrefix(command, "/")),
 			MessageRef:    -1,
@@ -338,7 +344,7 @@ func (s *Session) deferBoundaryCompaction(batch *boundaryBatch, input *sessionst
 	}
 
 	batch.commit.Outputs = append(batch.commit.Outputs, sessionstore.Output{
-		Type: sessionstore.OutputMessagePersistent, Content: compactionDeferredNotice,
+		Type: sessionstore.OutputMessage, Content: compactionDeferredNotice,
 		Key: fmt.Sprintf("input:%d:compact:deferred", input.ID), MessageRef: -1,
 	})
 	s.compactionDeferAnnounced = true
@@ -480,7 +486,7 @@ func (s *Session) acceptBoundarySchedule(batch *boundaryBatch, input *sessionsto
 	c.Outputs = append(
 		c.Outputs,
 		sessionstore.Output{
-			Type:        sessionstore.OutputMessagePersistent,
+			Type:        sessionstore.OutputMessage,
 			Content:     "⏰ scheduled\n\n" + input.RawContent,
 			PersistOnly: true,
 			Key:         "schedule:" + deliveryKey + ":announcement",
@@ -489,6 +495,7 @@ func (s *Session) acceptBoundarySchedule(batch *boundaryBatch, input *sessionsto
 		},
 	)
 	batch.accepted = true
+
 	s.preserveStopped = false
 
 	return boundaryContinue, nil
@@ -531,7 +538,7 @@ func (s *Session) acceptBoundaryText(
 		accept.Receipt = loader.SkillReceipt(prepared.SkillName)
 	}
 
-	if toolID := s.activationIndex[command]; toolID != "" {
+	if toolID := s.activationIndex[command]; toolID != "" && input.Source == sessionstore.InputSourceUser {
 		accept.Content += activationInstruction(toolID, command)
 		c.Activation = &sessionstore.ActivationChange{
 			InputID: input.ID,
@@ -549,10 +556,6 @@ func (s *Session) acceptBoundaryText(
 
 	if input.Source == sessionstore.InputSourceUser || input.Source == sessionstore.InputSourceAgent {
 		s.preserveStopped = false
-	}
-
-	if owner != "" && input.Source == sessionstore.InputSourceUser {
-		r.directReply = true
 	}
 
 	s.loopDetector.resetWindow()
@@ -578,7 +581,7 @@ func rejectBoundaryInput(batch *boundaryBatch, input *sessionstore.InboxInput, c
 	c.Outputs = append(
 		c.Outputs,
 		sessionstore.Output{
-			Type:          sessionstore.OutputMessagePersistent,
+			Type:          sessionstore.OutputMessage,
 			Content:       "⚠️ " + cause.Error(),
 			Key:           fmt.Sprintf("input:%d:rejected", input.ID),
 			MessageRef:    -1,

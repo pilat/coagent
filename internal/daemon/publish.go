@@ -20,11 +20,11 @@ type routes struct {
 }
 
 type sessionEvents struct {
-	daemon    *svc
+	daemon    *Service
 	sessionID int64
 }
 
-func (s *svc) NotifySession(sessionID int64, n sessionevent.Notification) {
+func (s *Service) NotifySession(sessionID int64, n sessionevent.Notification) {
 	s.publish(sessionID, n)
 }
 
@@ -32,7 +32,7 @@ func (s *svc) NotifySession(sessionID int64, n sessionevent.Notification) {
 // silencing a root session on a transient DB error is the worse outcome.
 //
 //nolint:contextcheck,nolintlint // contextcheck reads this comment as config, so nolintlint sees it as unused
-func (s *svc) publish(sessionID int64, n sessionevent.Notification) {
+func (s *Service) publish(sessionID int64, n sessionevent.Notification) {
 	if err := n.Validate(); err != nil {
 		logger.Named("daemon.publish").Error(
 			"invalid_notification",
@@ -55,7 +55,7 @@ func (s *svc) publish(sessionID int64, n sessionevent.Notification) {
 				zap.Int64("session_id", sessionID),
 				zap.Error(err),
 			)
-			s.bus.PublishOwned(sessionID, "", n)
+			s.bus.Publish(sessionID, "", n)
 
 			return
 		}
@@ -69,7 +69,7 @@ func (s *svc) publish(sessionID int64, n sessionevent.Notification) {
 		return
 	}
 
-	s.bus.PublishOwned(sessionID, managerID, n)
+	s.bus.Publish(sessionID, managerID, n)
 }
 
 // lookupPublishRoute reports the immutable root/owner route for a session.
@@ -119,25 +119,8 @@ func (e *sessionEvents) Emit(n sessionevent.Notification) {
 		}
 
 		s.updateLive(ctx, e.sessionID)
-		s.progress.Wake()
 	case sessionevent.NotifyContextChanged:
 		s.updateLive(ctx, e.sessionID)
-	case sessionevent.NotifyIterationPersisted:
-		if iteration, ok := n.Attributes["iteration"].(int); ok {
-			s.publishSubagentIterationProgress(ctx, e.sessionID, int64(iteration))
-		}
-	case sessionevent.NotifyProgressChanged:
-		s.updateLive(ctx, e.sessionID)
-
-		content, published, err := s.progress.EnqueueChange(ctx, e.sessionID)
-		if err != nil {
-			logger.Ctx(ctx).Named("daemon.progress").Warn("enqueue_progress_change", zap.Error(err))
-			return
-		}
-
-		if published {
-			s.publish(e.sessionID, sessionevent.Notification{Type: sessionevent.NotifyMessage, Message: content})
-		}
 	case sessionevent.NotifyMessage,
 		sessionevent.NotifyHeartbeat,
 		sessionevent.NotifyStateChanged,

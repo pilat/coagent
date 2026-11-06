@@ -9,11 +9,11 @@ import (
 	"github.com/pilat/coagent/internal/sessionstore"
 )
 
-const subagentLinkColumns = `parent_id, child_id, task_call_id, blocking, depth, state, delivered_at, delivered_msg_id, delivered_input_id, created_at, result, outcome, activation_seq`
+const subagentLinkColumns = `parent_id, child_id, task_call_id, blocking, depth, state, delivered_at, created_at, result, outcome, activation_seq`
 
 // subagentLinkColumnsSL is subagentLinkColumns qualified with the "sl" alias,
 // for queries that join subagent_links to sessions.
-const subagentLinkColumnsSL = `sl.parent_id, sl.child_id, sl.task_call_id, sl.blocking, sl.depth, sl.state, sl.delivered_at, sl.delivered_msg_id, sl.delivered_input_id, sl.created_at, sl.result, sl.outcome, sl.activation_seq`
+const subagentLinkColumnsSL = `sl.parent_id, sl.child_id, sl.task_call_id, sl.blocking, sl.depth, sl.state, sl.delivered_at, sl.created_at, sl.result, sl.outcome, sl.activation_seq`
 
 var _ Store = (*store)(nil)
 
@@ -170,12 +170,12 @@ func scanLinkRows(rows *sql.Rows) ([]Link, error) {
 
 func scanLinkFrom(sc rowScanner) (*Link, error) {
 	var link Link
-	var deliveredAt, deliveredMsgID, deliveredInputID sql.NullInt64
+	var deliveredAt sql.NullInt64
 	var state, outcome string
 
 	err := sc.Scan(
 		&link.ParentID, &link.ChildID, &link.TaskCallID, &link.Blocking, &link.Depth,
-		&state, &deliveredAt, &deliveredMsgID, &deliveredInputID, &link.CreatedAt,
+		&state, &deliveredAt, &link.CreatedAt,
 		&link.Result, &outcome, &link.ActivationSeq,
 	)
 	if err != nil {
@@ -184,8 +184,6 @@ func scanLinkFrom(sc rowScanner) (*Link, error) {
 	}
 
 	link.DeliveredAt = deliveredAt.Int64
-	link.DeliveredMsgID = deliveredMsgID.Int64
-	link.DeliveredInputID = deliveredInputID.Int64
 	link.State = State(state)
 
 	link.Outcome = Outcome(outcome)

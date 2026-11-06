@@ -32,25 +32,6 @@ func (s *Store) EnqueueOutput(ctx context.Context, draft OutputDraft) (*OutputCo
 	return commit, nil
 }
 
-//nolint:wsl_v5 // Identity lookup keeps sentinel handling adjacent.
-func (s *Store) OutputBySourceKey(
-	ctx context.Context,
-	sessionID int64,
-	sourceKey string,
-) (*OutputRecord, error) {
-	record, err := scanOutputRecord(s.db.QueryRowContext(ctx, `SELECT `+outputColumns+
-		` FROM session_outbox WHERE session_id = ? AND source_key = ?`, sessionID, sourceKey))
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, ErrNoOutput
-	}
-	if err != nil {
-		return nil, fmt.Errorf("load output by source key: %w", err)
-	}
-
-	return record, nil
-}
-
-//nolint:dupl // EnqueueOutput and EnqueueProgressOutput differ only in their eligibility gate.
 func insertOutputTx(ctx context.Context, tx *sql.Tx, draft OutputDraft, mode CommitMode) (*OutputCommit, error) {
 	owner, err := outputOwner(ctx, tx, draft.SessionID)
 	if errors.Is(err, ErrOutputOwner) || errors.Is(err, ErrOutputNotRoot) {
@@ -72,26 +53,8 @@ func insertOutputTx(ctx context.Context, tx *sql.Tx, draft OutputDraft, mode Com
 		return nil, err
 	}
 
-	draft.Fingerprint = outputFingerprintWithRelease(
-		draft.Type,
-		draft.Content,
-		draft.SessionID,
-		draft.Attributes,
-		draft.ReleasesInput,
-	)
-	if draft.SourceKey == "" {
-		draft.Fingerprint = ""
-	}
-
 	attributes := cloneAttributes(draft.Attributes)
 	attributes[managerIDAttribute] = owner
-
-	if isMessageOutput(draft.Type) {
-		attributes, err = stampMessageOutputAttributes(ctx, tx, draft.SessionID, owner, draft.Attributes)
-		if err != nil {
-			return nil, err
-		}
-	}
 
 	encoded, err := json.Marshal(attributes)
 	if err != nil {
@@ -105,10 +68,9 @@ func insertOutputTx(ctx context.Context, tx *sql.Tx, draft OutputDraft, mode Com
 
 	result, err := tx.ExecContext(ctx, `
 		INSERT INTO session_outbox
-			(session_id, type, content, attributes, source_key, fingerprint, created_at, releases_input)
-		VALUES (?, ?, ?, ?, NULLIF(?, ''), NULLIF(?, ''), ?, ?)`,
-		draft.SessionID, draft.Type, draft.Content, string(encoded), draft.SourceKey, draft.Fingerprint, now,
-		draft.ReleasesInput)
+			(session_id, type, content, attributes, source_key, created_at)
+		VALUES (?, ?, ?, ?, NULLIF(?, ''), ?)`,
+		draft.SessionID, draft.Type, draft.Content, string(encoded), draft.SourceKey, now)
 	if err == nil {
 		id, idErr := result.LastInsertId()
 		if idErr != nil {
@@ -127,17 +89,13 @@ func insertOutputTx(ctx context.Context, tx *sql.Tx, draft OutputDraft, mode Com
 
 func existingOutputTx(ctx context.Context, tx *sql.Tx, draft OutputDraft, owner string) (*OutputCommit, error) {
 	var existingID int64
-	var existingFingerprint string
+	var content string
 
-	err := tx.QueryRowContext(ctx, `SELECT id, fingerprint FROM session_outbox WHERE session_id = ? AND source_key = ?`, draft.SessionID, draft.SourceKey).
-		Scan(&existingID, &existingFingerprint)
+	err := tx.QueryRowContext(ctx, `SELECT id, content FROM session_outbox WHERE session_id = ? AND source_key = ?`, draft.SessionID, draft.SourceKey).
+		Scan(&existingID, &content)
 	if err != nil {
 		return nil, fmt.Errorf("load existing output: %w", err)
 	}
 
-	if existingFingerprint != draft.Fingerprint {
-		return nil, fmt.Errorf("%w: session %d key %q", ErrOutputConflict, draft.SessionID, draft.SourceKey)
-	}
-
-	return &OutputCommit{OutputID: existingID, OwnerID: owner, Existing: true, Content: draft.Content}, nil
+	return &OutputCommit{OutputID: existingID, OwnerID: owner, Existing: true, Content: content}, nil
 }

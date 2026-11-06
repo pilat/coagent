@@ -46,7 +46,7 @@ func (s *Store) Enqueue(ctx context.Context, in Input) (*Enqueued, error) {
 	return result, err
 }
 
-// EnqueueTx requires WithTx so producer facts and input become visible before waking.
+// EnqueueTx requires a registered store transaction so facts and input become visible before waking.
 func EnqueueTx(ctx context.Context, tx *sql.Tx, in Input) (*Enqueued, error) {
 	registered, ok := enqueueTransactions.Load(tx)
 	if !ok {
@@ -61,6 +61,7 @@ func EnqueueTx(ctx context.Context, tx *sql.Tx, in Input) (*Enqueued, error) {
 	if err := validateEnqueueInput(in); err != nil {
 		return nil, err
 	}
+
 	var parentID int64
 	var status SessionStatus
 	var killed sql.NullTime
@@ -122,9 +123,7 @@ func (s *Store) WithTx(ctx context.Context, fn func(*sql.Tx) error) error {
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	pending := &enqueueTransaction{sessions: make(map[int64]struct{})}
-
-	enqueueTransactions.Store(tx, pending)
+	pending := registerEnqueueTransaction(tx)
 	defer enqueueTransactions.Delete(tx)
 
 	if err := fn(tx); err != nil {
@@ -135,12 +134,7 @@ func (s *Store) WithTx(ctx context.Context, fn func(*sql.Tx) error) error {
 		return fmt.Errorf("commit store transaction: %w", err)
 	}
 
-	pending.mu.Lock()
-	defer pending.mu.Unlock()
-
-	for id := range pending.sessions {
-		s.recordWoken(id)
-	}
+	s.wakeEnqueued(pending)
 
 	return nil
 }
@@ -192,9 +186,18 @@ func (s *Store) ListPending(ctx context.Context, sessionID int64) ([]*InboxInput
 }
 
 func (s *Store) CallPending(ctx context.Context, sessionID int64, callID string) (bool, error) {
+	return callPending(ctx, s.db, sessionID, callID)
+}
+
+// CallPendingTx checks call ownership in the producer's delivery transaction.
+func CallPendingTx(ctx context.Context, tx *sql.Tx, sessionID int64, callID string) (bool, error) {
+	return callPending(ctx, tx, sessionID, callID)
+}
+
+func callPending(ctx context.Context, q execer, sessionID int64, callID string) (bool, error) {
 	var pending bool
 
-	err := s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM messages call,json_each(call.tool_calls) item
+	err := q.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM messages call,json_each(call.tool_calls) item
   WHERE call.session_id = ? AND call.rejected_reason IS NULL AND json_extract(item.value,'$.ID') = ?
   AND NOT EXISTS(SELECT 1 FROM messages result WHERE result.session_id = call.session_id AND result.role = 'tool' AND result.tool_call_id = ?))`, sessionID, callID, callID).Scan(&pending)
 	if err != nil {
@@ -202,6 +205,22 @@ func (s *Store) CallPending(ctx context.Context, sessionID int64, callID string)
 	}
 
 	return pending, nil
+}
+
+func registerEnqueueTransaction(tx *sql.Tx) *enqueueTransaction {
+	pending := &enqueueTransaction{sessions: make(map[int64]struct{})}
+	enqueueTransactions.Store(tx, pending)
+
+	return pending
+}
+
+func (s *Store) wakeEnqueued(pending *enqueueTransaction) {
+	pending.mu.Lock()
+	defer pending.mu.Unlock()
+
+	for id := range pending.sessions {
+		s.recordWoken(id)
+	}
 }
 
 func (s *Store) recordWoken(id int64) {
@@ -354,9 +373,8 @@ func enqueueDuplicateTx(ctx context.Context, tx *sql.Tx, in Input) (bool, error)
 	}
 	var exists bool
 
-	err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM session_inbox WHERE session_id = ? AND delivery_key = ?)
-   OR (? = 'schedule' AND EXISTS(SELECT 1 FROM session_deliveries WHERE session_id = ? AND delivery_id = ?))`,
-		in.SessionID, in.DeliveryKey, in.Source, in.SessionID, in.DeliveryKey).
+	err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM session_inbox WHERE session_id = ? AND delivery_key = ?)`,
+		in.SessionID, in.DeliveryKey).
 		Scan(&exists)
 	if err != nil {
 		return false, fmt.Errorf("check input delivery: %w", err)
@@ -386,8 +404,22 @@ func prepareEnqueueAttributesTx(
 
 	attributes[managerIDAttribute] = owner
 
+	if title := TitleFromInput(in.Content); title != "" {
+		if _, err := tx.ExecContext(ctx, `UPDATE sessions
+			SET attributes = json_set(COALESCE(attributes, '{}'), '$.title', ?)
+			WHERE id = ? AND parent_id = 0
+			AND json_extract(attributes, '$.title') IS NULL`, title, in.SessionID); err != nil {
+			return nil, fmt.Errorf("name session from input: %w", err)
+		}
+	}
+
 	if parentID == 0 && !isExactControlCommand(in.Content) {
-		if err := prepareManagerModelInputTx(ctx, tx, in.SessionID, at); err != nil {
+		if err := prepareManagerModelInputTx(
+			ctx,
+			tx,
+			in.SessionID,
+			at,
+		); err != nil {
 			return nil, err
 		}
 	}

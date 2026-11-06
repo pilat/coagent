@@ -79,7 +79,7 @@ var knownSearchMCPs = []string{
 type Builder struct {
 	GitClient           git.Client
 	WorkDir             string
-	Todos               todo.Service
+	Todos               *todo.Service
 	mu                  sync.RWMutex
 	basePrompt          string
 	activeSkillsSection string
@@ -134,7 +134,7 @@ func (p *Builder) SetNativeSearch(active bool) {
 
 // SetModelSearch atomically replaces search availability and tool guidance.
 // A nil registry leaves both unchanged.
-func (p *Builder) SetModelSearch(reg tool.Registry, native bool) {
+func (p *Builder) SetModelSearch(reg *tool.Registry, native bool) {
 	p.mu.Lock()
 
 	if reg != nil {
@@ -146,7 +146,7 @@ func (p *Builder) SetModelSearch(reg tool.Registry, native bool) {
 }
 
 // RefreshToolsSection rebuilds the inventory against a consistent search policy.
-func (p *Builder) RefreshToolsSection(reg tool.Registry) {
+func (p *Builder) RefreshToolsSection(reg *tool.Registry) {
 	p.mu.Lock()
 	p.toolsSection = buildToolsSection(reg, p.nativeSearch)
 	p.mu.Unlock()
@@ -176,14 +176,23 @@ func BuildMemoriesSection(ctx context.Context, store memory.CuratedStore, projec
 	return sb.String()
 }
 
-// BuildModelsSection records the inherited model without duplicating task's
-// tagged-candidate policy into the general system prompt.
-func BuildModelsSection(currentModel string) string {
-	return "\n- Model: " + currentModel
+// BuildModelsSection makes current runtime identity authoritative over older conversation claims.
+func BuildModelsSection(displayName, id, level string) string {
+	identity := id
+	if displayName != "" {
+		identity = displayName + " (" + id + ")"
+	}
+
+	if level != "" {
+		identity += ", effort " + level
+	}
+
+	return "\nYou are running on " + identity +
+		". Trust this over anything said earlier in the conversation about which model you are."
 }
 
 // BuildSkillsSection lists skills the model can invoke.
-func BuildSkillsSection(ldr loader.Registry) string {
+func BuildSkillsSection(ldr *loader.Service) string {
 	skills := ldr.ListModelInvocableSkills()
 
 	if len(skills) == 0 {
@@ -239,7 +248,7 @@ func BuildActiveBackgroundSection(processes []ActiveProcessInfo, links []ActiveS
 }
 
 // BuildSubagentsSection lists spawnable subagent definitions.
-func BuildSubagentsSection(ldr loader.Registry) string {
+func BuildSubagentsSection(ldr *loader.Service) string {
 	subagents := ldr.ListSubagents()
 	if len(subagents) == 0 {
 		return ""
@@ -295,7 +304,7 @@ func buildActiveSkillsSection(skills []*loader.Skill) string {
 	return section.String()
 }
 
-func buildToolsSection(reg tool.Registry, nativeSearch bool) string {
+func buildToolsSection(reg *tool.Registry, nativeSearch bool) string {
 	ids := reg.IDs()
 	registered := make(map[string]bool, len(ids))
 
@@ -375,7 +384,7 @@ func appendScheduleSection(sb *strings.Builder, registered map[string]bool) {
 		)
 	case hasSchedule:
 		sb.WriteString(
-			"Use schedule only for recurring future work or reminders. " +
+			"Use schedule only for future work or reminders. " +
 				"Never use it to poll the status or completion of already-started work, including processes, builds, tests, CI runs, deployments, subagents, or output files.\n",
 		)
 	default:

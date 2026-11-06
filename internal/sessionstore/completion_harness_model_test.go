@@ -34,10 +34,9 @@ func TestHarnessModel_CompletionCheckRestartAndDelivery(t *testing.T) {
 			Unfired: sessionstore.Parts{
 				Messages: []*transcript.Message{{Role: "user", Content: "second look"}},
 				State: sessionstore.StatePatch{
-					Iteration:           new(1),
-					EmptyStopStreak:     new(2),
-					ManagerReplyPending: new(true),
-					Candidate:           &sessionstore.CandidateChange{Expected: 0, NextRef: 0},
+					Iteration:       new(1),
+					EmptyStopStreak: new(2),
+					Candidate:       &sessionstore.CandidateChange{Expected: 0, NextRef: 0},
 				},
 			},
 		},
@@ -54,8 +53,6 @@ func TestHarnessModel_CompletionCheckRestartAndDelivery(t *testing.T) {
 	require.NotNil(t, state.CandidateID)
 	assert.Equal(t, candidate.MessageIDs[0], *state.CandidateID,
 		"restart must preserve the pending candidate identity")
-	assert.True(t, state.ManagerReplyPending,
-		"restart must preserve the manager reply obligation")
 	assert.Equal(t, 2, state.EmptyStopStreak,
 		"restart must preserve the durable empty streak")
 
@@ -69,7 +66,7 @@ func TestHarnessModel_CompletionCheckRestartAndDelivery(t *testing.T) {
 			Unfired: sessionstore.Parts{
 				Outputs: []sessionstore.Output{
 					{
-						Type:          sessionstore.OutputMessagePersistent,
+						Type:          sessionstore.OutputMessage,
 						Content:       "confirmed answer",
 						MessageRef:    0,
 						Phase:         "final",
@@ -77,11 +74,10 @@ func TestHarnessModel_CompletionCheckRestartAndDelivery(t *testing.T) {
 					},
 				},
 				State: sessionstore.StatePatch{
-					Iteration:           new(2),
-					EmptyStopStreak:     new(0),
-					ManagerReplyPending: new(false),
-					Candidate:           &sessionstore.CandidateChange{Expected: candidate.MessageIDs[0], NextRef: -1},
-					ConfirmedAnswerID:   new(candidate.MessageIDs[0]),
+					Iteration:         new(2),
+					EmptyStopStreak:   new(0),
+					Candidate:         &sessionstore.CandidateChange{Expected: candidate.MessageIDs[0], NextRef: -1},
+					ConfirmedAnswerID: new(candidate.MessageIDs[0]),
 				},
 			},
 		},
@@ -94,19 +90,16 @@ func TestHarnessModel_CompletionCheckRestartAndDelivery(t *testing.T) {
 		`SELECT COUNT(*) FROM session_outbox WHERE session_id = ?`, sessionID).Scan(&outbox))
 	assert.Equal(t, 1, outbox, "confirmation publishes exactly one releasing output")
 
-	var releases int
 	var content string
 	require.NoError(t, db.QueryRowContext(ctx,
-		`SELECT releases_input, content FROM session_outbox WHERE session_id = ?`, sessionID).
-		Scan(&releases, &content))
-	assert.Equal(t, 1, releases, "the confirmed output releases the manager input")
+		`SELECT content FROM session_outbox WHERE session_id = ?`, sessionID).
+		Scan(&content))
 	assert.NotContains(t, content, "first answer",
 		"the hidden candidate text must never reach the manager")
 
 	state, err = restarted.LoadCompletionCheckState(ctx, sessionID)
 	require.NoError(t, err)
 	assert.Nil(t, state.CandidateID, "confirmation clears the pending check")
-	assert.False(t, state.ManagerReplyPending, "a releasing output clears the reply obligation")
 
 	// Replaying the confirmed commit with the same candidate id is a stale
 	// transition, not a second publication.
@@ -120,7 +113,7 @@ func TestHarnessModel_CompletionCheckRestartAndDelivery(t *testing.T) {
 			Unfired: sessionstore.Parts{
 				Outputs: []sessionstore.Output{
 					{
-						Type:          sessionstore.OutputMessagePersistent,
+						Type:          sessionstore.OutputMessage,
 						Content:       "replayed confirmation",
 						MessageRef:    0,
 						Phase:         "final",
@@ -128,11 +121,10 @@ func TestHarnessModel_CompletionCheckRestartAndDelivery(t *testing.T) {
 					},
 				},
 				State: sessionstore.StatePatch{
-					Iteration:           new(3),
-					EmptyStopStreak:     new(0),
-					ManagerReplyPending: new(false),
-					Candidate:           &sessionstore.CandidateChange{Expected: candidate.MessageIDs[0], NextRef: -1},
-					ConfirmedAnswerID:   new(candidate.MessageIDs[0]),
+					Iteration:         new(3),
+					EmptyStopStreak:   new(0),
+					Candidate:         &sessionstore.CandidateChange{Expected: candidate.MessageIDs[0], NextRef: -1},
+					ConfirmedAnswerID: new(candidate.MessageIDs[0]),
 				},
 			},
 		},
@@ -207,9 +199,8 @@ func TestHarnessModel_CompletionEmptyStopEscalation(t *testing.T) {
 				Unfired: sessionstore.Parts{
 					Messages: []*transcript.Message{{Role: "user", Content: "continue"}},
 					State: sessionstore.StatePatch{
-						Iteration:           new(attempt),
-						EmptyStopStreak:     new(attempt),
-						ManagerReplyPending: new(false),
+						Iteration:       new(attempt),
+						EmptyStopStreak: new(attempt),
 					},
 				},
 			},
@@ -243,7 +234,7 @@ func TestHarnessModel_CompletionEmptyStopEscalation(t *testing.T) {
 			Unfired: sessionstore.Parts{
 				Outputs: []sessionstore.Output{
 					{
-						Type:          sessionstore.OutputMessagePersistent,
+						Type:          sessionstore.OutputMessage,
 						Content:       sessionstore.EmptyStopTerminalNotice(sessionstore.EmptyStopTerminalStreak),
 						MessageRef:    0,
 						Phase:         "final",
@@ -251,9 +242,8 @@ func TestHarnessModel_CompletionEmptyStopEscalation(t *testing.T) {
 					},
 				},
 				State: sessionstore.StatePatch{
-					Iteration:           new(6),
-					EmptyStopStreak:     new(sessionstore.EmptyStopTerminalStreak),
-					ManagerReplyPending: new(false),
+					Iteration:       new(6),
+					EmptyStopStreak: new(sessionstore.EmptyStopTerminalStreak),
 				},
 			},
 		},
@@ -266,36 +256,23 @@ func TestHarnessModel_CompletionEmptyStopEscalation(t *testing.T) {
 	assert.Equal(t, 1, outbox, "the sixth empty stop commits one terminal notice")
 
 	var sourceKey string
-	var fingerprint string
 	require.NoError(t, db.QueryRowContext(ctx,
-		`SELECT COALESCE(source_key, ''), COALESCE(fingerprint, '') FROM session_outbox WHERE session_id = ?`,
-		sessionID).Scan(&sourceKey, &fingerprint))
+		`SELECT COALESCE(source_key, '') FROM session_outbox WHERE session_id = ?`,
+		sessionID).Scan(&sourceKey))
 	assert.Equal(t, fmt.Sprintf("message:%d:final", terminal.MessageIDs[0]), sourceKey,
 		"the terminal notice is keyed to its attempt for idempotent replay")
 
-	// The no-duplicate guarantee lives in the outbox identity: redelivering
-	// the same source key with the same fingerprint is a no-op returning the
-	// existing row, never a second notice.
 	replay, err := store.EnqueueOutput(ctx, sessionstore.OutputDraft{
-		SessionID: sessionID, Type: sessionstore.OutputMessagePersistent,
+		SessionID: sessionID, Type: sessionstore.OutputMessage,
 		Content:   sessionstore.EmptyStopTerminalNotice(sessionstore.EmptyStopTerminalStreak),
-		SourceKey: sourceKey, Fingerprint: fingerprint, ReleasesInput: true,
+		SourceKey: sourceKey, ReleasesInput: true,
 	})
 	require.NoError(t, err)
-	assert.True(t, replay.Existing, "same-key same-fingerprint redelivery must reuse the row")
+	assert.True(t, replay.Existing, "same-key redelivery must reuse the row")
 
 	require.NoError(t, db.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM session_outbox WHERE session_id = ?`, sessionID).Scan(&outbox))
 	assert.Equal(t, 1, outbox, "the terminal notice commits exactly once")
-
-	// Reusing the key with different content fails closed instead of
-	// replacing the committed notice.
-	_, err = store.EnqueueOutput(ctx, sessionstore.OutputDraft{
-		SessionID: sessionID, Type: sessionstore.OutputMessagePersistent,
-		Content:   "different notice",
-		SourceKey: sourceKey, Fingerprint: "different-fingerprint", ReleasesInput: true,
-	})
-	require.ErrorIs(t, err, sessionstore.ErrOutputConflict)
 }
 
 // The wake-source projection reads the producer ledger first: a completed but
@@ -388,7 +365,7 @@ func TestHarnessModel_CompletionDeliveryThenPromotionInvalidates(t *testing.T) {
 	_, err = acceptInput(ctx, store, input.ID, input.RawContent)
 	require.NoError(t, err)
 
-	candidate, _, streak := readCompletionState(t, db, parent.ID)
+	candidate, streak := readCompletionState(t, db, parent.ID)
 	assert.False(t, candidate.Valid, "promotion clears the stale candidate")
 	assert.Zero(t, streak, "promotion resets the empty streak")
 }

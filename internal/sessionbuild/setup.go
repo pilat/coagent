@@ -70,7 +70,7 @@ func loadProjectInstructions(ctx context.Context, p BuildInput, workDir string) 
 // Unknown model overrides fall back to inheritance rather than failing later at spawn.
 func subagentConfigs(
 	ctx context.Context,
-	ldr loader.Service,
+	ldr *loader.Service,
 	models []config.ModelEntry,
 ) []registry.AgentTypeConfig {
 	subs := ldr.ListSubagents()
@@ -78,7 +78,7 @@ func subagentConfigs(
 
 	for _, sa := range subs {
 		if sa.Name == tool.BrowserAgentType {
-			logger.Ctx(ctx).Named("session.setup").Warn("subagent_browser_reserved", zap.String("path", sa.Path))
+			logger.Ctx(ctx).Named("session.setup").Warn("subagent_"+sa.Name+"_reserved", zap.String("path", sa.Path))
 			continue
 		}
 

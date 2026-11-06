@@ -1,10 +1,8 @@
 package telegram
 
 import (
-	"context"
 	"errors"
 	"net/http"
-	"strings"
 	"testing"
 	"time"
 
@@ -17,29 +15,12 @@ import (
 
 func newCmdTestManager(t *testing.T, ctrl *fakeController, messages *[]string) *Manager {
 	t.Helper()
-
-	enabled := true
-
-	return &Manager{
-		id: "telegram-main",
-		cfg: config.ManagerEntry{
-			ID:               "telegram-main",
-			Enabled:          &enabled,
-			BotToken:         "token",
-			TargetChatID:     new(int64(-100123)),
-			AllowedUserIDs:   []int64{42},
-			SendChunkDelayMS: 0,
-			PollTimeoutSec:   30,
-		},
-		controller:     ctrl,
-		httpClient:     &http.Client{Transport: telegramMessageRecorder(t, messages)},
-		navPaths:       map[int64]string{},
-		pathToNav:      map[string]int64{},
-		sessionToTopic: map[int64]int64{},
-		topicToSession: map[int64]int64{},
-		workDirs:       map[int64]string{},
-		serviceTopicID: 6344,
-	}
+	m, err := New(config.ManagerEntry{
+		ID: "telegram-main", BotToken: "test-token", AllowedUserIDs: []int64{harnessChatID},
+	}, nil, ctrl)
+	require.NoError(t, err)
+	m.httpClient = &http.Client{Transport: telegramMessageRecorder(t, messages)}
+	return m
 }
 
 func TestParseNewCommand(t *testing.T) {
@@ -93,163 +74,88 @@ func TestRelativeAge_NilIsNew(t *testing.T) {
 	assert.Equal(t, "10m", relativeAge(&recent))
 }
 
-func TestBuildNewPickerKeyboard(t *testing.T) {
-	old := time.Now().Add(-2 * time.Hour)
-	projects := []controllerapi.RecentProjectInfo{
-		{ID: 5, Name: "посты", LastActivity: nil},
-		{ID: 3, Name: "blog", LastActivity: &old},
-	}
-
-	kb := buildNewPickerKeyboard(projects, 10, true)
-
-	require.Len(t, kb, 3) // two project rows + one pagination row
-
-	assert.Equal(t, "newpick:5", kb[0][0].CallbackData)
-	assert.Equal(t, "посты · new", kb[0][0].Text)
-	assert.Equal(t, "newpick:3", kb[1][0].CallbackData)
-	assert.True(t, strings.HasPrefix(kb[1][0].Text, "blog · "), "button shows name and age")
-
-	// offset 10 with hasMore → both back and more.
-	pag := kb[2]
-	require.Len(t, pag, 2)
-	assert.Equal(t, "newpage:0", pag[0].CallbackData)
-	assert.Equal(t, "newpage:20", pag[1].CallbackData)
-}
-
-func TestBuildNewPickerKeyboard_FirstPageNoBack(t *testing.T) {
-	projects := []controllerapi.RecentProjectInfo{{ID: 1, Name: "a"}}
-	kb := buildNewPickerKeyboard(projects, 0, false)
-	require.Len(t, kb, 1) // one project row, no pagination
-}
-
 func TestHandleNew_CreatesAndLaunches(t *testing.T) {
 	var messages []string
 	ctrl := &fakeController{}
 	m := newCmdTestManager(t, ctrl, &messages)
-
-	m.handleServiceTopicMessage(context.Background(), "/new посты")
+	m.handleChatText(t.Context(), "/new посты")
 
 	require.Len(t, ctrl.createProjectCalls, 1)
 	assert.Equal(t, "посты", ctrl.createProjectCalls[0].Name)
 	require.Len(t, ctrl.createSessionCalls, 1)
 	assert.Equal(t, "/root/посты", ctrl.createSessionCalls[0].WorkDir)
 	assert.Equal(t, "telegram", ctrl.createSessionCalls[0].Attributes["channel"])
+	assert.Equal(t, int64(1), ctrl.focus)
+	assert.Empty(t, messages, "the delivery loop owns the switch confirmation")
 }
 
 func TestHandleNew_ErrorReplyNoLaunch(t *testing.T) {
 	var messages []string
-	ctrl := &fakeController{createProjectErr: errors.New(`project name must not start with "."`)}
+	ctrl := &fakeController{createProjectErr: errors.New("project name is invalid")}
 	m := newCmdTestManager(t, ctrl, &messages)
-
-	m.handleServiceTopicMessage(context.Background(), "/new .bad")
-
-	require.Len(t, ctrl.createProjectCalls, 1)
-	assert.Empty(t, ctrl.createSessionCalls, "bad name must not launch a session")
-	require.NotEmpty(t, messages)
-	assert.Contains(t, strings.Join(messages, "\n"), "must not start")
+	m.handleChatText(t.Context(), "/new .bad")
+	assert.Empty(t, ctrl.createSessionCalls)
+	require.Len(t, messages, 1)
+	assert.Contains(t, messages[0], "project name is invalid")
 }
 
-func TestNewInSessionTopicRedirects(t *testing.T) {
+func TestHandleNew_ListsProjectsWithAge(t *testing.T) {
 	var messages []string
-	ctrl := &fakeController{}
+	old := time.Now().Add(-2 * time.Hour)
+	ctrl := &fakeController{recentProjects: []controllerapi.RecentProjectInfo{
+		{ID: 5, Name: "посты"}, {ID: 3, Name: "blog", LastActivity: &old},
+	}}
 	m := newCmdTestManager(t, ctrl, &messages)
+	m.handleChatText(t.Context(), "/new")
+	require.Len(t, messages, 1)
+	assert.Contains(t, messages[0], "1. посты · new")
+	assert.Contains(t, messages[0], "2. blog · 2h")
+	assert.Empty(t, ctrl.createSessionCalls)
 
-	m.handleSessionTopicMessage(context.Background(), 42, 99, "/new посты")
-
-	assert.Empty(t, ctrl.createProjectCalls)
-	assert.Empty(t, ctrl.messageCalls, "/new must not be sent to the LLM")
-	require.NotEmpty(t, messages)
-	assert.Contains(t, strings.Join(messages, "\n"), "service topic")
+	ctrl.recentProjects = nil
+	m.handleChatText(t.Context(), "/new")
+	assert.Contains(t, messages[1], "No projects yet")
+	ctrl.recentProjectsErr = errors.New("unavailable")
+	m.handleChatText(t.Context(), "/new")
+	assert.Contains(t, messages[2], "Failed to list projects")
 }
 
-func TestHandleNewPicker_Empty(t *testing.T) {
-	var messages []string
-	ctrl := &fakeController{recentProjects: nil}
-	m := newCmdTestManager(t, ctrl, &messages)
-
-	m.handleNewPicker(context.Background(), 0, 0)
-
-	require.NotEmpty(t, messages)
-	assert.Contains(t, strings.Join(messages, "\n"), "No projects yet")
-}
-
-func TestHandleNewPicker_ListError(t *testing.T) {
-	var messages []string
-	ctrl := &fakeController{recentProjectsErr: errors.New("boom")}
-	m := newCmdTestManager(t, ctrl, &messages)
-
-	m.handleNewPicker(context.Background(), 0, 0)
-
-	require.NotEmpty(t, messages)
-	assert.Contains(t, strings.Join(messages, "\n"), "Failed to list projects")
-}
-
-func TestHandleCallbackNewPage_RepaginatesPicker(t *testing.T) {
-	var messages []string
-	projects := make([]controllerapi.RecentProjectInfo, 15)
-	for i := range projects {
-		projects[i] = controllerapi.RecentProjectInfo{ID: int64(i + 1), Name: "p"}
-	}
-
-	ctrl := &fakeController{recentProjects: projects}
-	m := newCmdTestManager(t, ctrl, &messages)
-
-	m.handleCallback(context.Background(), &telegramCallbackData{
-		ID:   "cb-page",
-		From: &telegramUser{ID: 42},
-		Data: "newpage:10",
-		Message: &telegramCallbackMeta{
-			Chat:            telegramChat{ID: -100123},
-			MessageID:       5, // >0 → edits the picker in place
-			MessageThreadID: 6344,
-		},
-	})
-
-	require.NotEmpty(t, messages)
-	assert.Contains(t, strings.Join(messages, "\n"), "Projects")
-}
-
-func TestHandleCallbackNewPick_VanishedProject(t *testing.T) {
-	var messages []string
-	ctrl := &fakeController{recentProjects: []controllerapi.RecentProjectInfo{{ID: 1, Name: "a"}}}
-	m := newCmdTestManager(t, ctrl, &messages)
-
-	m.handleCallback(context.Background(), &telegramCallbackData{
-		ID:   "cb-gone",
-		From: &telegramUser{ID: 42},
-		Data: "newpick:999", // id absent from the (re-listed) projects
-		Message: &telegramCallbackMeta{
-			Chat:            telegramChat{ID: -100123},
-			MessageID:       1,
-			MessageThreadID: 6344,
-		},
-	})
-
-	assert.Empty(t, ctrl.createProjectCalls)
-	assert.Contains(t, strings.Join(messages, "\n"), "no longer available")
-}
-
-func TestHandleCallbackNewPick_RoutesThroughCreateProject(t *testing.T) {
+func TestSpawn_PathCreatesAndBareListsFavorites(t *testing.T) {
 	var messages []string
 	ctrl := &fakeController{
-		recentProjects: []controllerapi.RecentProjectInfo{
-			{ID: 7, Name: "посты", Path: "/root/посты"},
-		},
+		spawnFavorites: []string{"/repo/one", "/repo/two"},
 	}
 	m := newCmdTestManager(t, ctrl, &messages)
-
-	m.handleCallback(context.Background(), &telegramCallbackData{
-		ID:   "cb-1",
-		From: &telegramUser{ID: 42},
-		Data: "newpick:7",
-		Message: &telegramCallbackMeta{
-			Chat:            telegramChat{ID: -100123},
-			MessageID:       1,
-			MessageThreadID: 6344,
-		},
-	})
-
-	require.Len(t, ctrl.createProjectCalls, 1)
-	assert.Equal(t, "посты", ctrl.createProjectCalls[0].Name)
+	m.handleChatText(t.Context(), "/spawn")
+	require.Len(t, messages, 1)
+	assert.Equal(t, "Usage: /spawn &lt;path&gt;.\nFavorites:\n/repo/one\n/repo/two", messages[0])
+	m.handleChatText(t.Context(), "/spawn /some path/repo")
 	require.Len(t, ctrl.createSessionCalls, 1)
+	assert.Equal(t, "/some path/repo", ctrl.createSessionCalls[0].WorkDir)
+	assert.Equal(t, int64(1), ctrl.focus)
+	assert.Len(t, messages, 1)
+}
+
+func TestSpawn_BareWithoutFavorites(t *testing.T) {
+	t.Parallel()
+
+	var messages []string
+	ctrl := &fakeController{spawnFavorites: []string{}}
+	m := newCmdTestManager(t, ctrl, &messages)
+	m.handleChatText(t.Context(), "/spawn")
+
+	assert.Equal(t, []string{"Usage: /spawn &lt;path&gt;."}, messages)
+	assert.Empty(t, ctrl.createSessionCalls)
+}
+
+func TestSpawn_FavoritesError(t *testing.T) {
+	t.Parallel()
+
+	var messages []string
+	ctrl := &fakeController{spawnFavoritesErr: errors.New("unavailable")}
+	m := newCmdTestManager(t, ctrl, &messages)
+	m.handleChatText(t.Context(), "/spawn")
+
+	assert.Equal(t, []string{"Failed to list favorites: unavailable"}, messages)
+	assert.Empty(t, ctrl.createSessionCalls)
 }

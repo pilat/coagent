@@ -30,13 +30,14 @@ const (
 const wholeDocumentRule = "config_edit is not a patch or merge: the document replaces the ENTIRE configuration " +
 	"in " + configDisplayPath + ", and every section or entry missing from it is DELETED " +
 	"(providers, models, managers, marketplaces, sandbox, tools and everything else). " +
-	"First read the current file with the read tool, change only what the user asked for, and send back " +
+	"First read the current file with config_read, change only what the user asked for, and send back " +
 	"the complete document with every untouched section copied verbatim. Never send a fragment or only the changed keys. " +
 	"If you cannot read the current file, stop and ask the operator for it; never reconstruct it from memory."
 
 const editAuthorityDoc = wholeDocumentRule + " " +
 	"Use only when the user explicitly requests a configuration change. A /config prefix alone is not a change request. " +
 	"Answer configuration questions without calling this tool. " +
+	"Never ask for a credential in chat; a pasted secret lands in history and must be rotated. " +
 	"Credentials may be literal values or ${VAR} references to entries in " + secretsDisplayPath + ", " +
 	"which the operator maintains by hand outside this protocol. " +
 	"An invalid candidate is refused immediately with nothing written. " +
@@ -60,7 +61,7 @@ var (
 )
 
 type configEditTool struct {
-	service   *svc
+	service   *Service
 	sessionID int64
 }
 
@@ -68,9 +69,8 @@ type configEditParams struct {
 	Document string `json:"document"`
 }
 
-func NewConfigEdit(sessionID int64, service Service) tool.Tool {
-	concrete, _ := service.(*svc)
-	return &configEditTool{sessionID: sessionID, service: concrete}
+func NewConfigEdit(sessionID int64, service *Service) tool.Tool {
+	return &configEditTool{sessionID: sessionID, service: service}
 }
 
 func (t *configEditTool) ID() string { return tool.IDConfigEdit }

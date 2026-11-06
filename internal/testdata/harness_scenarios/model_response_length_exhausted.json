@@ -6,7 +6,8 @@
       "name": "<name>",
       "work_dir": "<workdir>",
       "attributes": {
-        "manager_id": "telegram:main"
+        "manager_id": "telegram:main",
+        "title": "repeat the limit"
       }
     },
     {
@@ -19,32 +20,26 @@
     },
     {
       "type": "state_changed",
-      "status": "idle",
-      "reason": "error"
+      "status": "idle"
     }
   ],
-  "claims": [
+  "outputs": [
     {
+      "id": 1,
+      "session_id": 1,
       "type": "session_opened",
       "content": "",
-      "attributes": {
-        "manager_id": "telegram:main",
-        "name": "002",
-        "work_dir": "<workdir>"
-      },
-      "source_key": "session:1:opened",
-      "releases_input": false
+      "source_key": "session:1:opened"
     },
     {
-      "type": "message_persistent",
+      "id": 2,
+      "session_id": 1,
+      "type": "message",
       "content": "❌ LLM error: Model response reached the output limit twice.",
-      "attributes": {
-        "manager_id": "telegram:main",
-        "model_input_generation": 1
-      },
-      "source_key": "integrity:2:error",
-      "model_input_generation": 1,
-      "releases_input": true
+      "source_key": "integrity:2:error"
     }
-  ]
+  ],
+  "owners": {
+    "1": "telegram:main"
+  }
 }

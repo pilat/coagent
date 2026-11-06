@@ -6,7 +6,8 @@
       "name": "<name>",
       "work_dir": "<workdir>",
       "attributes": {
-        "manager_id": "telegram:main"
+        "manager_id": "telegram:main",
+        "title": "explicit resume after stop"
       }
     },
     {
@@ -22,17 +23,16 @@
       "status": "idle"
     }
   ],
-  "claims": [
+  "outputs": [
     {
-      "type": "message_persistent",
-      "content": "stopped root resumed after restart\n\n🤖 `fake-model` · iteration 2",
-      "attributes": {
-        "manager_id": "telegram:main",
-        "model_input_generation": 2
-      },
-      "source_key": "message:5:final",
-      "model_input_generation": 2,
-      "releases_input": true
+      "id": 1,
+      "session_id": 1,
+      "type": "message",
+      "content": "stopped root resumed after restart",
+      "source_key": "message:5:final"
     }
-  ]
+  ],
+  "owners": {
+    "1": "telegram:main"
+  }
 }

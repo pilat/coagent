@@ -44,10 +44,10 @@ type tailParams struct {
 
 type tailTool struct {
 	workDir string
-	access  safefile.Access
+	access  *safefile.Access
 }
 
-func newTailTool(workDir string, access safefile.Access) *tailTool {
+func newTailTool(workDir string, access *safefile.Access) *tailTool {
 	return &tailTool{workDir: workDir, access: access}
 }
 

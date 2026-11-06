@@ -11,7 +11,6 @@ import (
 
 	"github.com/pilat/coagent/internal/coagenthome"
 	"github.com/pilat/coagent/internal/config"
-	"github.com/pilat/coagent/internal/controllerapi"
 )
 
 const (
@@ -55,9 +54,16 @@ func WorktreePath(root, repoRoot, name string) string {
 
 // RepoNamespace returns the stable display and filesystem namespace for a repository.
 func RepoNamespace(repoRoot string) string {
-	base, hash := repoIdentity(repoRoot)
+	clean := repoRoot
+	if abs, err := filepath.Abs(repoRoot); err == nil {
+		clean = abs
+	}
 
-	return base + "-" + hash
+	// Git reports canonical paths; aliases must share the same namespace.
+	clean = canonicalPath(clean)
+	sum := sha256.Sum256([]byte(clean))
+
+	return filepath.Base(clean) + "-" + hex.EncodeToString(sum[:])[:repoHashLen]
 }
 
 // RepoDisplayName fits "<basename>-<hash>" into limit runes, keeping the hash
@@ -67,7 +73,8 @@ func RepoDisplayName(repoRoot string, limit int) string {
 		return ""
 	}
 
-	base, hash := repoIdentity(repoRoot)
+	namespace := RepoNamespace(repoRoot)
+	base, hash := namespace[:len(namespace)-repoHashLen-1], namespace[len(namespace)-repoHashLen:]
 
 	base = truncateRunes(base, limit-repoHashLen-1)
 	if base == "" {
@@ -75,20 +82,6 @@ func RepoDisplayName(repoRoot string, limit int) string {
 	}
 
 	return base + "-" + hash
-}
-
-func repoIdentity(repoRoot string) (string, string) {
-	clean := repoRoot
-	if abs, err := filepath.Abs(repoRoot); err == nil {
-		clean = abs
-	}
-
-	// git canonicalizes every path it reports; hashing a raw spelling would
-	// fork the namespace per symlink alias of one repository.
-	clean = canonicalPath(clean)
-	sum := sha256.Sum256([]byte(clean))
-
-	return filepath.Base(clean), hex.EncodeToString(sum[:])[:repoHashLen]
 }
 
 func truncateRunes(s string, limit int) string {
@@ -188,10 +181,6 @@ func SanitizeName(raw string) (string, error) {
 
 	if strings.ContainsAny(name, "/\\:\x00") {
 		return "", errors.New(`project name must not contain "/", "\", ":", or a NUL byte`)
-	}
-
-	if name == controllerapi.CoagentManagementProjectDir {
-		return "", errors.New("project name is reserved")
 	}
 
 	if strings.HasPrefix(name, ".") {

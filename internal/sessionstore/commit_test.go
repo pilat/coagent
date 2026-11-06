@@ -15,7 +15,7 @@ import (
 )
 
 func TestCommit_Parts(t *testing.T) {
-	for _, name := range []string{"accept and receipt", "resolutions", "linked acceptance", "messages and retry", "tool result replay", "replace", "activation", "state", "candidate CAS", "outputs and replay", "unfired", "budget suppression", "budget hidden candidate", "budget rejected attempt", "rollback", "lifecycle fence", "ownerless output", "keyless outputs", "host keyless outputs", "reset context", "final footer", "activation provenance", "activation expiry", "call pending"} {
+	for _, name := range []string{"accept and receipt", "resolutions", "linked acceptance", "messages and retry", "tool result replay", "replace", "activation", "state", "candidate CAS", "outputs and replay", "unfired", "budget suppression", "budget hidden candidate", "budget rejected attempt", "rollback", "lifecycle fence", "ownerless output", "keyless outputs", "host keyless outputs", "reset context", "final content", "activation provenance", "activation expiry", "call pending"} {
 		t.Run(name, func(t *testing.T) {
 			ctx := t.Context()
 			store, db, projectID := newTestStore(t)
@@ -49,9 +49,21 @@ func TestCommit_Parts(t *testing.T) {
 				require.Len(t, first.Outputs, 1)
 				assertInputState(t, db, input.Input.ID, InputStateAccepted)
 				replay, replayErr := store.Commit(ctx, step)
-				require.NoError(t, replayErr)
-				assert.Equal(t, first.MessageIDs, replay.MessageIDs)
-				assert.Empty(t, replay.Outputs)
+				require.ErrorIs(t, replayErr, ErrInputResolved)
+				assert.Nil(t, replay)
+				var messages, outputs int
+				require.NoError(
+					t,
+					db.QueryRowContext(ctx, `SELECT COUNT(*) FROM messages WHERE session_id = ?`, root.ID).
+						Scan(&messages),
+				)
+				require.NoError(
+					t,
+					db.QueryRowContext(ctx, `SELECT COUNT(*) FROM session_outbox WHERE session_id = ?`, root.ID).
+						Scan(&outputs),
+				)
+				assert.Equal(t, 1, messages)
+				assert.Equal(t, 1, outputs)
 				record, readErr := store.GetSession(ctx, root.ID)
 				require.NoError(t, readErr)
 				assert.Equal(t, int64(1), record.ModelInputGeneration)
@@ -188,12 +200,11 @@ func TestCommit_Parts(t *testing.T) {
 				return
 			case "state":
 				step.State = StatePatch{
-					Iteration:           new(3),
-					Status:              new(SessionStatusCompleted),
-					TodoItems:           new(json.RawMessage(`[{"content":"work","status":"pending"}]`)),
-					ContextBaseline:     &ContextBaseline{Model: "model", PromptTokens: 200, MessageCount: 2},
-					EmptyStopStreak:     new(2),
-					ManagerReplyPending: new(true),
+					Iteration:       new(3),
+					Status:          new(SessionStatusCompleted),
+					TodoItems:       new(json.RawMessage(`[{"content":"work","status":"pending"}]`)),
+					ContextBaseline: &ContextBaseline{Model: "model", PromptTokens: 200, MessageCount: 2},
+					EmptyStopStreak: new(2),
 				}
 			case "candidate CAS":
 				step.Messages = []*transcript.Message{{Role: "assistant", Content: "candidate", FinishType: "stop"}}
@@ -211,7 +222,7 @@ func TestCommit_Parts(t *testing.T) {
 				return
 			case "outputs and replay":
 				step.Outputs = []Output{
-					{Type: OutputMessagePersistent, Content: "answer", Key: "answer", ReleasesInput: true},
+					{Type: OutputMessage, Content: "answer", Key: "answer", ReleasesInput: true},
 				}
 				first, commitErr := store.Commit(ctx, step)
 				require.NoError(t, commitErr)
@@ -219,9 +230,6 @@ func TestCommit_Parts(t *testing.T) {
 				require.NoError(t, replayErr)
 				assert.Equal(t, first.Outputs[0].OutputID, replay.Outputs[0].OutputID)
 				assert.True(t, replay.Outputs[0].Existing)
-				step.Outputs[0].Content = "conflict"
-				_, commitErr = store.Commit(ctx, step)
-				require.ErrorIs(t, commitErr, ErrOutputConflict)
 				return
 			case "keyless outputs", "host keyless outputs":
 				for range 2 {
@@ -230,13 +238,13 @@ func TestCommit_Parts(t *testing.T) {
 							ctx,
 							Commit{
 								SessionID: root.ID,
-								Outputs:   []Output{{Type: OutputMessagePersistent, Content: "repeatable"}},
+								Outputs:   []Output{{Type: OutputMessage, Content: "repeatable"}},
 							},
 						)
 					} else {
 						_, err = store.EnqueueOutput(
 							ctx,
-							OutputDraft{SessionID: root.ID, Type: OutputMessagePersistent, Content: "repeatable"},
+							OutputDraft{SessionID: root.ID, Type: OutputMessage, Content: "repeatable"},
 						)
 					}
 					require.NoError(t, err)
@@ -244,7 +252,7 @@ func TestCommit_Parts(t *testing.T) {
 				var rows int
 				require.NoError(
 					t,
-					db.QueryRowContext(ctx, `SELECT COUNT(*) FROM session_outbox WHERE session_id=? AND source_key IS NULL AND fingerprint IS NULL`, root.ID).
+					db.QueryRowContext(ctx, `SELECT COUNT(*) FROM session_outbox WHERE session_id=? AND source_key IS NULL`, root.ID).
 						Scan(&rows),
 				)
 				assert.Equal(t, 2, rows)
@@ -264,7 +272,7 @@ func TestCommit_Parts(t *testing.T) {
 				require.NoError(t, writeErr)
 				step.State.ResetContext = true
 				step.Messages = []*transcript.Message{{Role: "user", Content: "fresh opening"}}
-			case "final footer":
+			case "final content":
 				step.Messages = []*transcript.Message{
 					{
 						Role:    "assistant",
@@ -276,11 +284,10 @@ func TestCommit_Parts(t *testing.T) {
 				step.State.Iteration = new(3)
 				step.Outputs = []Output{
 					{
-						Type:          OutputMessagePersistent,
+						Type:          OutputMessage,
 						Content:       "answer",
 						MessageRef:    0,
 						Phase:         "final",
-						FinalFooter:   &Footer{BackgroundYield: true},
 						ReleasesInput: true,
 					},
 				}
@@ -365,7 +372,7 @@ func TestCommit_Parts(t *testing.T) {
 				step.Unfired = Parts{
 					Messages: []*transcript.Message{{Role: "user", Content: "continue"}},
 					State:    StatePatch{Iteration: new(8)},
-					Outputs:  []Output{{Type: OutputMessagePersistent, Content: "normal output"}},
+					Outputs:  []Output{{Type: OutputMessage, Content: "normal output"}},
 				}
 				step.State.EmptyStopStreak = new(3)
 				if name == "budget hidden candidate" {
@@ -392,7 +399,7 @@ func TestCommit_Parts(t *testing.T) {
 				step.Messages = []*transcript.Message{{Role: "assistant", Content: "must roll back"}}
 				step.State.Iteration = new(7)
 				step.Outputs = []Output{
-					{Type: OutputMessagePersistent, Content: "invalid ref", MessageRef: 99, Phase: "final"},
+					{Type: OutputMessage, Content: "invalid ref", MessageRef: 99, Phase: "final"},
 				}
 			case "lifecycle fence":
 				require.NoError(t, store.UpdateSessionStatus(ctx, root.ID, SessionStatusStopping))
@@ -401,7 +408,7 @@ func TestCommit_Parts(t *testing.T) {
 				require.ErrorIs(t, commitErr, ErrSessionStopping)
 				step.Mode = CommitLifecycle
 			case "ownerless output":
-				step.Outputs = []Output{{Type: OutputMessagePersistent, Content: "no manager"}}
+				step.Outputs = []Output{{Type: OutputMessage, Content: "no manager"}}
 			}
 			result, commitErr := store.Commit(ctx, step)
 			if name == "rollback" {
@@ -467,10 +474,9 @@ func TestCommit_Parts(t *testing.T) {
 				check, checkErr := store.LoadCompletionCheckState(ctx, root.ID)
 				require.NoError(t, checkErr)
 				assert.Zero(t, check.EmptyStopStreak)
-			case "final footer":
+			case "final content":
 				require.Len(t, result.Outputs, 1)
-				assert.Contains(t, result.Outputs[0].Content, "🟣 Background\n\nanswer")
-				assert.Contains(t, result.Outputs[0].Content, "💰 $0.25 total")
+				assert.Equal(t, "answer", result.Outputs[0].Content)
 			case "budget suppression", "unfired", "budget hidden candidate", "budget rejected attempt":
 				assert.Equal(t, name != "unfired", result.BudgetFired)
 				record, getErr := store.GetSession(ctx, root.ID)
@@ -580,7 +586,7 @@ func TestEnqueue_SourcesDedupAndWaking(t *testing.T) {
 			})
 		}
 	}
-	for _, name := range []string{"transaction commit", "transaction rollback", "unregistered transaction", "legacy schedule claim", "stopped schedule", "call result attributes", "invalid source", "stop preserves producers", "call result recovery"} {
+	for _, name := range []string{"transaction commit", "transaction rollback", "unregistered transaction", "stopped schedule", "call result attributes", "invalid source", "stop preserves producers", "call result recovery"} {
 		t.Run(name, func(t *testing.T) {
 			store, db, projectID := newTestStore(t)
 			root, err := store.CreateSession(t.Context(), projectID, "model", "", nil)
@@ -670,14 +676,6 @@ func TestEnqueue_SourcesDedupAndWaking(t *testing.T) {
 				_, err = EnqueueTx(t.Context(), tx, input)
 				require.ErrorContains(t, err, "requires WithTx")
 				return
-			case "legacy schedule claim":
-				_, err = db.ExecContext(
-					t.Context(),
-					`INSERT INTO session_deliveries(session_id,delivery_id,kind,fingerprint,delivered_at) VALUES(?,'tick','tool_notification','legacy',?)`,
-					root.ID,
-					time.Now().UTC(),
-				)
-				require.NoError(t, err)
 			case "stopped schedule":
 				require.NoError(t, store.UpdateSessionStatus(t.Context(), root.ID, SessionStatusStopped))
 			case "call result attributes":
@@ -692,7 +690,7 @@ func TestEnqueue_SourcesDedupAndWaking(t *testing.T) {
 				return
 			}
 			require.NoError(t, enqueueErr)
-			assert.Equal(t, name != "legacy schedule claim", result.Applied)
+			assert.True(t, result.Applied)
 			if name == "stopped schedule" {
 				record, getErr := store.GetSession(t.Context(), root.ID)
 				require.NoError(t, getErr)

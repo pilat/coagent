@@ -144,9 +144,9 @@ func TestManager_Kill_RemovesSchedules(t *testing.T) {
 		return hasStateEvent(events, id, controllerapi.StateIdle)
 	})
 	oneShot := time.Now().Add(time.Hour).UTC()
-	_, err = schedStore.AddSchedule(ctx, id, "", &oneShot, "one-shot", false)
+	_, err = schedStore.AddSchedule(ctx, id, "", &oneShot, "one-shot", false, schedule.ScheduleMetadata{})
 	require.NoError(t, err)
-	_, err = schedStore.AddSchedule(ctx, id, "0 9 * * *", nil, "cron", false)
+	_, err = schedStore.AddSchedule(ctx, id, "0 9 * * *", nil, "cron", false, schedule.ScheduleMetadata{})
 	require.NoError(t, err)
 	factory.nextSess = &mockSession{completeAfter: 50 * time.Millisecond}
 	otherID, err := mgr.Send(ctx, pid, "other", "", nil)
@@ -155,7 +155,7 @@ func TestManager_Kill_RemovesSchedules(t *testing.T) {
 		return hasStateEvent(events, otherID, controllerapi.StateIdle)
 	})
 	otherOneShot := time.Now().Add(time.Hour).UTC()
-	_, err = schedStore.AddSchedule(ctx, otherID, "", &otherOneShot, "untouched", false)
+	_, err = schedStore.AddSchedule(ctx, otherID, "", &otherOneShot, "untouched", false, schedule.ScheduleMetadata{})
 	require.NoError(t, err)
 	factory.nextSess = &mockSession{completeAfter: 50 * time.Millisecond}
 	require.NoError(t, mgr.sendToSession(context.Background(), id, "/kill"))
@@ -182,9 +182,17 @@ func TestManager_StopCancelsPendingSleepButPreservesScheduledWork(t *testing.T) 
 		return hasStateEvent(events, sessionID, controllerapi.StateIdle)
 	})
 	oneShot := time.Now().Add(time.Hour).UTC()
-	_, err = schedStore.AddSchedule(ctx, sessionID, "", &oneShot, "scheduled work", false)
+	_, err = schedStore.AddSchedule(ctx, sessionID, "", &oneShot, "scheduled work", false, schedule.ScheduleMetadata{})
 	require.NoError(t, err)
-	_, err = schedStore.AddSchedule(ctx, sessionID, "0 9 * * *", nil, "recurring work", false)
+	_, err = schedStore.AddSchedule(
+		ctx,
+		sessionID,
+		"0 9 * * *",
+		nil,
+		"recurring work",
+		false,
+		schedule.ScheduleMetadata{},
+	)
 	require.NoError(t, err)
 	_, err = schedule.NewService(schedStore, mgr.build.Store.(*sessionstore.Store)).AddSleep(
 		ctx, sessionID, "sleep-call", time.Now().Add(2*time.Hour).UTC(), "wake",
@@ -350,9 +358,8 @@ func TestManager_ClearWhileRunning(t *testing.T) {
 	})
 }
 
-// A transient store failure while loading the session must not classify an
-// owned session as ownerless: the idle publication is skipped, not faked.
-func TestStopOnStoreFailureDoesNotPublishIdle(t *testing.T) {
+// A failed intermediate projection cannot erase the later committed stop result.
+func TestStopOnStoreReadFailureStillPublishesCommittedIdle(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	h := newHarness(t, harnessOptions{respond: trivialRespond})
@@ -371,11 +378,31 @@ func TestStopOnStoreFailureDoesNotPublishIdle(t *testing.T) {
 	require.NoError(t, mgr.sendToSession(ctx, record.ID, "/stop"),
 		"the stop itself must succeed: the cleanup ran on the real store")
 
-	// The unconditional stop announcement is legitimate; the idle publication
-	// must be the one thing a failed ownership lookup suppresses.
 	stopping := requireManagerNotification(t, notifications)
 	require.Equal(t, sessionevent.NotifyMessage, stopping.Notification.Type)
+	idle := requireManagerNotification(t, notifications)
+	assert.Equal(t, record.ID, idle.SessionID)
+	assert.Equal(t, sessionevent.NotifyStateChanged, idle.Notification.Type)
+	assert.Equal(t, controllerapi.StateIdle, idle.Notification.Status)
+	assert.Equal(t, "stopped", idle.Notification.Reason)
+	assert.False(t, failing.pending.Load(), "the store failure must actually occur")
+	assert.Equal(t, sessionstore.SessionStatusStopped, h.session(record.ID).Status)
+	outputs := h.outbox(record.ID)
+	require.Len(t, outputs, 2)
+	assert.Contains(t, outputs[1].SourceKey, ":stop:completed")
 	requireNoManagerNotification(t, notifications)
+}
+
+func TestKillLockedKeepsLoadError(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, harnessOptions{respond: trivialRespond})
+	record, err := h.store.CreateSession(h.ctx, testProject(t, h.store, t.TempDir()), "model", "", nil)
+	require.NoError(t, err)
+	loadErr := errors.New("disk hiccup")
+	failing := &failingGetSessionStore{Store: h.store, err: loadErr}
+	failing.pending.Store(true)
+	h.mgr.store = failing
+	assert.ErrorIs(t, h.mgr.killLocked(h.ctx, record.ID), loadErr)
 }
 
 func TestStopParksWholeTreeAndExplicitFollowUpResumesOnlyChild(t *testing.T) {
@@ -420,7 +447,7 @@ func TestStopParksWholeTreeAndExplicitFollowUpResumesOnlyChild(t *testing.T) {
 	})
 	parentRec := h.session(parent.ID)
 	assert.Equal(t, sessionstore.SessionStatusStopped, parentRec.Status)
-	mgr.Shutdown(3 * time.Second)
+	mgr.Shutdown(t.Context(), 3*time.Second)
 }
 
 func TestStopParksActiveDescendantBelowCompletedChild(t *testing.T) {

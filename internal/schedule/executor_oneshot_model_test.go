@@ -85,13 +85,12 @@ type oneShotDeliveryStore struct {
 	sender *modelSender
 }
 
-func (s oneShotDeliveryStore) CallPending(context.Context, int64, string) (bool, error) {
-	return true, nil
-}
-
-func (s oneShotDeliveryStore) Enqueue(ctx context.Context, in sessionstore.Input) (*sessionstore.Enqueued, error) {
-	_, err := s.sender.DeliverPendingCallResult(ctx, in.SessionID, "", "", in.Content)
-	return &sessionstore.Enqueued{}, err
+func (s oneShotDeliveryStore) DeliverSleep(ctx context.Context, sched *Schedule) (bool, error) {
+	_, err := s.sender.DeliverPendingCallResult(ctx, sched.sessionID, "", "", sched.inputMessage)
+	if err != nil {
+		return false, err
+	}
+	return false, s.RemoveSchedule(ctx, sched.id)
 }
 
 type oneShotHarness struct {
@@ -101,7 +100,7 @@ type oneShotHarness struct {
 	session  int64
 	schedule int64
 	sender   *modelSender
-	exec     *executor
+	exec     *Executor
 	model    oneShotModel
 	now      time.Time
 }
@@ -119,9 +118,7 @@ func newOneShotHarness(t *testing.T) *oneShotHarness {
 	store := NewStore(db, sessionstore.NewStore(db))
 	now := time.Date(2026, time.August, 18, 12, 0, 0, 0, time.UTC)
 	due := now.Add(-time.Second)
-	schedule, err := store.AddScheduleWithMeta(
-		ctx, sessionID, "", &due, "wake", false, ScheduleMetadata{ToolCallID: "sleep-1"},
-	)
+	schedule, err := store.AddSchedule(ctx, sessionID, "", &due, "wake", false, ScheduleMetadata{ToolCallID: "sleep-1"})
 	require.NoError(t, err)
 
 	h := &oneShotHarness{
@@ -152,7 +149,7 @@ func seedOneShotSession(ctx context.Context, t *testing.T, db *sql.DB) int64 {
 }
 
 func (h *oneShotHarness) restart() {
-	h.exec = NewExecutor(oneShotDeliveryStore{Store: h.store, sender: h.sender}, h.sender).(*executor)
+	h.exec = NewExecutor(oneShotDeliveryStore{Store: h.store, sender: h.sender}, h.sender)
 }
 
 func (h *oneShotHarness) step(action oneShotAction) {

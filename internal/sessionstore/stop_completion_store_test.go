@@ -20,7 +20,7 @@ func seededOwnedSession(ctx context.Context, t *testing.T, store *Store, project
 	return session
 }
 
-func TestBeginLifecycleStopStartsReplaceableNonReleasingRow(t *testing.T) {
+func TestBeginLifecycleStopStartsPersistentNonReleasingRow(t *testing.T) {
 	store, db, projectID := newTestStore(t)
 	ctx := context.Background()
 
@@ -33,17 +33,26 @@ func TestBeginLifecycleStopStartsReplaceableNonReleasingRow(t *testing.T) {
 	require.NotZero(t, commit.OutputID)
 
 	var kind, content, sourceKey string
-	var releases bool
-	require.NoError(t, db.QueryRow(`SELECT type, content, COALESCE(source_key, ''), releases_input
-		FROM session_outbox WHERE id = ?`, commit.OutputID).Scan(&kind, &content, &sourceKey, &releases))
-	assert.Equal(t, "message_replaceable", kind)
+	require.NoError(t, db.QueryRow(`SELECT type, content, COALESCE(source_key, '')
+		FROM session_outbox WHERE id = ?`, commit.OutputID).Scan(&kind, &content, &sourceKey))
+	assert.Equal(t, "message", kind)
 	assert.Equal(t, "⏳ Stopping…", content)
 	assert.Equal(t, "input:"+strconv.FormatInt(input.ID, 10)+":stop:started", sourceKey)
-	assert.False(t, releases)
 
 	var status string
 	require.NoError(t, db.QueryRow(`SELECT status FROM sessions WHERE id = ?`, session.ID).Scan(&status))
 	assert.Equal(t, "stopping", status)
+
+	completed, err := store.CompleteExplicitStop(ctx, session.ID, input.ID, 0)
+	require.NoError(t, err)
+	assert.Greater(t, completed.OutputID, commit.OutputID)
+	var rows int
+	require.NoError(t, db.QueryRowContext(ctx, `SELECT COUNT(*) FROM session_outbox
+		WHERE session_id = ? AND type = 'message'`, session.ID).Scan(&rows))
+	assert.Equal(t, 2, rows)
+	require.NoError(t, db.QueryRowContext(ctx, `SELECT content FROM session_outbox
+		WHERE id = ?`, commit.OutputID).Scan(&content))
+	assert.Equal(t, "⏳ Stopping…", content)
 }
 
 func TestBeginLifecycleKillKeepsPersistentReleasingRow(t *testing.T) {
@@ -58,11 +67,9 @@ func TestBeginLifecycleKillKeepsPersistentReleasingRow(t *testing.T) {
 	require.NoError(t, err)
 
 	var kind string
-	var releases bool
-	require.NoError(t, db.QueryRow(`SELECT type, releases_input FROM session_outbox
-		WHERE id = ?`, commit.OutputID).Scan(&kind, &releases))
-	assert.Equal(t, "message_persistent", kind)
-	assert.True(t, releases)
+	require.NoError(t, db.QueryRow(`SELECT type FROM session_outbox
+		WHERE id = ?`, commit.OutputID).Scan(&kind))
+	assert.Equal(t, "message", kind)
 }
 
 func TestCompleteExplicitStopAtomic(t *testing.T) {
@@ -95,13 +102,11 @@ func TestCompleteExplicitStopAtomic(t *testing.T) {
 	assert.Equal(t, "stopped", releasedReason)
 
 	var kind, content, sourceKey string
-	var releases bool
-	require.NoError(t, db.QueryRow(`SELECT type, content, COALESCE(source_key, ''), releases_input
-		FROM session_outbox WHERE id = ?`, commit.OutputID).Scan(&kind, &content, &sourceKey, &releases))
-	assert.Equal(t, "message_persistent", kind)
+	require.NoError(t, db.QueryRow(`SELECT type, content, COALESCE(source_key, '')
+		FROM session_outbox WHERE id = ?`, commit.OutputID).Scan(&kind, &content, &sourceKey))
+	assert.Equal(t, "message", kind)
 	assert.Equal(t, "⏸️ Session stopped\nCancelled background processes: 2", content)
 	assert.Equal(t, "input:"+strconv.FormatInt(input.ID, 10)+":stop:completed", sourceKey)
-	assert.True(t, releases)
 
 	// Idempotent replay returns the original row, not a duplicate.
 	replay, err := store.CompleteExplicitStop(ctx, session.ID, input.ID, 9)
@@ -158,8 +163,8 @@ func TestSelectInterruptedExplicitStops(t *testing.T) {
 	_, err = db.Exec(`UPDATE sessions SET status = 'stopping' WHERE id = ?`, session.ID)
 	require.NoError(t, err)
 	_, err = db.Exec(`INSERT INTO session_outbox
-		(session_id, type, content, attributes, source_key, fingerprint, created_at, releases_input)
-		VALUES (?, 'message_persistent', '⏹ Stopping...', '{"manager_id":"mgr"}', ?, 'fp-legacy', datetime('now'), 1)`,
+		(session_id, type, content, attributes, source_key, created_at)
+		VALUES (?, 'message', '⏹ Stopping...', '{"manager_id":"mgr"}', ?, datetime('now'))`,
 		session.ID, "input:"+strconv.FormatInt(legacy.ID, 10)+":stop:result")
 	require.NoError(t, err)
 
@@ -168,54 +173,6 @@ func TestSelectInterruptedExplicitStops(t *testing.T) {
 	require.Len(t, stops, 1, "the completed stop is excluded, the interrupted one qualifies")
 	assert.Equal(t, session.ID, stops[0].SessionID)
 	assert.Equal(t, legacy.ID, stops[0].InputID)
-}
-
-func TestOutputReadinessOnlyNewestReleasingRow(t *testing.T) {
-	store, _, projectID := newTestStore(t)
-	ctx := context.Background()
-
-	session := seededOwnedSession(ctx, t, store, projectID)
-	require.NoError(t, store.BindManager(ctx, "mgr", "telegram", map[string]any{
-		"bot_user_id": int64(1), "chat_id": int64(2), "topology": "group",
-	}))
-
-	first, err := store.EnqueueOutput(ctx, OutputDraft{
-		SessionID: session.ID, Type: OutputMessagePersistent, Content: "old final", ReleasesInput: true,
-	})
-	require.NoError(t, err)
-
-	input, err := enqueueInput(ctx, store, session.ID, InputSourceUser, "/stop")
-	require.NoError(t, err)
-	startCommit, err := store.BeginLifecycleInput(ctx, input.ID, "stop", "⏳ Stopping…")
-	require.NoError(t, err)
-	stopCommit, err := store.CompleteExplicitStop(ctx, session.ID, input.ID, 0)
-	require.NoError(t, err)
-
-	// Deliver the old final, the stop start, then reach the completion.
-	claim, err := store.ClaimOutputHead(ctx, "mgr")
-	require.NoError(t, err)
-	require.Equal(t, first.OutputID, claim.Output.ID)
-	require.NoError(t, store.AckOutput(ctx, "mgr", claim.Output.ID, claim.Output.AttemptID, []string{"1"}, nil))
-
-	claim, err = store.ClaimOutputHead(ctx, "mgr")
-	require.NoError(t, err)
-	require.Equal(t, startCommit.OutputID, claim.Output.ID)
-	require.NoError(t, store.AckOutput(ctx, "mgr", claim.Output.ID, claim.Output.AttemptID, []string{"3"}, nil))
-
-	// Acknowledging the older final while the stop completion is queued stays silent.
-	readiness, err := store.OutputReadiness(ctx, first.OutputID)
-	require.NoError(t, err)
-	assert.False(t, readiness.Ready, "an older releasing row must not publish readiness")
-
-	claim, err = store.ClaimOutputHead(ctx, "mgr")
-	require.NoError(t, err)
-	require.Equal(t, stopCommit.OutputID, claim.Output.ID)
-	require.NoError(t, store.AckOutput(ctx, "mgr", claim.Output.ID, claim.Output.AttemptID, []string{"2"}, nil))
-
-	readiness, err = store.OutputReadiness(ctx, stopCommit.OutputID)
-	require.NoError(t, err)
-	assert.True(t, readiness.Ready)
-	assert.Equal(t, "stopped", readiness.Reason)
 }
 
 func TestDirectOutputFailsClosedBehindStopFence(t *testing.T) {

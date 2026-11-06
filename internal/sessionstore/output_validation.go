@@ -18,56 +18,38 @@ func validateOutputDraft(draft OutputDraft) error {
 		return errors.New("invalid output content")
 	}
 
-	if (draft.SourceKey == "") != (draft.Fingerprint == "") {
-		return errors.New("output identity requires source key and fingerprint together")
-	}
-
-	if draft.SourceKey != "" &&
-		(strings.TrimSpace(draft.SourceKey) == "" || strings.TrimSpace(draft.Fingerprint) == "") {
+	if draft.SourceKey != "" && strings.TrimSpace(draft.SourceKey) == "" {
 		return errors.New("empty output identity")
 	}
 
-	if err := validateProducerAttributes(draft.Type, draft.Attributes); err != nil {
-		return err
-	}
-
-	if draft.SourceKey != "" && draft.Fingerprint != outputFingerprintWithRelease(
-		draft.Type,
-		draft.Content,
-		draft.SessionID,
-		draft.Attributes,
-		draft.ReleasesInput,
-	) {
-		return ErrOutputConflict
-	}
-
-	return nil
+	return validateProducerAttributes(draft.Type, draft.Attributes)
 }
 
-//nolint:gocyclo,wsl_v5 // Closed output variants validate their paired producer payloads at one boundary.
+func validOutputType(kind OutputType) bool {
+	switch kind {
+	case OutputMessage, OutputSessionOpened, OutputSessionReplaced, OutputSessionClosed:
+		return true
+	default:
+		return false
+	}
+}
+
+func isMessageOutput(kind OutputType) bool {
+	return kind == OutputMessage
+}
+
+//nolint:gocyclo // Closed output variants validate their paired producer payloads at one boundary.
 func validateProducerAttributes(kind OutputType, attributes map[string]any) error {
 	allowed := map[string]struct{}{}
 
 	switch kind {
-	case OutputMessageReplaceable, OutputMessagePersistent:
-		allowed["waiting"] = struct{}{}
-		allowed["waiting_identity"] = struct{}{}
+	case OutputMessage:
 		allowed["source"] = struct{}{}
-		allowed["progress_revision"] = struct{}{}
 
 		if source, ok := attributes["source"]; ok && source != outputSourceScheduler && source != outputSourceAgent {
 			return errors.New("invalid message output source")
 		}
 
-		_, waiting := attributes["waiting"]
-
-		_, identity := attributes["waiting_identity"]
-		if waiting != identity {
-			return errors.New("waiting output requires matching identity")
-		}
-		if waiting {
-			return validateWaitingPayload(attributes["waiting"], attributes["waiting_identity"])
-		}
 	case OutputSessionOpened:
 		allowed[outputAttributeName] = struct{}{}
 		allowed[outputAttributeWorkDir] = struct{}{}
@@ -112,53 +94,6 @@ func validateProducerAttributes(kind OutputType, attributes map[string]any) erro
 	}
 
 	return nil
-}
-
-//nolint:wsl_v5 // Each paired item is validated as one discriminated waiting record.
-func validateWaitingPayload(displayValue, identityValue any) error {
-	display, err := waitingItems(displayValue)
-	if err != nil {
-		return fmt.Errorf("invalid waiting display: %w", err)
-	}
-	identity, err := waitingItems(identityValue)
-	if err != nil {
-		return fmt.Errorf("invalid waiting identity: %w", err)
-	}
-	if len(display) != len(identity) || len(display) == 0 {
-		return errors.New("waiting output requires paired items")
-	}
-	for i := range display {
-		if wakeAt, sleep := display[i]["wake_at"].(string); sleep {
-			if wakeAt == "" || len(display[i]) != 1 || len(identity[i]) != 1 ||
-				stringValue(identity[i]["tool_call_id"]) == "" {
-				return errors.New("invalid waiting sleep item")
-			}
-			continue
-		}
-		childID, child := positiveInt64(display[i]["child_id"])
-		identityChild, identityOK := positiveInt64(identity[i]["child_id"])
-		_, activationOK := positiveInt64(identity[i]["activation_seq"])
-		if !child || childID != identityChild || !identityOK || !activationOK || len(display[i]) != 1 ||
-			len(identity[i]) != 2 {
-			return errors.New("invalid waiting subagent item")
-		}
-	}
-
-	return nil
-}
-
-//nolint:wsl_v5 // The conversion is deliberately adjacent to the schema validation it feeds.
-func waitingItems(value any) ([]map[string]any, error) {
-	encoded, err := json.Marshal(value)
-	if err != nil {
-		return nil, fmt.Errorf("encode waiting payload: %w", err)
-	}
-	var items []map[string]any
-	if err := json.Unmarshal(encoded, &items); err != nil {
-		return nil, fmt.Errorf("decode waiting payload: %w", err)
-	}
-
-	return items, nil
 }
 
 func nonEmptyString(value any) bool {

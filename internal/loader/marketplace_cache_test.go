@@ -32,10 +32,10 @@ func TestMarketplaceCache_ResolveTwiceWithinTTL(t *testing.T) {
 		Plugins: []string{"plugin-a"},
 	}
 
-	skills1, agents1, err := cache.Resolve(context.Background(), entry)
+	skills1, agents1, err := cache.resolve(context.Background(), entry)
 	require.NoError(t, err)
 
-	skills2, agents2, err := cache.Resolve(context.Background(), entry)
+	skills2, agents2, err := cache.resolve(context.Background(), entry)
 	require.NoError(t, err)
 
 	assert.Equal(t, int32(1), callCount.Load(), "resolver should be called only once")
@@ -56,7 +56,7 @@ func TestMarketplaceCache_ResolveAfterTTLExpiry(t *testing.T) {
 
 	now := time.Now()
 	cache := newMarketplaceCache(resolver, 5*time.Minute)
-	impl := cache.(*marketplaceCache)
+	impl := cache
 	impl.now = func() time.Time { return now }
 
 	entry := config.MarketplaceEntry{
@@ -64,14 +64,14 @@ func TestMarketplaceCache_ResolveAfterTTLExpiry(t *testing.T) {
 		Plugins: []string{"plugin-a"},
 	}
 
-	_, _, err := cache.Resolve(context.Background(), entry)
+	_, _, err := cache.resolve(context.Background(), entry)
 	require.NoError(t, err)
 	assert.Equal(t, int32(1), callCount.Load())
 
 	// Advance time past TTL
 	impl.now = func() time.Time { return now.Add(6 * time.Minute) }
 
-	_, _, err = cache.Resolve(context.Background(), entry)
+	_, _, err = cache.resolve(context.Background(), entry)
 	require.NoError(t, err)
 	assert.Equal(t, int32(2), callCount.Load(), "resolver should be called again after TTL")
 }
@@ -94,10 +94,10 @@ func TestMarketplaceCache_DifferentURLsIndependent(t *testing.T) {
 	entryA := config.MarketplaceEntry{URL: "github.com/owner/repo-a", Plugins: []string{"plugin-a"}}
 	entryB := config.MarketplaceEntry{URL: "github.com/owner/repo-b", Plugins: []string{"plugin-b"}}
 
-	skillsA, _, err := cache.Resolve(context.Background(), entryA)
+	skillsA, _, err := cache.resolve(context.Background(), entryA)
 	require.NoError(t, err)
 
-	skillsB, _, err := cache.Resolve(context.Background(), entryB)
+	skillsB, _, err := cache.resolve(context.Background(), entryB)
 	require.NoError(t, err)
 
 	assert.Equal(t, int32(2), callCount.Load())
@@ -124,7 +124,7 @@ func TestMarketplaceCache_ConcurrentAccess(t *testing.T) {
 
 	for range goroutines {
 		wg.Go(func() {
-			_, _, err := cache.Resolve(context.Background(), entry)
+			_, _, err := cache.resolve(context.Background(), entry)
 			assert.NoError(t, err)
 		})
 	}
@@ -162,12 +162,12 @@ func TestMarketplaceCache_BlockedURLDoesNotBlockOthers(t *testing.T) {
 	entryA := config.MarketplaceEntry{URL: "github.com/owner/repo-a", Plugins: []string{"plugin-a"}}
 	entryB := config.MarketplaceEntry{URL: "github.com/owner/repo-b", Plugins: []string{"plugin-b"}}
 
-	go func() { _, _, _ = cache.Resolve(context.Background(), entryA) }()
+	go func() { _, _, _ = cache.resolve(context.Background(), entryA) }()
 	<-enteredA // A now holds its per-URL lock, stuck in the resolver
 
 	doneB := make(chan error, 1)
 	go func() {
-		_, _, err := cache.Resolve(context.Background(), entryB)
+		_, _, err := cache.resolve(context.Background(), entryB)
 		doneB <- err
 	}()
 
@@ -190,7 +190,7 @@ func TestMarketplaceCache_ResolverError(t *testing.T) {
 		Plugins: []string{"plugin-a"},
 	}
 
-	_, _, err := cache.Resolve(context.Background(), entry)
+	_, _, err := cache.resolve(context.Background(), entry)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, assert.AnError)
 }
@@ -215,17 +215,17 @@ func TestMarketplaceCache_FreshSuccessSurvivesALaterResolveFailure(t *testing.T)
 	cache := newMarketplaceCache(resolver, 10*time.Minute)
 	first := config.MarketplaceEntry{URL: "github.com/owner/repo", Plugins: []string{"plugin-a"}}
 
-	skills, _, err := cache.Resolve(context.Background(), first)
+	skills, _, err := cache.resolve(context.Background(), first)
 	require.NoError(t, err)
 	require.Len(t, skills, 1)
 
 	failing.Store(true)
 
 	second := config.MarketplaceEntry{URL: "github.com/owner/repo", Plugins: []string{"plugin-a", "plugin-b"}}
-	_, _, err = cache.Resolve(context.Background(), second)
+	_, _, err = cache.resolve(context.Background(), second)
 	require.NoError(t, err, "an unscanned plugin name is not a reason to re-resolve the repo")
 
-	skills, _, err = cache.Resolve(context.Background(), first)
+	skills, _, err = cache.resolve(context.Background(), first)
 	require.NoError(t, err, "the plugins that were working must keep working")
 	assert.Len(t, skills, 1)
 }
@@ -249,7 +249,7 @@ func TestMarketplaceCache_PluginWithCommandsDir(t *testing.T) {
 	}, 10*time.Minute)
 
 	entry := config.MarketplaceEntry{URL: "github.com/o/r", Plugins: []string{"plugin-cmd"}}
-	_, agents, err := cache.Resolve(context.Background(), entry)
+	_, agents, err := cache.resolve(context.Background(), entry)
 	require.NoError(t, err)
 	assert.Len(t, agents, 1)
 	assert.Equal(t, commandsDir, agents[0].path)

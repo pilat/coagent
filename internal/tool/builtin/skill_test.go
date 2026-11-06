@@ -14,6 +14,19 @@ import (
 	"github.com/pilat/coagent/internal/tool"
 )
 
+func TestSkillToolNilLoaderReturnsUnavailable(t *testing.T) {
+	t.Parallel()
+
+	skillTool := NewSkillTool(nil)
+	var result *tool.Result
+	var err error
+	require.NotPanics(t, func() {
+		result, err = skillTool.Execute(t.Context(), json.RawMessage(`{"name":"review"}`))
+	})
+	require.Nil(t, result)
+	require.EqualError(t, err, "resolve skill: skill catalog is unavailable")
+}
+
 func TestSkillToolDirectReceiptNamesCanonicalSkillOnly(t *testing.T) {
 	ldr := loader.New()
 	ldr.RegisterSkill(&loader.Skill{Name: "both", Content: "content for $ARGUMENTS"})
@@ -102,7 +115,7 @@ func TestRenderSkillArguments(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			result := RenderSkill(tc.skill, tc.args)
+			result := loader.RenderSkillInvocation(tc.skill, tc.args)
 
 			assert.Contains(t, result, tc.want)
 			if tc.notWant != "" {
@@ -119,7 +132,7 @@ func TestRenderSkillCanonicalEnvelope(t *testing.T) {
 		Content:     "Review changes.",
 	}
 
-	result := RenderSkill(sk, "")
+	result := loader.RenderSkillInvocation(sk, "")
 
 	assert.Equal(t, `<skill>
 <name>review&lt;&amp;&gt;</name>
@@ -130,7 +143,7 @@ Review changes.
 }
 
 func TestExtractRenderedSkillIgnoresTransportPrefixes(t *testing.T) {
-	rendered := RenderSkill(&loader.Skill{Name: "pilat:review", Content: "Review changes."}, "")
+	rendered := loader.RenderSkillInvocation(&loader.Skill{Name: "pilat:review", Content: "Review changes."}, "")
 
 	name, envelope, ok := loader.ExtractRenderedSkill("[title]\n[warning]\n" + rendered)
 
@@ -148,8 +161,8 @@ func TestExtractRenderedSkillIgnoresTransportPrefixes(t *testing.T) {
 }
 
 func TestExtractRenderedSkillsFromBatchOutput(t *testing.T) {
-	first := RenderSkill(&loader.Skill{Name: "first", Content: "First instructions."}, "")
-	second := RenderSkill(&loader.Skill{Name: "second", Content: "Second instructions."}, "")
+	first := loader.RenderSkillInvocation(&loader.Skill{Name: "first", Content: "First instructions."}, "")
+	second := loader.RenderSkillInvocation(&loader.Skill{Name: "second", Content: "Second instructions."}, "")
 	content := "=== skill (call 1) ===\n[first]\n" + first +
 		"\n\n=== skill (call 2) ===\n[second]\n" + second
 
@@ -161,8 +174,8 @@ func TestExtractRenderedSkillsFromBatchOutput(t *testing.T) {
 }
 
 func TestExtractRenderedSkillsIgnoresMarkupFromNonSkillBatchCalls(t *testing.T) {
-	readMarkup := RenderSkill(&loader.Skill{Name: "not-invoked", Content: "Example."}, "")
-	invoked := RenderSkill(&loader.Skill{Name: "invoked", Content: "Instructions."}, "")
+	readMarkup := loader.RenderSkillInvocation(&loader.Skill{Name: "not-invoked", Content: "Example."}, "")
+	invoked := loader.RenderSkillInvocation(&loader.Skill{Name: "invoked", Content: "Instructions."}, "")
 	content := "=== read (call 1) ===\n[file]\n" + readMarkup +
 		"\n\n=== skill (call 2) ===\n[invoked]\n" + invoked
 
@@ -173,7 +186,7 @@ func TestExtractRenderedSkillsIgnoresMarkupFromNonSkillBatchCalls(t *testing.T) 
 }
 
 func TestExtractRenderedSkillsPreservesMarkerInsideBody(t *testing.T) {
-	rendered := RenderSkill(&loader.Skill{
+	rendered := loader.RenderSkillInvocation(&loader.Skill{
 		Name: "document-format",
 		Content: `Use this example:
 <skill>
@@ -191,7 +204,7 @@ Example body.
 }
 
 func TestExtractRenderedSkillsUsesOuterClosingMarker(t *testing.T) {
-	rendered := RenderSkill(&loader.Skill{
+	rendered := loader.RenderSkillInvocation(&loader.Skill{
 		Name: "document-format",
 		Content: `The closing marker is </skill>.
 Example:

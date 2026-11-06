@@ -217,8 +217,22 @@ func TestInnerEnvironmentRejectsInvalidEntry(t *testing.T) {
 }
 
 func TestSourceLineQuotesSnapshotPath(t *testing.T) {
-	assert.Equal(t, "source '/tmp/snap dir/s'; go version", sourceLine("/tmp/snap dir/s", "go version"))
-	assert.Equal(t, "source '/a/'\\''b'; exit", sourceLine("/a/'b", "exit"))
+	tests := []struct {
+		snapshot string
+		command  string
+		want     string
+	}{
+		{"/tmp/snap dir/s", "go version", "source '/tmp/snap dir/s'; go version"},
+		{"/a/'b", "exit", "source '/a/'\\''b'; exit"},
+	}
+	for _, tt := range tests {
+		cmd, err := (disabledRunner{}).SnapshotShell(
+			t.Context(), "/bin/bash", tt.snapshot, tt.command, t.TempDir(), nil,
+		)
+		require.NoError(t, err)
+		require.GreaterOrEqual(t, len(cmd.Args), 2)
+		assert.Equal(t, []string{"-c", tt.want}, cmd.Args[len(cmd.Args)-2:])
+	}
 }
 
 func TestPolicyKeyIsStableAndInputSensitive(t *testing.T) {

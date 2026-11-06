@@ -88,7 +88,7 @@ func (s *Session) focusSection() string {
 func (s *Session) compact(ctx context.Context, commandInput *PendingInput) (bool, error) {
 	// Defence in depth: a caller that forgets the gate must not compact a
 	// transcript that still owes a tool_use its result.
-	if s.HasPendingExternalCall() || len(s.pendingInLoopCalls()) > 0 {
+	if len(s.PendingExternalCalls()) > 0 || len(s.pendingInLoopCalls()) > 0 {
 		return false, errCompactionPendingCall
 	}
 
@@ -281,7 +281,7 @@ func (s *Session) commitCheckpointLocked(
 		}
 		c.Outputs = []sessionstore.Output{
 			{
-				Type:          sessionstore.OutputMessagePersistent,
+				Type:          sessionstore.OutputMessage,
 				Content:       "✅ Context compacted",
 				Key:           fmt.Sprintf("input:%d:compact:succeeded", commandInput.ID),
 				MessageRef:    -1,
@@ -312,7 +312,7 @@ func (s *Session) commitCheckpointLocked(
 //
 //nolint:gocyclo,nestif,funlen // Explicit compaction has a durable start, terminal outcome, and auto-path fallback.
 func (s *Session) compactionStep(ctx context.Context, r *runState) error {
-	if s.HasPendingExternalCall() || len(s.pendingInLoopCalls()) > 0 {
+	if len(s.PendingExternalCalls()) > 0 || len(s.pendingInLoopCalls()) > 0 {
 		return nil
 	}
 
@@ -346,7 +346,7 @@ func (s *Session) compactionStep(ctx context.Context, r *runState) error {
 	c := s.newCommit()
 
 	c.Outputs = []sessionstore.Output{
-		{Type: sessionstore.OutputMessageReplaceable, Content: "🔄 Compacting context...", MessageRef: -1},
+		{Type: sessionstore.OutputMessage, Content: "🔄 Compacting context...", MessageRef: -1},
 	}
 	if command != nil {
 		c.Outputs[0].Key = fmt.Sprintf("input:%d:compact:started", command.ID)
@@ -391,7 +391,7 @@ func (s *Session) compactionStep(ctx context.Context, r *runState) error {
 		c := s.newCommit()
 
 		c.Outputs = []sessionstore.Output{
-			{Type: sessionstore.OutputMessagePersistent, Content: terminal, MessageRef: -1},
+			{Type: sessionstore.OutputMessage, Content: terminal, MessageRef: -1},
 		}
 		if ok {
 			c.Outputs[0].Key = fmt.Sprintf("compaction:%d:succeeded", s.compactionSummaryDBID)
@@ -414,7 +414,7 @@ func (s *Session) compactionStep(ctx context.Context, r *runState) error {
 			c := s.newCommit()
 
 			c.Outputs = []sessionstore.Output{
-				{Type: sessionstore.OutputMessagePersistent, Content: compactionNotConvergingNotice, MessageRef: -1},
+				{Type: sessionstore.OutputMessage, Content: compactionNotConvergingNotice, MessageRef: -1},
 			}
 			if _, err := s.commit(ctx, c); err != nil {
 				return err
@@ -444,7 +444,7 @@ func (s *Session) finishCompactionCommand(ctx context.Context, input PendingInpu
 	}
 	c.Outputs = []sessionstore.Output{
 		{
-			Type:          sessionstore.OutputMessagePersistent,
+			Type:          sessionstore.OutputMessage,
 			Content:       content,
 			Key:           fmt.Sprintf("input:%d:compact:%s", input.ID, phase),
 			MessageRef:    -1,
@@ -477,7 +477,7 @@ func (s *Session) summarizeCheckpoint(
 	schemas := tool.ToSchemas(activeTools)
 
 	messages := append(
-		repairTranscriptExcluding(s.ms.messages[:split], pendingExternal),
+		repairTranscript(s.ms.messages[:split], pendingExternal),
 		compactionInstructionMessage(s.focusSection()),
 	)
 

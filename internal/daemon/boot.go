@@ -22,7 +22,7 @@ const interruptedCallNotice = "⚠️ This tool call was interrupted before comp
 
 // Start re-establishes in-flight children and re-delivers undelivered completions
 // after a restart. Only PASS 0 blocks; the resumes run asynchronously.
-func (s *svc) Start(ctx context.Context) error {
+func (s *Service) Start(ctx context.Context) error {
 	if !s.life.enter() {
 		return errDaemonShuttingDown
 	}
@@ -83,16 +83,14 @@ func (s *svc) Start(ctx context.Context) error {
 
 	s.startWake()
 
-	if !s.life.whileOpen(func() { s.progress.Start(ctx) }) {
+	if !s.life.Go("daemon.recovery", s.resumeAfterRestart) {
 		return errDaemonShuttingDown
 	}
-
-	s.life.Go("daemon.recovery", s.resumeAfterRestart)
 
 	return nil
 }
 
-func (s *svc) recoveredStopCancellationCount(
+func (s *Service) recoveredStopCancellationCount(
 	ctx context.Context,
 	rootID int64,
 	since time.Time,
@@ -108,7 +106,7 @@ func (s *svc) recoveredStopCancellationCount(
 }
 
 // The terminating fence survives crashes, so cleanup can safely rerun before recovery.
-func (s *svc) finishInterruptedKills(ctx context.Context) error {
+func (s *Service) finishInterruptedKills(ctx context.Context) error {
 	records, err := s.store.ListAllSessions(ctx)
 	if err != nil {
 		return fmt.Errorf("list sessions for kill recovery: %w", err)
@@ -157,7 +155,7 @@ func (s *svc) finishInterruptedKills(ctx context.Context) error {
 	return nil
 }
 
-func (s *svc) recoverStoppingSessions(
+func (s *Service) recoverStoppingSessions(
 	ctx context.Context,
 	records []*sessionstore.SessionRecord,
 	owedStops map[int64]sessionstore.InterruptedExplicitStop,
@@ -200,7 +198,7 @@ func (s *svc) recoverStoppingSessions(
 	return nil
 }
 
-func (s *svc) convergeStoppedSessions(
+func (s *Service) convergeStoppedSessions(
 	ctx context.Context,
 	records []*sessionstore.SessionRecord,
 	owedStops map[int64]sessionstore.InterruptedExplicitStop,
@@ -242,7 +240,7 @@ func orphanedCallNotice(_ string) string {
 		"The outcome is unknown — check the current state before retrying."
 }
 
-func (s *svc) settleUnresolvedCalls(ctx context.Context) error {
+func (s *Service) settleUnresolvedCalls(ctx context.Context) error {
 	records, err := s.store.ListAllSessions(ctx)
 	if err != nil {
 		return fmt.Errorf("list sessions for call recovery: %w", err)
@@ -307,7 +305,7 @@ func (s *svc) settleUnresolvedCalls(ctx context.Context) error {
 	return nil
 }
 
-func (s *svc) resumeAfterRestart(ctx context.Context) {
+func (s *Service) resumeAfterRestart(ctx context.Context) {
 	log := logger.Ctx(ctx).Named("daemon.sweep")
 
 	running, runningErr := s.links.ListRunningChildLinks(ctx)
@@ -356,7 +354,7 @@ func (s *svc) resumeAfterRestart(ctx context.Context) {
 }
 
 // Terminal children rearm only after delivery; stopped children need explicit follow-up.
-func (s *svc) resumeSessionsWithRecoverableInput(ctx context.Context) (int, error) {
+func (s *Service) resumeSessionsWithRecoverableInput(ctx context.Context) (int, error) {
 	log := logger.Ctx(ctx).Named("daemon.sweep")
 
 	sessionIDs, listErr := s.store.ListSessionsWithRecoverableInput(ctx)
@@ -413,7 +411,7 @@ func (s *svc) resumeSessionsWithRecoverableInput(ctx context.Context) (int, erro
 	return resumed, listErr
 }
 
-func (s *svc) resumeRecoverableRoot(ctx context.Context, sessionID int64) (bool, error) {
+func (s *Service) resumeRecoverableRoot(ctx context.Context, sessionID int64) (bool, error) {
 	inputs, inputErr := s.store.ListPending(ctx, sessionID)
 	if inputErr != nil {
 		return false, fmt.Errorf("resume recoverable root: %w", inputErr)
@@ -476,7 +474,7 @@ func (s *svc) resumeRecoverableRoot(ctx context.Context, sessionID int64) (bool,
 	return true, nil
 }
 
-func (s *svc) resumeRecoverableChild(ctx context.Context, childID int64) error {
+func (s *Service) resumeRecoverableChild(ctx context.Context, childID int64) error {
 	unlock, err := s.lockSessionTree(ctx, childID)
 	if err != nil {
 		return err

@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/pilat/coagent/internal/schedule"
 	"github.com/pilat/coagent/internal/sessionstore"
 )
 
@@ -26,7 +27,15 @@ func TestStore_AddSchedule_OneShot(t *testing.T) {
 	require.NoError(t, err)
 
 	oneShot := time.Now().Add(2 * time.Hour).UTC()
-	sched, err := ss.AddSchedule(context.Background(), rec.ID, "", &oneShot, "wake up and check", false)
+	sched, err := ss.AddSchedule(
+		context.Background(),
+		rec.ID,
+		"",
+		&oneShot,
+		"wake up and check",
+		false,
+		schedule.ScheduleMetadata{},
+	)
 	require.NoError(t, err)
 	assert.NotEmpty(t, sched.ID())
 	assert.Equal(t, rec.ID, sched.SessionID())
@@ -42,7 +51,15 @@ func TestStore_AddSchedule_Cron(t *testing.T) {
 	rec, err := sessStore.CreateSession(context.Background(), pid, "", "", nil)
 	require.NoError(t, err)
 
-	sched, err := ss.AddSchedule(context.Background(), rec.ID, "0 9 * * *", nil, "daily check", false)
+	sched, err := ss.AddSchedule(
+		context.Background(),
+		rec.ID,
+		"0 9 * * *",
+		nil,
+		"daily check",
+		false,
+		schedule.ScheduleMetadata{},
+	)
 	require.NoError(t, err)
 	assert.Equal(t, "0 9 * * *", sched.CronExpr())
 	assert.Nil(t, sched.OneShotAt())
@@ -55,7 +72,15 @@ func TestStore_AddSchedule_FreshRoundTrips(t *testing.T) {
 	rec, err := sessStore.CreateSession(context.Background(), pid, "", "", nil)
 	require.NoError(t, err)
 
-	sched, err := ss.AddSchedule(context.Background(), rec.ID, "0 9 * * *", nil, "fresh job", true)
+	sched, err := ss.AddSchedule(
+		context.Background(),
+		rec.ID,
+		"0 9 * * *",
+		nil,
+		"fresh job",
+		true,
+		schedule.ScheduleMetadata{},
+	)
 	require.NoError(t, err)
 	assert.True(t, sched.Fresh())
 
@@ -73,7 +98,7 @@ func TestStore_AddSchedule_DefaultsNotFresh(t *testing.T) {
 	rec, err := sessStore.CreateSession(context.Background(), pid, "", "", nil)
 	require.NoError(t, err)
 
-	_, err = ss.AddSchedule(context.Background(), rec.ID, "0 9 * * *", nil, "plain", false)
+	_, err = ss.AddSchedule(context.Background(), rec.ID, "0 9 * * *", nil, "plain", false, schedule.ScheduleMetadata{})
 	require.NoError(t, err)
 
 	list, err := ss.ListSchedules(context.Background(), rec.ID)
@@ -89,7 +114,7 @@ func TestStore_AddSchedule_NeitherCronNorOneShot(t *testing.T) {
 	rec, err := sessStore.CreateSession(context.Background(), pid, "", "", nil)
 	require.NoError(t, err)
 
-	_, err = ss.AddSchedule(context.Background(), rec.ID, "", nil, "invalid", false)
+	_, err = ss.AddSchedule(context.Background(), rec.ID, "", nil, "invalid", false, schedule.ScheduleMetadata{})
 	assert.Error(t, err)
 }
 
@@ -101,7 +126,7 @@ func TestStore_RemoveSchedule(t *testing.T) {
 	require.NoError(t, err)
 
 	oneShot := time.Now().Add(time.Hour).UTC()
-	sched, err := ss.AddSchedule(context.Background(), rec.ID, "", &oneShot, "msg", false)
+	sched, err := ss.AddSchedule(context.Background(), rec.ID, "", &oneShot, "msg", false, schedule.ScheduleMetadata{})
 	require.NoError(t, err)
 
 	err = ss.RemoveSchedule(context.Background(), sched.ID())
@@ -129,7 +154,15 @@ func TestStore_RemoveScheduleForSession(t *testing.T) {
 		require.NoError(t, err)
 
 		oneShot := time.Now().Add(time.Hour).UTC()
-		sched, err := ss.AddSchedule(context.Background(), rec.ID, "", &oneShot, "msg", false)
+		sched, err := ss.AddSchedule(
+			context.Background(),
+			rec.ID,
+			"",
+			&oneShot,
+			"msg",
+			false,
+			schedule.ScheduleMetadata{},
+		)
 		require.NoError(t, err)
 
 		err = ss.RemoveScheduleForSession(context.Background(), rec.ID, sched.ID())
@@ -151,7 +184,15 @@ func TestStore_RemoveScheduleForSession(t *testing.T) {
 		require.NoError(t, err)
 
 		oneShot := time.Now().Add(time.Hour).UTC()
-		sched, err := ss.AddSchedule(context.Background(), rec1.ID, "", &oneShot, "msg", false)
+		sched, err := ss.AddSchedule(
+			context.Background(),
+			rec1.ID,
+			"",
+			&oneShot,
+			"msg",
+			false,
+			schedule.ScheduleMetadata{},
+		)
 		require.NoError(t, err)
 
 		err = ss.RemoveScheduleForSession(context.Background(), rec2.ID, sched.ID())
@@ -184,9 +225,25 @@ func TestStore_ListSchedules(t *testing.T) {
 	require.NoError(t, err)
 
 	oneShot := time.Now().Add(time.Hour).UTC()
-	_, err = ss.AddSchedule(context.Background(), rec.ID, "", &oneShot, "one shot msg", false)
+	_, err = ss.AddSchedule(
+		context.Background(),
+		rec.ID,
+		"",
+		&oneShot,
+		"one shot msg",
+		false,
+		schedule.ScheduleMetadata{},
+	)
 	require.NoError(t, err)
-	_, err = ss.AddSchedule(context.Background(), rec.ID, "0 9 * * *", nil, "cron msg", false)
+	_, err = ss.AddSchedule(
+		context.Background(),
+		rec.ID,
+		"0 9 * * *",
+		nil,
+		"cron msg",
+		false,
+		schedule.ScheduleMetadata{},
+	)
 	require.NoError(t, err)
 
 	schedules, err := ss.ListSchedules(context.Background(), rec.ID)
@@ -204,9 +261,9 @@ func TestStore_ListDueSchedules(t *testing.T) {
 	past := time.Now().Add(-time.Hour).UTC()
 	future := time.Now().Add(time.Hour).UTC()
 
-	_, err = ss.AddSchedule(context.Background(), rec.ID, "", &past, "overdue", false)
+	_, err = ss.AddSchedule(context.Background(), rec.ID, "", &past, "overdue", false, schedule.ScheduleMetadata{})
 	require.NoError(t, err)
-	_, err = ss.AddSchedule(context.Background(), rec.ID, "", &future, "not yet", false)
+	_, err = ss.AddSchedule(context.Background(), rec.ID, "", &future, "not yet", false, schedule.ScheduleMetadata{})
 	require.NoError(t, err)
 
 	due, err := ss.ListDueSchedules(context.Background(), time.Now().UTC())
@@ -222,78 +279,25 @@ func TestStore_ListDueCronSchedules(t *testing.T) {
 	rec, err := sessStore.CreateSession(context.Background(), pid, "", "", nil)
 	require.NoError(t, err)
 
-	_, err = ss.AddSchedule(context.Background(), rec.ID, "0 9 * * *", nil, "daily check", false)
+	_, err = ss.AddSchedule(
+		context.Background(),
+		rec.ID,
+		"0 9 * * *",
+		nil,
+		"daily check",
+		false,
+		schedule.ScheduleMetadata{},
+	)
 	require.NoError(t, err)
 
 	oneShot := time.Now().Add(time.Hour).UTC()
-	_, err = ss.AddSchedule(context.Background(), rec.ID, "", &oneShot, "one shot", false)
+	_, err = ss.AddSchedule(context.Background(), rec.ID, "", &oneShot, "one shot", false, schedule.ScheduleMetadata{})
 	require.NoError(t, err)
 
 	crons, err := ss.ListDueCronSchedules(context.Background(), time.Now().UTC())
 	require.NoError(t, err)
 	assert.Len(t, crons, 1)
 	assert.Equal(t, "0 9 * * *", crons[0].CronExpr())
-}
-
-func TestStore_RemoveOneShotSchedules(t *testing.T) {
-	t.Run("removes one-shot schedules, preserves cron", func(t *testing.T) {
-		ss, ds, sessStore := newTestDB(t)
-		pid := testProject(t, ds, "/tmp/project")
-
-		rec, err := sessStore.CreateSession(context.Background(), pid, "", "", nil)
-		require.NoError(t, err)
-
-		oneShot := time.Now().Add(time.Hour).UTC()
-		_, err = ss.AddSchedule(context.Background(), rec.ID, "", &oneShot, "one-shot msg", false)
-		require.NoError(t, err)
-		_, err = ss.AddSchedule(context.Background(), rec.ID, "0 9 * * *", nil, "cron msg", false)
-		require.NoError(t, err)
-
-		count, err := ss.RemoveOneShotSchedules(context.Background(), rec.ID)
-		require.NoError(t, err)
-		assert.Equal(t, int64(1), count)
-
-		remaining, err := ss.ListSchedules(context.Background(), rec.ID)
-		require.NoError(t, err)
-		require.Len(t, remaining, 1)
-		assert.Equal(t, "0 9 * * *", remaining[0].CronExpr())
-	})
-
-	t.Run("returns 0 when no one-shot schedules exist", func(t *testing.T) {
-		ss, ds, sessStore := newTestDB(t)
-		pid := testProject(t, ds, "/tmp/project")
-
-		rec, err := sessStore.CreateSession(context.Background(), pid, "", "", nil)
-		require.NoError(t, err)
-		_, err = ss.AddSchedule(context.Background(), rec.ID, "0 9 * * *", nil, "cron only", false)
-		require.NoError(t, err)
-
-		count, err := ss.RemoveOneShotSchedules(context.Background(), rec.ID)
-		require.NoError(t, err)
-		assert.Equal(t, int64(0), count)
-	})
-
-	t.Run("removes multiple one-shot schedules", func(t *testing.T) {
-		ss, ds, sessStore := newTestDB(t)
-		pid := testProject(t, ds, "/tmp/project")
-
-		rec, err := sessStore.CreateSession(context.Background(), pid, "", "", nil)
-		require.NoError(t, err)
-
-		for i := range 3 {
-			t1 := time.Now().Add(time.Duration(i+1) * time.Hour).UTC()
-			_, err = ss.AddSchedule(context.Background(), rec.ID, "", &t1, "msg", false)
-			require.NoError(t, err)
-		}
-
-		count, err := ss.RemoveOneShotSchedules(context.Background(), rec.ID)
-		require.NoError(t, err)
-		assert.Equal(t, int64(3), count)
-
-		remaining, err := ss.ListSchedules(context.Background(), rec.ID)
-		require.NoError(t, err)
-		assert.Empty(t, remaining)
-	})
 }
 
 func TestStore_RemoveAllSchedules(t *testing.T) {
@@ -305,9 +309,25 @@ func TestStore_RemoveAllSchedules(t *testing.T) {
 		require.NoError(t, err)
 
 		oneShot := time.Now().Add(time.Hour).UTC()
-		_, err = ss.AddSchedule(context.Background(), rec.ID, "", &oneShot, "one-shot msg", false)
+		_, err = ss.AddSchedule(
+			context.Background(),
+			rec.ID,
+			"",
+			&oneShot,
+			"one-shot msg",
+			false,
+			schedule.ScheduleMetadata{},
+		)
 		require.NoError(t, err)
-		_, err = ss.AddSchedule(context.Background(), rec.ID, "0 9 * * *", nil, "cron msg", false)
+		_, err = ss.AddSchedule(
+			context.Background(),
+			rec.ID,
+			"0 9 * * *",
+			nil,
+			"cron msg",
+			false,
+			schedule.ScheduleMetadata{},
+		)
 		require.NoError(t, err)
 
 		require.NoError(t, ss.RemoveAllSchedules(context.Background(), rec.ID))
@@ -326,10 +346,26 @@ func TestStore_RemoveAllSchedules(t *testing.T) {
 		recB, err := sessStore.CreateSession(context.Background(), pid, "", "", nil)
 		require.NoError(t, err)
 
-		_, err = ss.AddSchedule(context.Background(), recA.ID, "0 9 * * *", nil, "a cron", false)
+		_, err = ss.AddSchedule(
+			context.Background(),
+			recA.ID,
+			"0 9 * * *",
+			nil,
+			"a cron",
+			false,
+			schedule.ScheduleMetadata{},
+		)
 		require.NoError(t, err)
 		oneShotB := time.Now().Add(time.Hour).UTC()
-		_, err = ss.AddSchedule(context.Background(), recB.ID, "", &oneShotB, "b one-shot", false)
+		_, err = ss.AddSchedule(
+			context.Background(),
+			recB.ID,
+			"",
+			&oneShotB,
+			"b one-shot",
+			false,
+			schedule.ScheduleMetadata{},
+		)
 		require.NoError(t, err)
 
 		require.NoError(t, ss.RemoveAllSchedules(context.Background(), recA.ID))
@@ -352,7 +388,15 @@ func TestStore_ScheduleAccessors(t *testing.T) {
 	require.NoError(t, err)
 
 	oneShot := time.Now().Add(time.Hour).UTC()
-	sched, err := ss.AddSchedule(context.Background(), rec.ID, "", &oneShot, "test msg", false)
+	sched, err := ss.AddSchedule(
+		context.Background(),
+		rec.ID,
+		"",
+		&oneShot,
+		"test msg",
+		false,
+		schedule.ScheduleMetadata{},
+	)
 	require.NoError(t, err)
 
 	assert.NotZero(t, sched.ID())

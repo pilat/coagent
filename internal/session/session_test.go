@@ -30,7 +30,10 @@ func TestSwitchModel_AdoptionAndRetirement(t *testing.T) {
 			first := &trackedClient{}
 			s.SwitchModel(
 				first,
-				sessionprompt.ModelSection{ID: "first", Text: sessionprompt.BuildModelsSection("first")},
+				sessionprompt.ModelSection{
+					ID:   "first",
+					Text: sessionprompt.BuildModelsSection("First", "first", "low"),
+				},
 			)
 			assert.Same(t, old, s.currentLLM())
 			assert.Zero(t, old.closed)
@@ -39,7 +42,7 @@ func TestSwitchModel_AdoptionAndRetirement(t *testing.T) {
 				latest,
 				sessionprompt.ModelSection{
 					ID:           "latest",
-					Text:         sessionprompt.BuildModelsSection("latest"),
+					Text:         sessionprompt.BuildModelsSection("Latest", "latest", "high"),
 					NativeSearch: true,
 				},
 			)
@@ -49,14 +52,22 @@ func TestSwitchModel_AdoptionAndRetirement(t *testing.T) {
 			assert.Same(t, latest, s.currentLLM())
 			assert.Equal(t, 1, old.closed)
 			assert.Equal(t, tc.sessionID, latest.sessionID)
-			assert.Contains(t, s.prompt.SystemPrompt(), "Model: latest")
-			assert.NotContains(t, s.prompt.SystemPrompt(), "Model: first")
+			assert.Contains(t, s.prompt.SystemPrompt(), "You are running on Latest (latest), effort high.")
+			assert.NotContains(t, s.prompt.SystemPrompt(), "First (first)")
 			assert.Contains(t, s.prompt.SystemPrompt(), "provided natively")
 			assert.Nil(t, s.loadContextBaseline())
 			_, kept := s.storeContextBaseline(5000, 1, staleEpoch)
 			assert.False(t, kept)
-			s.Close()
+			low := &trackedClient{}
+			s.SwitchModel(low, sessionprompt.ModelSection{
+				ID: "latest", Text: sessionprompt.BuildModelsSection("Latest", "latest", "low"),
+			})
+			s.applyModelSwitch()
+			assert.Contains(t, s.prompt.SystemPrompt(), "Latest (latest), effort low.")
+			assert.NotContains(t, s.prompt.SystemPrompt(), "effort high")
 			assert.Equal(t, 1, latest.closed)
+			s.Close()
+			assert.Equal(t, 1, low.closed)
 			rejected := &trackedClient{}
 			s.SwitchModel(rejected, sessionprompt.ModelSection{ID: "after-close"})
 			assert.Equal(t, 1, rejected.closed)
@@ -143,7 +154,10 @@ func TestSwitchModel_PreservesReasoningEnvelope(t *testing.T) {
 	next := &reasoningSwitchClient{response: textResponse("done")}
 	s.llmClient = &loopScriptLLM{onCall: func(callNumber int, _ []llmwire.Message) (*llmwire.Response, error) {
 		require.Equal(t, 1, callNumber)
-		s.SwitchModel(next, sessionprompt.ModelSection{ID: "next", Text: sessionprompt.BuildModelsSection("next")})
+		s.SwitchModel(
+			next,
+			sessionprompt.ModelSection{ID: "next", Text: sessionprompt.BuildModelsSection("", "next", "")},
+		)
 		return &llmwire.Response{
 			FinishType:   llmwire.FinishToolCalls,
 			ToolCalls:    []llmwire.ToolCall{{ID: "read-1", Name: "read", Arguments: []byte(`{}`)}},

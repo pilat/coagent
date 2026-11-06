@@ -14,5 +14,38 @@
       "type": "message",
       "message": "scheduled work completed"
     }
-  ]
+  ],
+  "outputs": [
+    {
+      "id": 1,
+      "session_id": 1,
+      "type": "session_opened",
+      "content": "",
+      "source_key": "session:1:opened"
+    },
+    {
+      "id": 2,
+      "session_id": 1,
+      "type": "message",
+      "content": "ready for schedule",
+      "source_key": "message:4:final"
+    },
+    {
+      "id": 3,
+      "session_id": 1,
+      "type": "message",
+      "content": "⏰ scheduled\n\nscheduled once",
+      "source_key": "schedule:2:announcement"
+    },
+    {
+      "id": 4,
+      "session_id": 1,
+      "type": "message",
+      "content": "scheduled work completed",
+      "source_key": "message:9:final"
+    }
+  ],
+  "owners": {
+    "1": "telegram-main"
+  }
 }

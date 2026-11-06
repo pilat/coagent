@@ -13,7 +13,6 @@ import (
 
 	"github.com/pilat/coagent/internal/coagenthome"
 	"github.com/pilat/coagent/internal/config"
-	"github.com/pilat/coagent/internal/controllerapi"
 )
 
 const testVersion = "0.4.2"
@@ -57,37 +56,18 @@ type harness struct {
 	socket   string
 	server   *Server
 	managers *fakeManagers
-	delivery *fakeDeliveryStatus
-}
-
-type fakeDeliveryStatus struct {
-	values map[string]controllerapi.OutputQueueStatusData
-	owners []string
-}
-
-func (f fakeDeliveryStatus) UnresolvedOutputOwners(context.Context) ([]string, error) {
-	return f.owners, nil
-}
-
-func (f fakeDeliveryStatus) OutputQueueStatus(
-	_ context.Context,
-	id string,
-) (controllerapi.OutputQueueStatusData, error) {
-	return f.values[id], nil
 }
 
 func newHarness(t *testing.T, cfg *config.Config) *harness {
 	t.Helper()
 
 	mgrs := &fakeManagers{}
-	delivery := &fakeDeliveryStatus{}
-	h := &harness{socket: socketPath(t), managers: mgrs, delivery: delivery}
+	h := &harness{socket: socketPath(t), managers: mgrs}
 
 	srv, err := NewServer(context.Background(), h.socket, testVersion, Deps{
 		Config:     cfg,
 		ConfigPath: testConfigPath,
 		Managers:   mgrs,
-		Delivery:   delivery,
 	})
 	require.NoError(t, err)
 
@@ -149,7 +129,8 @@ func TestStatus_WithoutConfig(t *testing.T) {
 	h := newHarness(t, &config.Config{})
 	c := h.dial(t)
 
-	st, err := c.Status(context.Background())
+	var st StatusResult
+	err := c.Call(context.Background(), OpStatus, nil, &st)
 	require.NoError(t, err)
 
 	assert.False(t, st.ConfigPresent)
@@ -167,17 +148,20 @@ func TestStatus_WithoutConfig(t *testing.T) {
 func TestStatus_BootIDNamesTheRunNotTheBinary(t *testing.T) {
 	first := newHarness(t, &config.Config{}).dial(t)
 
-	st, err := first.Status(context.Background())
+	var st StatusResult
+	err := first.Call(context.Background(), OpStatus, nil, &st)
 	require.NoError(t, err)
 	require.NotEmpty(t, st.BootID)
 
-	again, err := first.Status(context.Background())
+	var again StatusResult
+	err = first.Call(context.Background(), OpStatus, nil, &again)
 	require.NoError(t, err)
 	assert.Equal(t, st.BootID, again.BootID, "one run, one id")
 
 	second := newHarness(t, &config.Config{}).dial(t)
 
-	other, err := second.Status(context.Background())
+	var other StatusResult
+	err = second.Call(context.Background(), OpStatus, nil, &other)
 	require.NoError(t, err)
 	assert.NotEqual(t, st.BootID, other.BootID)
 	assert.Equal(t, st.BinaryVersion, other.BinaryVersion, "same binary — the version cannot tell them apart")
@@ -201,14 +185,12 @@ func TestStatus_WithConfig(t *testing.T) {
 
 	h := newHarness(t, cfg)
 	h.managers.running = []string{"tg"}
-	h.managers.fail("tg-down", errors.New("ensure service topic: unauthorized"))
-	h.delivery.values = map[string]controllerapi.OutputQueueStatusData{
-		"tg": {Pending: 2, BlockedID: 7, BlockedForSec: 9, DeliveryError: "permission denied"},
-	}
+	h.managers.fail("tg-down", errors.New("get chat: unauthorized"))
 
 	c := h.dial(t)
 
-	st, err := c.Status(context.Background())
+	var st StatusResult
+	err := c.Call(context.Background(), OpStatus, nil, &st)
 	require.NoError(t, err)
 
 	assert.True(t, st.ConfigPresent)
@@ -224,7 +206,6 @@ func TestStatus_WithConfig(t *testing.T) {
 	require.Len(t, st.Managers, 2)
 	assert.Equal(t, ManagerStatus{
 		ID: "tg", Driver: "telegram", Enabled: true, Running: true,
-		PendingOutputs: 2, BlockedOutputID: 7, BlockedForSeconds: 9, DeliveryError: "permission denied",
 	}, st.Managers[0])
 	assert.Equal(t, "tg-down", st.Managers[1].ID)
 	assert.False(t, st.Managers[1].Running)
@@ -240,7 +221,8 @@ func TestStatus_DisabledManagerCarriesNoError(t *testing.T) {
 	h := newHarness(t, cfg)
 	h.managers.fail("tg", errors.New("boom"))
 
-	st, err := h.dial(t).Status(context.Background())
+	var st StatusResult
+	err := h.dial(t).Call(context.Background(), OpStatus, nil, &st)
 	require.NoError(t, err)
 
 	require.Len(t, st.Managers, 1)
@@ -261,7 +243,8 @@ func TestStatus_ADownManagerCarriesItsOwnReasonOnly(t *testing.T) {
 	h := newHarness(t, cfg)
 	h.managers.fail("tg-one", errors.New(`start manager "tg-one": unauthorized`))
 
-	st, err := h.dial(t).Status(context.Background())
+	var st StatusResult
+	err := h.dial(t).Call(context.Background(), OpStatus, nil, &st)
 	require.NoError(t, err)
 
 	require.Len(t, st.Managers, 2)

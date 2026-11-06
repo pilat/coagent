@@ -130,15 +130,22 @@ func (s *svc) RemoveAllForSession(ctx context.Context, sessionID int64) error {
 func (s *svc) AddRecurring(
 	ctx context.Context,
 	sessionID int64,
-	cronExpr string,
-	inputMessage string,
+	cronExpr, inputMessage string,
 	fresh bool,
 ) (Created, error) {
 	if cronExpr == "" {
 		return Created{}, errors.New("add recurring schedule: cron expression is required")
 	}
 
-	sched, err := s.store.AddSchedule(ctx, sessionID, cronExpr, nil, inputMessage, fresh)
+	sched, err := s.store.AddSchedule(
+		ctx,
+		sessionID,
+		cronExpr,
+		nil,
+		inputMessage,
+		fresh,
+		ScheduleMetadata{},
+	)
 	if err != nil {
 		return Created{}, fmt.Errorf("add recurring schedule: %w", err)
 	}
@@ -157,15 +164,7 @@ func (s *svc) AddSleep(
 		return Created{}, errors.New("add sleep: tool call id is required")
 	}
 
-	sched, err := s.store.AddScheduleWithMeta(
-		ctx,
-		sessionID,
-		"",
-		&wakeAt,
-		result,
-		false,
-		ScheduleMetadata{ToolCallID: callID},
-	)
+	sched, err := s.store.AddSchedule(ctx, sessionID, "", &wakeAt, result, false, ScheduleMetadata{ToolCallID: callID})
 	if err != nil {
 		return Created{}, fmt.Errorf("add sleep: %w", err)
 	}

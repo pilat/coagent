@@ -43,14 +43,6 @@ func commitAcceptTx(
 		return ErrInputNotFound
 	}
 
-	if input.State == InputStateAccepted && accept.State == InputStateAccepted {
-		if linkedID == 0 {
-			result.MessageIDs = append(result.MessageIDs, input.AcceptedMessageID)
-		}
-
-		return nil
-	}
-
 	if input.State != InputStatePending {
 		return ErrInputResolved
 	}
@@ -79,7 +71,7 @@ func commitAcceptTx(
 	}
 
 	if accept.ModelBound {
-		if err := acceptModelInputTx(ctx, tx, c.SessionID, id, input); err != nil {
+		if err := acceptModelInputTx(ctx, tx, c.SessionID); err != nil {
 			return err
 		}
 	}
@@ -213,11 +205,6 @@ func applyStatePatchTx(
 		args = append(args, *state.EmptyStopStreak)
 	}
 
-	if state.ManagerReplyPending != nil {
-		sets = append(sets, "manager_reply_pending = ?")
-		args = append(args, *state.ManagerReplyPending)
-	}
-
 	if len(sets) == 0 {
 		return nil
 	}
@@ -287,23 +274,12 @@ func resolveCommitInputTx(ctx context.Context, tx *sql.Tx, c Commit, accept Acce
 	return nil
 }
 
-func acceptModelInputTx(ctx context.Context, tx *sql.Tx, sessionID, id int64, input *InboxInput) error {
-	if err := advanceModelInputGeneration(ctx, tx, sessionID, id); err != nil {
+func acceptModelInputTx(ctx context.Context, tx *sql.Tx, sessionID int64) error {
+	if err := advanceModelInputGeneration(ctx, tx, sessionID); err != nil {
 		return err
 	}
 
-	if err := invalidateCompletionCheckTx(ctx, tx, sessionID); err != nil {
-		return err
-	}
-
-	if owner, _ := input.Attributes[managerIDAttribute].(string); owner != "" &&
-		!readOnlyCommandReceipt(input.RawContent) {
-		if err := setManagerReplyPendingTx(ctx, tx, sessionID); err != nil {
-			return err
-		}
-	}
-
-	return nil
+	return invalidateCompletionCheckTx(ctx, tx, sessionID)
 }
 
 func applyCandidatePatchTx(
@@ -364,7 +340,7 @@ func commitAcceptReceiptTx(
 ) error {
 	output, err := insertOutputTx(ctx, tx, OutputDraft{
 		SessionID:     c.SessionID,
-		Type:          OutputMessagePersistent,
+		Type:          OutputMessage,
 		Content:       receipt,
 		SourceKey:     fmt.Sprintf("input:%d:skill_receipt", input.ID),
 		ReleasesInput: true,

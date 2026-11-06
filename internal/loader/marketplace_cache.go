@@ -23,15 +23,7 @@ const (
 )
 
 // MarketplaceCache resolves and caches marketplace plugin sources.
-type MarketplaceCache interface {
-	Resolve(ctx context.Context, entry config.MarketplaceEntry) ([]sourceInfo, []sourceInfo, error)
-}
-
-var _ MarketplaceCache = (*marketplaceCache)(nil)
-
-// marketplaceCache is a thread-safe cache for marketplace resolution and plugin processing.
-// It avoids redundant git pulls and directory scans within the configured TTL.
-type marketplaceCache struct {
+type MarketplaceCache struct {
 	mu       sync.Mutex
 	entries  map[string]*marketplaceCacheEntry
 	keyLocks sync.Map // map[url]*sync.Mutex — per-URL, so same-URL resolves dedupe without holding mu
@@ -41,7 +33,7 @@ type marketplaceCache struct {
 }
 
 // NewMarketplaceCache creates a cache backed by git with a default TTL.
-func NewMarketplaceCache(gitClient git.Client) MarketplaceCache {
+func NewMarketplaceCache(gitClient git.Client) *MarketplaceCache {
 	return newMarketplaceCache(NewRepoResolver(gitClient), defaultMarketplaceTTL)
 }
 
@@ -87,8 +79,8 @@ func NewRepoResolver(gitClient git.Client) RepositoryResolver {
 }
 
 // newMarketplaceCache is the internal constructor for testing.
-func newMarketplaceCache(resolver RepositoryResolver, ttl time.Duration) MarketplaceCache {
-	return &marketplaceCache{
+func newMarketplaceCache(resolver RepositoryResolver, ttl time.Duration) *MarketplaceCache {
+	return &MarketplaceCache{
 		entries:  make(map[string]*marketplaceCacheEntry),
 		ttl:      ttl,
 		resolver: resolver,
@@ -96,16 +88,8 @@ func newMarketplaceCache(resolver RepositoryResolver, ttl time.Duration) Marketp
 	}
 }
 
-// Resolve returns cached skill and agent sources for the given marketplace entry.
-// If the cache entry is missing, expired, or was scanned for a different plugin set,
-// it resolves and (re)scans plugins. A failed resolve is remembered too, on its own
-// shorter TTL, so a dead marketplace costs one attempt per window instead of one per
-// session create.
-//
-// The shared mu is held only for the entries lookup/store; the slow resolve (a git
-// clone/pull that can block on a hung remote) runs under a per-URL lock instead, so
-// one stuck URL can't wedge every other session's Resolve.
-func (c *marketplaceCache) Resolve(
+// Resolution is serialized per URL so one blocked remote cannot stall other entries.
+func (c *MarketplaceCache) resolve(
 	ctx context.Context,
 	entry config.MarketplaceEntry,
 ) ([]sourceInfo, []sourceInfo, error) {
@@ -136,7 +120,7 @@ func (c *marketplaceCache) Resolve(
 
 // scan produces the entry to store, reusing a still-fresh repo path so a second
 // config entry for the same URL only scans its missing plugins instead of re-cloning.
-func (c *marketplaceCache) scan(
+func (c *MarketplaceCache) scan(
 	ctx context.Context,
 	entry config.MarketplaceEntry,
 ) (*marketplaceCacheEntry, error) {
@@ -177,7 +161,7 @@ func (c *marketplaceCache) scan(
 }
 
 // lookup returns a fresh entry's answer under mu, or ok=false when work is needed.
-func (c *marketplaceCache) lookup(entry config.MarketplaceEntry) (cacheResult, bool) {
+func (c *MarketplaceCache) lookup(entry config.MarketplaceEntry) (cacheResult, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -200,7 +184,7 @@ func (c *marketplaceCache) lookup(entry config.MarketplaceEntry) (cacheResult, b
 }
 
 // reusable returns a mutable copy of a fresh successful entry for the URL.
-func (c *marketplaceCache) reusable(url string) (*marketplaceCacheEntry, bool) {
+func (c *MarketplaceCache) reusable(url string) (*marketplaceCacheEntry, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -213,7 +197,7 @@ func (c *marketplaceCache) reusable(url string) (*marketplaceCacheEntry, bool) {
 }
 
 // ttlFor keeps the negative TTL from outliving a short success TTL in tests.
-func (c *marketplaceCache) ttlFor(cached *marketplaceCacheEntry) time.Duration {
+func (c *MarketplaceCache) ttlFor(cached *marketplaceCacheEntry) time.Duration {
 	if cached.err != nil {
 		return min(c.ttl, failedMarketplaceTTL)
 	}
@@ -221,7 +205,7 @@ func (c *marketplaceCache) ttlFor(cached *marketplaceCacheEntry) time.Duration {
 	return c.ttl
 }
 
-func (c *marketplaceCache) store(url string, cached *marketplaceCacheEntry) {
+func (c *MarketplaceCache) store(url string, cached *marketplaceCacheEntry) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -229,7 +213,7 @@ func (c *marketplaceCache) store(url string, cached *marketplaceCacheEntry) {
 }
 
 // lockURL serializes resolves of the same URL without holding mu across the git op.
-func (c *marketplaceCache) lockURL(url string) func() {
+func (c *MarketplaceCache) lockURL(url string) func() {
 	actual, _ := c.keyLocks.LoadOrStore(url, &sync.Mutex{})
 	mu, _ := actual.(*sync.Mutex)
 	mu.Lock()

@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-// FileReadRecord is the fingerprint recorded after a session observed a file.
+// FileReadRecord captures a file's metadata and content hash when read by a session.
 type FileReadRecord struct {
 	MtimeUnixNano int64
 	Size          int64

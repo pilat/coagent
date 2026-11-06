@@ -90,7 +90,15 @@ func TestService_CancelPendingSleepsPreservesStandaloneInput(t *testing.T) {
 
 	now := time.Now().UTC()
 	standaloneAt := now.Add(time.Hour)
-	_, err = schedStore.AddSchedule(ctx, rec.ID, "", &standaloneAt, "standalone input", false)
+	_, err = schedStore.AddSchedule(
+		ctx,
+		rec.ID,
+		"",
+		&standaloneAt,
+		"standalone input",
+		false,
+		schedule.ScheduleMetadata{},
+	)
 	require.NoError(t, err)
 
 	svc := schedule.NewService(schedStore, sessStore)

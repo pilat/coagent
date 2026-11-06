@@ -26,7 +26,7 @@ func rejectNonRegular(path string) error {
 }
 
 //nolint:wsl_v5 // Missing and non-regular targets are the two rooted metadata outcomes.
-func rejectNonRegularAccess(access safefile.Access, path string) error {
+func rejectNonRegularAccess(access *safefile.Access, path string) error {
 	if access == nil || access.Scope() != safefile.ProjectConfined {
 		return rejectNonRegular(path)
 	}
@@ -46,7 +46,7 @@ func rejectNonRegularAccess(access safefile.Access, path string) error {
 }
 
 //nolint:wsl_v5 // Rooted and host-readable target resolution converge here.
-func resolveAccessTarget(access safefile.Access, workDir, name string) (string, error) {
+func resolveAccessTarget(access *safefile.Access, workDir, name string) (string, error) {
 	if access == nil {
 		return resolvePath(workDir, name), nil
 	}
@@ -59,7 +59,7 @@ func resolveAccessTarget(access safefile.Access, workDir, name string) (string, 
 }
 
 //nolint:wsl_v5 // The rooted handle remains open through validation and read.
-func readAccessFile(access safefile.Access, name string) ([]byte, error) {
+func readAccessFile(access *safefile.Access, name string) ([]byte, error) {
 	if access == nil {
 		content, err := os.ReadFile(name)
 		if err != nil {

@@ -48,12 +48,13 @@ var builtinAgentTypes = map[AgentType]AgentTypeConfig{
 		OmitProjectContext: true,
 	},
 	AgentTypeBrowser: {
-		Name:               AgentTypeBrowser,
-		Description:        "Drive the project's Playwright browser with browser tools only. Receives no project context; supply a self-contained goal, constraints, starting URL or site, and the facts to return.",
-		Mode:               ModeSubagent,
-		Tools:              []string{tool.PlaywrightToolPrefix + "*"},
-		Prompt:             BrowserAgentPrompt,
-		OmitProjectContext: true,
+		Name:                    AgentTypeBrowser,
+		Description:             "Drive the project's Playwright browser with browser tools only. Receives no project context; supply a self-contained goal, constraints, starting URL or site, and the facts to return.",
+		Mode:                    ModeSubagent,
+		Tools:                   []string{tool.PlaywrightToolPrefix + "*"},
+		Prompt:                  BrowserAgentPrompt,
+		OmitProjectContext:      true,
+		DisableIntegratedSearch: true,
 	},
 	AgentTypeCompaction: {
 		Name:        AgentTypeCompaction,
@@ -78,7 +79,8 @@ type (
 		Model       string // optional model override for this agent type
 		// OmitProjectContext keeps a built-in specialist's startup prompt lean.
 		// Project-defined subagents default to the full session context.
-		OmitProjectContext bool
+		OmitProjectContext      bool
+		DisableIntegratedSearch bool
 	}
 )
 

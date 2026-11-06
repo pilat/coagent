@@ -10,9 +10,6 @@ import (
 	"github.com/pilat/coagent/internal/controllerapi"
 )
 
-// parseNewCommand recognizes the /new command in either form: bare (picker) or
-// with a name argument (create). Reports ok=false for anything else. Names may
-// contain spaces, so the whole remainder after "/new " is the argument.
 func parseNewCommand(text string) (string, bool) {
 	if text == "/new" {
 		return "", true
@@ -27,99 +24,74 @@ func parseNewCommand(text string) (string, bool) {
 
 func (m *Manager) handleNew(ctx context.Context, name string) {
 	if name == "" {
-		m.handleNewPicker(ctx, 0, 0)
+		m.listProjects(ctx)
 		return
 	}
 
-	m.createAndLaunchProject(ctx, name)
-}
-
-// createAndLaunchProject provisions the named folder-project daemon-side (mkdir +
-// get-or-create, idempotent) and opens a fresh session on it via the standard
-// post-pick launch path. Shared by /new <name> and the picker's pick callback.
-func (m *Manager) createAndLaunchProject(ctx context.Context, name string) {
 	result, err := m.controller.CreateProject(ctx, controllerapi.ProjectCreateData{Name: name})
 	if err != nil {
-		_, _ = m.sendMessage(ctx, "❌ "+err.Error(), nil, m.serviceTopicID)
+		_, _ = m.sendMessage(ctx, strings.ReplaceAll(err.Error(), "\n", " "))
 		return
 	}
 
 	m.handleLaunch(ctx, result.Path)
 }
 
-func (m *Manager) handleNewPicker(ctx context.Context, offset int, messageID int64) {
+func (m *Manager) listProjects(ctx context.Context) {
 	result, err := m.controller.ListRecentProjects(ctx)
 	if err != nil {
-		m.sendOrEdit(ctx, messageID, "Failed to list projects: "+err.Error(), nil)
+		_, _ = m.sendMessage(ctx, strings.ReplaceAll("Failed to list projects: "+err.Error(), "\n", " "))
 		return
 	}
 
 	if len(result.Projects) == 0 {
-		m.sendOrEdit(ctx, messageID, "No projects yet. Create one with /new <name>.", nil)
+		_, _ = m.sendMessage(ctx, strings.ReplaceAll("No projects yet. Create one with /new <name>.", "\n", " "))
 		return
 	}
 
-	total := len(result.Projects)
-	if offset < 0 || offset > total {
-		offset = 0
+	lines := []string{"Projects — open with /new <name>:"}
+	for i, project := range result.Projects {
+		lines = append(lines, fmt.Sprintf("%d. %s · %s", i+1, project.Name, relativeAge(project.LastActivity)))
 	}
 
-	start, end, hasMore := dirPageBounds(total, offset)
-	keyboard := buildNewPickerKeyboard(result.Projects[start:end], offset, hasMore)
-
-	pageInfo := ""
-	if total > foldersPerPage {
-		pageInfo = fmt.Sprintf(" (%d-%d of %d)", start+1, end, total)
-	}
-
-	m.sendOrEdit(ctx, messageID, "🗂 Projects"+pageInfo, &tgReplyMarkup{InlineKeyboard: keyboard})
+	_, _ = m.sendMessage(ctx, strings.Join(lines, "\n"))
 }
 
-// sendOrEdit posts a fresh service-topic message, or edits an existing one when
-// messageID is set (pagination replaces the keyboard in place).
-func (m *Manager) sendOrEdit(ctx context.Context, messageID int64, text string, markup *tgReplyMarkup) {
-	if messageID > 0 {
-		_ = m.editMessageText(ctx, messageID, text, markup)
+func (m *Manager) handleSpawn(ctx context.Context, path string) {
+	if path != "" {
+		m.handleLaunch(ctx, path)
 		return
 	}
 
-	_, _ = m.sendMessage(ctx, text, markup, m.serviceTopicID)
+	favorites, err := m.controller.SpawnFavorites(ctx)
+	if err != nil {
+		_, _ = m.sendMessage(ctx, strings.ReplaceAll("Failed to list favorites: "+err.Error(), "\n", " "))
+		return
+	}
+
+	lines := []string{"Usage: /spawn <path>."}
+	if len(favorites) > 0 {
+		lines = append(lines, "Favorites:")
+		lines = append(lines, favorites...)
+	}
+
+	_, _ = m.sendMessage(ctx, strings.Join(lines, "\n"))
 }
 
-// buildNewPickerKeyboard renders one already-paginated page: one project per row
-// (name + relative age), then a nav row. Callbacks carry the numeric project id
-// (newpick) and page offset (newpage) — never a name (a cyrillic name blows the
-// 64-byte callback limit) and never a nav id (those reset on every /spawn).
-func buildNewPickerKeyboard(projects []controllerapi.RecentProjectInfo, offset int, hasMore bool) [][]tgInlineButton {
-	keyboard := make([][]tgInlineButton, 0, len(projects)+1)
-	for _, p := range projects {
-		keyboard = append(keyboard, []tgInlineButton{{
-			Text:         p.Name + " · " + relativeAge(p.LastActivity),
-			CallbackData: "newpick:" + strconv.FormatInt(p.ID, 10),
-		}})
+func (m *Manager) handleLaunch(ctx context.Context, path string) {
+	m.createAndSwitch(ctx, controllerapi.SessionCreateData{
+		WorkDir: path, Attributes: map[string]any{"channel": telegramChannel},
+	})
+}
+
+func (m *Manager) createAndSwitch(ctx context.Context, data controllerapi.SessionCreateData) {
+	id, err := m.controller.CreateSession(ctx, data)
+	if err != nil {
+		_, _ = m.sendMessage(ctx, strings.ReplaceAll(err.Error(), "\n", " "))
+		return
 	}
 
-	pagination := make([]tgInlineButton, 0, 2)
-
-	if offset > 0 {
-		pagination = append(pagination, tgInlineButton{
-			Text:         "⬅️ Back",
-			CallbackData: "newpage:" + strconv.Itoa(offset-foldersPerPage),
-		})
-	}
-
-	if hasMore {
-		pagination = append(pagination, tgInlineButton{
-			Text:         "➡️ More",
-			CallbackData: "newpage:" + strconv.Itoa(offset+foldersPerPage),
-		})
-	}
-
-	if len(pagination) > 0 {
-		keyboard = append(keyboard, pagination)
-	}
-
-	return keyboard
+	m.switchChat(ctx, id)
 }
 
 func relativeAge(t *time.Time) string {
@@ -139,31 +111,4 @@ func formatAge(d time.Duration) string {
 	default:
 		return strconv.Itoa(int(d.Hours()/24)) + "d"
 	}
-}
-
-func (m *Manager) handleCallbackNewPick(ctx context.Context, cb *telegramCallbackData, action callbackAction) {
-	m.answerCallback(ctx, cb.ID, "Opening...")
-
-	// The callback carries only the project id, so re-list to resolve its name
-	// (keeps stale picker keyboards valid — no per-picker state to go stale). Then
-	// re-run the full /new flow, which recreates the folder if it was removed.
-	result, err := m.controller.ListRecentProjects(ctx)
-	if err != nil {
-		_, _ = m.sendMessage(ctx, "❌ Failed to open project: "+err.Error(), nil, m.serviceTopicID)
-		return
-	}
-
-	for _, p := range result.Projects {
-		if p.ID == action.ProjectID {
-			m.createAndLaunchProject(ctx, p.Name)
-			return
-		}
-	}
-
-	_, _ = m.sendMessage(ctx, "Project no longer available.", nil, m.serviceTopicID)
-}
-
-func (m *Manager) handleCallbackNewPage(ctx context.Context, cb *telegramCallbackData, action callbackAction) {
-	m.answerCallback(ctx, cb.ID, "")
-	m.handleNewPicker(ctx, action.Offset, cb.Message.MessageID)
 }

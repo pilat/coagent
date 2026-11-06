@@ -29,7 +29,7 @@ func TestMigrate_ManagerOutboxBackfillSeedsExistingManagerRoots(t *testing.T) {
 
 	seedManagerOwnedSessionsAtV24(t, db)
 
-	_, err = provider.Up(ctx)
+	_, err = provider.UpTo(ctx, 25)
 	require.NoError(t, err)
 
 	rows := dumpRows(
@@ -46,16 +46,21 @@ func TestMigrate_ManagerOutboxBackfillSeedsExistingManagerRoots(t *testing.T) {
 		rows[0]["attributes"].String)
 	assert.Equal(t, "session:152:opened", rows[0]["source_key"].String)
 
-	// The stored fingerprint must match the store's own contract for the same
-	// row, so a future re-enqueue replays as an idempotent no-op.
-	require.Equal(t,
-		sessionstore.OutputFingerprint(
-			sessionstore.OutputSessionOpened, "", 152,
-			map[string]any{"name": "p", "work_dir": "/tmp/p"},
-		),
+	require.Equal(
+		t,
+		openedFingerprint(152, "p", "/tmp/p"),
 		rows[0]["fingerprint"].String,
-		"backfill fingerprint must equal sessionstore.OutputFingerprint",
 	)
+	_, err = provider.Up(ctx)
+	require.NoError(t, err)
+	output, err := sessionstore.NewStore(db).EnqueueOutput(ctx, sessionstore.OutputDraft{
+		SessionID: 152, Type: sessionstore.OutputSessionOpened, SourceKey: "session:152:opened",
+		Attributes: map[string]any{"name": "p", "work_dir": "/tmp/p"},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	assert.True(t, output.Existing)
+	assert.Equal(t, 1, countRows(t, db, "session_outbox", "1 = 1"))
 }
 
 // seedManagerOwnedSessionsAtV24 writes the boundary cases: one live

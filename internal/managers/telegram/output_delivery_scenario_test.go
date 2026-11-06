@@ -5,10 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -44,40 +45,29 @@ import (
 const delayedTelegramManagerID = "telegram-delayed"
 
 type delayedTelegramHarness struct {
-	controller controllerapi.Controller
-	sessions   *sessionstore.Store
-	service    daemon.Service
-	workDir    string
-	recorder   *delayedTelegramRecorder
+	controller  controllerapi.Controller
+	controllers controllerapi.ManagerControllerFactory
+	sessions    *sessionstore.Store
+	service     *daemon.Service
+	workDir     string
+	recorder    *delayedTelegramRecorder
 }
 
-// A real session can commit while Telegram is down. Starting the production
-// renderer later must create its surface and deliver that pre-existing answer.
+// A selected session's committed output must survive the manager being offline.
 func TestHarnessScenario_DelayedTelegramManagerDrainsRealSessionOutput(t *testing.T) {
 	h := newDelayedTelegramHarness(t)
 	sessionID := h.produceBeforeManager(t)
-	h.waitForBacklog(t)
+	h.waitForBacklog(t, sessionID)
+	chat := h.controller.(controllerapi.ChatFocusController)
+	require.NoError(t, chat.SetChatFocus(t.Context(), strconv.FormatInt(harnessChatID, 10), sessionID))
 
-	manager, err := New(config.ManagerEntry{
-		ID: delayedTelegramManagerID, BotToken: "test-token", TargetChatID: new(int64(harnessChatID)),
-	}, &config.UnifiedConfig{}, h.controller)
-	require.NoError(t, err)
-	manager.httpClient = &http.Client{Transport: h.recorder}
+	manager := newChatTelegramManager(t, h)
 	require.NoError(t, manager.Start(t.Context()))
 	t.Cleanup(func() { require.NoError(t, manager.Stop(context.Background())) })
-
-	require.Eventually(t, func() bool {
-		return h.recorder.hasMessagePrefix("delayed telegram answer\n\n")
-	}, 5*time.Second, 10*time.Millisecond, "the delayed manager must render its persisted answer")
-	require.Eventually(t, func() bool {
-		status, statusErr := h.sessions.OutputQueueStatus(t.Context(), delayedTelegramManagerID)
-		return statusErr == nil && status.Pending == 0
-	}, 10*time.Second, 10*time.Millisecond, "the production telegram adapter must acknowledge every queued row")
-
-	calls := h.recorder.snapshot()
-	assert.True(t, hasTelegramMethod(calls, "createForumTopic"), "session delivery must establish a forum topic")
-	assert.False(t, hasTelegramMessage(calls, "Task accepted"))
-	assert.True(t, hasTelegramMessagePrefix(calls, "delayed telegram answer\n\n"))
+	awaitChatTail(t, h, sessionID)
+	assert.True(t, hasTelegramMessage(h.recorder.snapshot(), fmt.Sprintf(
+		"<b>#%d project · finish before telegram starts</b>\n\ndelayed telegram answer", sessionID)))
+	assert.False(t, hasTelegramMessage(h.recorder.snapshot(), "Task accepted"))
 	assert.NotZero(t, sessionID)
 }
 
@@ -122,7 +112,7 @@ func newDelayedTelegramHarnessWithClient(
 		)
 	}
 	bus := sessionbus.New()
-	progress := progressruntime.New(sessions, bus)
+	progress := progressruntime.New(sessions)
 	service := daemon.New(
 		context.Background(),
 		build,
@@ -141,20 +131,19 @@ func newDelayedTelegramHarnessWithClient(
 		),
 	)
 
-	t.Cleanup(func() { service.Shutdown(3 * time.Second) })
+	t.Cleanup(func() { service.Shutdown(context.Background(), 3*time.Second) })
 	controllers := managercontrol.New(
 		service,
 		sessions,
 		managerdiscovery.New(sessions, cfg, nil),
-		progress,
 		bus,
 		cfg,
 		nil,
 	)
 
 	return &delayedTelegramHarness{
-		controller: controllers.ForManager(delayedTelegramManagerID), sessions: sessions,
-		service: service, workDir: workDir, recorder: &delayedTelegramRecorder{nextTopicID: 7000},
+		controller: controllers.ForManager(delayedTelegramManagerID), controllers: controllers, sessions: sessions,
+		service: service, workDir: workDir, recorder: &delayedTelegramRecorder{},
 	}
 }
 
@@ -175,17 +164,16 @@ func TestHarnessScenario_StartFailureCannotFloodTelegram(t *testing.T) {
 		require.NoError(t, err)
 		assert.False(t, reported)
 	}
+	chat := h.controller.(controllerapi.ChatFocusController)
+	require.NoError(t, chat.SetChatFocus(t.Context(), strconv.FormatInt(harnessChatID, 10), id))
 	for round := range 2 {
 		manager, err := New(config.ManagerEntry{
-			ID: delayedTelegramManagerID, BotToken: "test-token", TargetChatID: new(int64(harnessChatID)),
+			ID: delayedTelegramManagerID, BotToken: "test-token", AllowedUserIDs: []int64{harnessChatID},
 		}, &config.UnifiedConfig{}, h.controller)
 		require.NoError(t, err)
 		manager.httpClient = &http.Client{Transport: h.recorder}
 		require.NoError(t, manager.Start(t.Context()))
-		require.Eventually(t, func() bool {
-			status, err := h.sessions.OutputQueueStatus(t.Context(), delayedTelegramManagerID)
-			return err == nil && status.Pending == 0
-		}, 10*time.Second, 10*time.Millisecond)
+		awaitChatTail(t, h, id)
 		require.NoError(t, manager.Stop(context.Background()))
 		count := 0
 		for _, call := range h.recorder.snapshot() {
@@ -211,12 +199,35 @@ func (h *delayedTelegramHarness) produceBeforeManager(t *testing.T) int64 {
 	return sessionID
 }
 
-func (h *delayedTelegramHarness) waitForBacklog(t *testing.T) {
+func (h *delayedTelegramHarness) waitForBacklog(t *testing.T, sessionID int64) {
 	t.Helper()
+	chat := h.controller.(controllerapi.ChatFocusController)
 	require.Eventually(t, func() bool {
-		status, err := h.sessions.OutputQueueStatus(t.Context(), delayedTelegramManagerID)
-		return err == nil && status.Pending >= 2
-	}, 10*time.Second, 10*time.Millisecond, "the real session must commit lifecycle and answer before manager start")
+		rows, err := chat.ChatOutputs(t.Context(), strconv.FormatInt(harnessChatID, 10), sessionID, 0, 100)
+		if err != nil {
+			return false
+		}
+		for _, row := range rows {
+			if row.Content == "delayed telegram answer" {
+				return true
+			}
+		}
+		return false
+	}, 10*time.Second, 10*time.Millisecond)
+}
+
+func awaitChatTail(t *testing.T, h *delayedTelegramHarness, sessionID int64) {
+	t.Helper()
+	chat := h.controller.(controllerapi.ChatFocusController)
+	key := strconv.FormatInt(harnessChatID, 10)
+	require.Eventually(t, func() bool {
+		focus, cursor, entered, err := chat.ChatCursor(t.Context(), key)
+		if err != nil || focus != sessionID || !entered {
+			return false
+		}
+		rows, err := chat.ChatOutputs(t.Context(), key, sessionID, cursor, 100)
+		return err == nil && len(rows) == 0
+	}, 5*time.Second, 10*time.Millisecond)
 }
 
 type delayedTelegramClient struct{}
@@ -242,14 +253,16 @@ func (delayedTelegramClient) GetReasoningLevel() string              { return "m
 func (delayedTelegramClient) SetSessionID(string)                    {}
 
 type delayedTelegramCall struct {
-	Method string
-	Text   string
+	Method    string
+	Text      string
+	ChatID    int64
+	ParseMode string
 }
 
 type delayedTelegramRecorder struct {
-	mu          sync.Mutex
-	calls       []delayedTelegramCall
-	nextTopicID int64
+	mu            sync.Mutex
+	calls         []delayedTelegramCall
+	sendResponses []string
 }
 
 func (r *delayedTelegramRecorder) RoundTrip(request *http.Request) (*http.Response, error) {
@@ -259,45 +272,51 @@ func (r *delayedTelegramRecorder) RoundTrip(request *http.Request) (*http.Respon
 		return nil, request.Context().Err()
 	}
 
-	var payload struct {
-		Text string `json:"text"`
+	if !slices.Contains([]string{"getMe", "getChat", "setMyCommands", "sendMessage", "sendChatAction"}, method) {
+		return nil, fmt.Errorf("unexpected Telegram method %s", method)
 	}
-	if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+
+	var payload struct {
+		Text        string          `json:"text"`
+		ChatID      int64           `json:"chat_id"`
+		ParseMode   string          `json:"parse_mode"`
+		Commands    json.RawMessage `json:"commands"`
+		LinkPreview json.RawMessage `json:"link_preview_options"`
+		Action      string          `json:"action"`
+	}
+	decoder := json.NewDecoder(request.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&payload); err != nil {
 		return nil, fmt.Errorf("decode %s request: %w", method, err)
 	}
 
 	r.mu.Lock()
-	r.calls = append(r.calls, delayedTelegramCall{Method: method, Text: payload.Text})
-	if method == "createForumTopic" {
-		r.nextTopicID++
+	r.calls = append(r.calls, delayedTelegramCall{
+		Method: method, Text: payload.Text, ChatID: payload.ChatID, ParseMode: payload.ParseMode,
+	})
+	response := ""
+	if method == "sendMessage" && len(r.sendResponses) > 0 {
+		response, r.sendResponses = r.sendResponses[0], r.sendResponses[1:]
 	}
-	topicID := r.nextTopicID
 	r.mu.Unlock()
 
-	result := `true`
+	if response != "" {
+		return harnessResponse(request, response), nil
+	}
+
+	result := "true"
 	switch method {
 	case "getMe":
 		result = `{"id":42}`
 	case "getChat":
-		result = fmt.Sprintf(`{"id":%d,"type":"supergroup","is_forum":true}`, harnessChatID)
-	case "getChatMember":
-		result = `{"status":"administrator","can_manage_topics":true,"can_delete_messages":true}`
-	case "createForumTopic":
-		result = fmt.Sprintf(`{"message_thread_id":%d}`, topicID)
+		result = fmt.Sprintf(`{"id":%d,"type":"private"}`, harnessChatID)
 	case "sendMessage":
-		result = fmt.Sprintf(`{"message_id":123,"message_thread_id":%d}`, topicID)
+		if strings.TrimSpace(payload.Text) == "" {
+			return harnessResponse(request, `{"ok":false,"error_code":400,"description":"message text is empty"}`), nil
+		}
+		result = `{"message_id":123}`
 	}
-
-	return &http.Response{
-		StatusCode: http.StatusOK,
-		Header:     make(http.Header),
-		Body:       io.NopCloser(strings.NewReader(`{"ok":true,"result":` + result + `}`)),
-		Request:    request,
-	}, nil
-}
-
-func (r *delayedTelegramRecorder) hasMessagePrefix(prefix string) bool {
-	return hasTelegramMessagePrefix(r.snapshot(), prefix)
+	return harnessResponse(request, `{"ok":true,"result":`+result+"}"), nil
 }
 
 func (r *delayedTelegramRecorder) snapshot() []delayedTelegramCall {
@@ -307,31 +326,9 @@ func (r *delayedTelegramRecorder) snapshot() []delayedTelegramCall {
 	return append([]delayedTelegramCall(nil), r.calls...)
 }
 
-func hasTelegramMethod(calls []delayedTelegramCall, method string) bool {
-	for _, call := range calls {
-		if call.Method == method {
-			return true
-		}
-	}
-
-	return false
-}
-
 func hasTelegramMessage(calls []delayedTelegramCall, text string) bool {
 	for _, call := range calls {
 		if call.Method == "sendMessage" && call.Text == text {
-			return true
-		}
-	}
-
-	return false
-}
-
-// The final output carries the compact progress footer appended by the session
-// loop, so the drained answer is matched by prefix, not by full equality.
-func hasTelegramMessagePrefix(calls []delayedTelegramCall, prefix string) bool {
-	for _, call := range calls {
-		if call.Method == "sendMessage" && strings.HasPrefix(call.Text, prefix) {
 			return true
 		}
 	}

@@ -35,10 +35,7 @@ func TestScenario_ASecondSessionCannotOverwriteAStagedApply(t *testing.T) {
 	configDir := newApplyConfigDir(t)
 	first := newApplyDaemonWith(t, dbPath, configDir, twoSessionApplyRespond)
 	first.startInboxWake()
-	sessionA, err := first.mgr.Send(
-		first.ctx, first.projectID, "APPLY_A switch the default model", "fake-model", managerAttrs("telegram:main"),
-	)
-	require.NoError(t, err)
+	sessionA := openConfigRoot(t, first, "telegram:main", "APPLY_A switch the default model")
 	first.waitUntil("A's opener settled", func() bool { return !first.mgr.HasActiveLoop(sessionA) })
 	first.waitUntil("session idle", func() bool { return !first.mgr.HasActiveLoop(sessionA) })
 	first.startInboxWake()
@@ -55,10 +52,7 @@ func TestScenario_ASecondSessionCannotOverwriteAStagedApply(t *testing.T) {
 
 	// B stages against the config A is already restarting into.
 	first.startInboxWake()
-	sessionB, err := first.mgr.Send(
-		first.ctx, first.projectID, "APPLY_B switch the default model", "fake-model", managerAttrs("telegram:main"),
-	)
-	require.NoError(t, err)
+	sessionB := openConfigRoot(t, first, "telegram:other", "APPLY_B switch the default model")
 	first.waitUntil("B's opener settled", func() bool { return !first.mgr.HasActiveLoop(sessionB) })
 	first.waitUntil("session idle", func() bool { return !first.mgr.HasActiveLoop(sessionB) })
 	first.startInboxWake()
@@ -96,7 +90,7 @@ func TestScenario_ASecondSessionCannotOverwriteAStagedApply(t *testing.T) {
 func TestScenario_AVerdictOwedToAKilledSessionIsRefused(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "apply.db")
 	configDir := newApplyConfigDir(t)
-	sessionID := stageApplyAndStop(t, dbPath, configDir)
+	sessionID := stagePlainRootApplyAndStop(t, dbPath, configDir)
 	second := newApplyDaemon(t, dbPath, configDir)
 	require.NoError(t, second.mgr.Start(second.ctx))
 	require.NoError(t, second.mgr.sendToSession(second.ctx, sessionID, "/kill"))
@@ -125,7 +119,13 @@ func TestScenario_ConcurrentAppliesResolveExactlyOnce(t *testing.T) {
 	for _, prompt := range []string{"APPLY_A switch the default model", "APPLY_B switch the default model"} {
 		wg.Go(func() {
 			first.startInboxWake()
-			id, err := first.mgr.Send(first.ctx, first.projectID, prompt, "fake-model", managerAttrs("telegram:main"))
+			id, err := first.mgr.Send(
+				first.ctx,
+				first.projectID,
+				prompt,
+				"fake-model",
+				managerAttrs("telegram:"+prompt[:7]),
+			)
 			mu.Lock()
 			sessions[prompt[:7]] = id
 			sendErrs = append(sendErrs, err)
@@ -201,7 +201,7 @@ func TestRunStagedApply_RefusesToCommitForASuspendTheTranscriptDoesNotCarry(t *t
 	pending, err := h.mgr.applier.Ops().LoadPending()
 	require.NoError(t, err)
 	assert.Nil(t, pending, "no marker is armed for a call no boot could answer")
-	assert.False(t, h.mgr.applier.Has(h.sessionID), "the call is settled in-process, not across a restart")
+	assert.Empty(t, h.mgr.applier.Calls(h.sessionID), "the call is settled in-process, not across a restart")
 	assert.True(t, h.mgr.applier.ClaimApply(), "the slot is free for the next change")
 }
 
@@ -343,12 +343,28 @@ func TestScenario_ConfigApplyCallIsNotReExecutedBeforeItsVerdict(t *testing.T) {
 	_, err = second.bootVerdict(t)
 	require.NoError(t, err)
 	second.waitUntil("config result", func() bool {
-		return hasToolResultFor(second.messages(sessionID), tool.IDConfigEdit) && !second.mgr.HasActiveLoop(sessionID)
+		var results int
+		require.NoError(t, second.db.QueryRowContext(second.ctx, `SELECT COUNT(*) FROM messages
+			WHERE session_id = ? AND role = 'tool' AND tool_call_id = ?`, sessionID, applyCallID).Scan(&results))
+		return results == 1 && !second.mgr.HasActiveLoop(sessionID)
 	})
 	second.waitUntil("session idle", func() bool { return !second.mgr.HasActiveLoop(sessionID) })
 	final := second.messages(sessionID)
 	require.NoError(t, llm.ValidateToolPairing(final))
-	assert.Equal(t, 1, countToolResultsFor(final, tool.IDConfigEdit))
+	var results, calls int
+	var resultID, followupID int64
+	require.NoError(t, second.db.QueryRowContext(second.ctx, `SELECT COUNT(*), MAX(id) FROM messages
+		WHERE session_id = ? AND role = 'tool' AND tool_call_id = ?`, sessionID, applyCallID).Scan(&results, &resultID))
+	require.NoError(
+		t,
+		second.db.QueryRowContext(second.ctx, `SELECT COUNT(*) FROM messages m, json_each(m.tool_calls) call
+		WHERE m.session_id = ? AND json_extract(call.value, '$.ID') = ?`, sessionID, applyCallID).Scan(&calls),
+	)
+	require.NoError(t, second.db.QueryRowContext(second.ctx, `SELECT accepted_message_id FROM session_inbox
+		WHERE session_id = ? AND raw_content = 'are you done yet?'`, sessionID).Scan(&followupID))
+	assert.Equal(t, 1, results)
+	assert.Equal(t, 1, calls)
+	assert.Greater(t, followupID, resultID)
 	assert.True(t, hasUserContaining(final, "are you done yet?"), "the queued message runs after the verdict")
 }
 
@@ -567,8 +583,7 @@ func TestScenario_ConfigQuestionCannotReplaceDocumentWithSandboxFragment(t *test
 			return textReply("ready")
 		})
 	d.startInboxWake()
-	id, err := d.mgr.Send(d.ctx, d.projectID, "hello", "fake-model", managerAttrs("telegram:main"))
-	require.NoError(t, err)
+	id := openConfigRoot(t, d, "telegram:main", "hello")
 	d.waitUntil("opening turn settled", func() bool { return !d.mgr.HasActiveLoop(id) })
 	require.NoError(t, d.mgr.sendToSession(d.ctx, id, "/config - is the sandbox unconfigured?"))
 	d.waitUntil("invalid replacement answered", func() bool {
@@ -650,10 +665,7 @@ func TestScenario_ConfigEditWithoutActivationNeverStages(t *testing.T) {
 	// The responder calls config_edit; no activation exists, so the session must
 	// be answered with the authorization refusal, in-process.
 	d.startInboxWake()
-	sessionID, err := d.mgr.Send(
-		d.ctx, d.projectID, "reconfigure the daemon", "fake-model", managerAttrs("telegram:main"),
-	)
-	require.NoError(t, err)
+	sessionID := openConfigRoot(t, d, "telegram:main", "reconfigure the daemon")
 	d.waitUntil("refusal stored", func() bool {
 		return countToolResultsFor(d.messages(sessionID), tool.IDConfigEdit) == 1
 	})
@@ -781,13 +793,13 @@ func TestConfigTool_SuccessStagesAndSuspends(t *testing.T) {
 	h := newConfigHarness(t)
 	require.ErrorIs(t, h.grantedCall(t, "c1", configHarnessCandidate), tool.ErrSuspend)
 	assert.Equal(t, toolConfig, h.configBytes(t), "nothing is written by the tool itself")
-	assert.True(t, h.mgr.applier.Has(h.sessionID))
+	assert.NotEmpty(t, h.mgr.applier.Calls(h.sessionID))
 	assert.Equal(t, map[string]string{"c1": tool.IDConfigEdit}, h.mgr.applier.Calls(h.sessionID))
 	assert.Equal(t, 0, h.restartCount())
 	h.mgr.applier.RunStagedApply(context.Background(), h.sessionID)
 	assert.Equal(t, 1, h.restartCount(), "the apply asks the daemon to come back")
 	assert.Contains(t, h.configBytes(t), "id: claude-opus-5\n      provider: work\n    - id: claude-sonnet-5")
-	assert.True(t, h.mgr.applier.Has(h.sessionID), "the call stays open until its verdict arrives")
+	assert.NotEmpty(t, h.mgr.applier.Calls(h.sessionID), "the call stays open until its verdict arrives")
 }
 
 // Guard violations are ordinary tool errors: nothing staged, no suspend, no
@@ -814,7 +826,7 @@ func TestConfigTool_GuardViolationsAreImmediateErrors(t *testing.T) {
 		require.NotErrorIs(t, err, tool.ErrSuspend)
 		assert.Contains(t, err.Error(), "document is required")
 	})
-	assert.False(t, h.mgr.applier.Has(h.sessionID))
+	assert.Empty(t, h.mgr.applier.Calls(h.sessionID))
 	assert.Equal(t, 0, h.restartCount())
 	assert.Equal(t, toolConfig, h.configBytes(t))
 }
@@ -838,7 +850,7 @@ func TestConfigTool_TwoAppliesInSequence(t *testing.T) {
 
 	// The daemon comes back and delivers the verdict.
 	h.restart(t, "c1", tool.IDConfigEdit)
-	assert.False(t, h.mgr.applier.Has(h.sessionID))
+	assert.Empty(t, h.mgr.applier.Calls(h.sessionID))
 	require.ErrorIs(t, h.grantedCall(t, "c2", toolConfig), tool.ErrSuspend)
 	h.mgr.applier.RunStagedApply(ctx, h.sessionID)
 	assert.Equal(t, 2, h.restartCount())
@@ -857,7 +869,6 @@ func TestConfigTool_RefusesWithoutACallID(t *testing.T) {
 	assert.Contains(t, err.Error(), "tool_call id")
 }
 
-// config_edit lives on every root session with an applier, never on children.
 // The tool description states the restart contract a caller cannot see.
 func TestConfigTool_DescriptionsCarryTheContract(t *testing.T) {
 	h := newConfigHarness(t)
@@ -891,7 +902,7 @@ func TestConfigTool_DeliversOneVerdictAfterRestart(t *testing.T) {
 	require.ErrorIs(t, h.grantedCall(t, "tags-1", configHarnessCandidate), tool.ErrSuspend)
 	h.mgr.applier.RunStagedApply(context.Background(), h.sessionID)
 	h.restart(t, "tags-1", tool.IDConfigEdit)
-	assert.False(t, h.mgr.applier.Has(h.sessionID))
+	assert.Empty(t, h.mgr.applier.Calls(h.sessionID))
 	assert.Equal(t, 1, h.restartCount())
 	messages, err := h.sessions.LoadActiveMessages(context.Background(), h.sessionID)
 	require.NoError(t, err)
@@ -974,7 +985,7 @@ func twoSessionApplyRespond(_ string, msgs []llmwire.Message) *llmwire.Response 
 	if hasToolResultFor(msgs, tool.IDConfigEdit) {
 		return textReply("configuration replaced")
 	}
-	if !hasUserContaining(msgs, configapply.ConfigEditCommand) {
+	if !hasConfigInput(msgs) {
 		return textReply("ready to reconfigure")
 	}
 	if hasUserContaining(msgs, "APPLY_B") {
@@ -1039,10 +1050,9 @@ func testAbandonedConfigCommand(t *testing.T, restart bool) {
 	d := newApplyDaemonWith(t, dbPath, configDir, configEditRespond)
 	defer func() { d.shutdown() }()
 	d.startInboxWake()
-	id, err := d.mgr.Send(d.ctx, d.projectID, "hello", "fake-model", managerAttrs("telegram:main"))
-	require.NoError(t, err)
+	id := openConfigRoot(t, d, "telegram:main", "hello")
 	d.waitUntil("session idle", func() bool { return !d.mgr.HasActiveLoop(id) })
-	_, err = d.db.ExecContext(
+	_, err := d.db.ExecContext(
 		d.ctx,
 		`CREATE TRIGGER reject_config_suspend BEFORE UPDATE OF status ON sessions WHEN NEW.status = 'suspended' BEGIN SELECT RAISE(ABORT, 'injected suspend failure'); END`,
 	)
@@ -1085,7 +1095,11 @@ func testAbandonedConfigCommand(t *testing.T, restart bool) {
 	require.NoError(t, d.mgr.sendToSession(d.ctx, id, "continue after cancellation"))
 	d.waitUntil("session idle", func() bool { return !d.mgr.HasActiveLoop(id) })
 	assert.True(t, hasUserContaining(d.messages(id), "continue after cancellation"))
-	assert.Equal(t, 1, countToolResultsFor(d.messages(id), tool.IDConfigEdit))
+	var results int
+	require.NoError(t, d.db.QueryRowContext(d.ctx, `SELECT COUNT(*) FROM messages
+		WHERE session_id = ? AND role = 'tool' AND tool_name = ?`, id, tool.IDConfigEdit).Scan(&results))
+	assert.Equal(t, 1, results)
+	assert.Equal(t, sessionstore.SessionStatusCompleted, d.session(id).Status)
 	assert.Zero(t, d.restartCount())
 }
 
@@ -1132,13 +1146,13 @@ func testAbandonedApply(t *testing.T, failure string) {
 	d.waitUntil("failed apply settled", func() bool {
 		record, err := d.store.GetSession(d.ctx, id)
 		return err == nil && record.Status == sessionstore.SessionStatusError &&
-			!d.mgr.HasActiveLoop(id) && (failWrite || !d.mgr.applier.Has(id))
+			!d.mgr.HasActiveLoop(id) && (failWrite || len(d.mgr.applier.Calls(id)) == 0)
 	})
 	pending, err := d.store.PeekPending(d.ctx, id)
 	require.NoError(t, err)
 	assert.Equal(t, "keep this input", pending.RawContent)
 	if failWrite {
-		assert.True(t, d.mgr.applier.Has(id))
+		assert.NotEmpty(t, d.mgr.applier.Calls(id))
 		assert.False(t, hasToolResultFor(d.messages(id), tool.IDConfigEdit))
 		_, err = d.db.ExecContext(d.ctx, "DROP TRIGGER reject_apply_result")
 		require.NoError(t, err)
@@ -1149,7 +1163,7 @@ func testAbandonedApply(t *testing.T, failure string) {
 		require.ErrorIs(t, err, sessionstore.ErrNoPendingInput)
 		assert.True(t, hasUserContaining(d.messages(id), "keep this input"))
 	}
-	assert.False(t, d.mgr.applier.Has(id))
+	assert.Empty(t, d.mgr.applier.Calls(id))
 	assert.Contains(t, configLastToolResultContent(d.messages(id), tool.IDConfigEdit), "Config change abandoned")
 	assert.Zero(t, d.restartCount())
 	apply, err := d.ops.LoadPending()
@@ -1162,7 +1176,7 @@ func configEditRespond(_ string, msgs []llmwire.Message) *llmwire.Response {
 	if hasToolResultFor(msgs, tool.IDConfigEdit) {
 		return textReply("configuration replaced")
 	}
-	if hasUserContaining(msgs, configapply.ConfigEditCommand) {
+	if hasConfigInput(msgs) {
 		return callReply(configEditCallID, tool.IDConfigEdit, `{"document":`+mustQuoteJSON(configEditCandidate)+`}`)
 	}
 	return textReply("ready to reconfigure")
@@ -1177,18 +1191,25 @@ func unauthorizedConfigEditRespond(_ string, msgs []llmwire.Message) *llmwire.Re
 	return callReply(configEditCallID, tool.IDConfigEdit, `{"document":`+mustQuoteJSON(configEditCandidate)+`}`)
 }
 
+func hasConfigInput(messages []llmwire.Message) bool {
+	return hasUserContaining(messages, configapply.ConfigEditCommand)
+}
+
 // Settle the opener before durable /config input so grant promotion cannot race the session's initial model call.
 func startConfigEditSession(t *testing.T, d *applyDaemon, prompt string) int64 {
 	t.Helper()
 	d.startInboxWake()
-	sessionID, err := d.mgr.Send(d.ctx, d.projectID, prompt, "fake-model", managerAttrs("telegram:main"))
-	require.NoError(t, err)
-	d.waitUntil("opener turn settled", func() bool {
-		return !d.mgr.HasActiveLoop(sessionID)
-	})
-	d.waitUntil("session idle", func() bool { return !d.mgr.HasActiveLoop(sessionID) })
+	sessionID := openConfigRoot(t, d, "telegram:main", prompt)
 	require.NoError(t, d.mgr.sendToSession(d.ctx, sessionID, configapply.ConfigEditCommand))
 	return sessionID
+}
+
+func openConfigRoot(t *testing.T, d *applyDaemon, owner, prompt string) int64 {
+	t.Helper()
+	id, err := d.mgr.Send(d.ctx, d.projectID, prompt, "fake-model", managerAttrs(owner))
+	require.NoError(t, err)
+	d.waitUntil("root opener settled", func() bool { return !d.mgr.HasActiveLoop(id) })
+	return id
 }
 
 // currentActivationOf returns the session's current grant. A missing grant is
@@ -1304,7 +1325,7 @@ func (h *configHarness) liveSession(t *testing.T) int64 {
 func (h *configHarness) recordCall(t *testing.T, callID, toolName string) {
 	t.Helper()
 	activation, activationErr := h.sessions.PendingActivation(t.Context(), h.sessionID)
-	if activationErr == nil && !h.mgr.applier.Has(h.sessionID) {
+	if activationErr == nil && len(h.mgr.applier.Calls(h.sessionID)) == 0 {
 		_, err := h.sessions.Commit(t.Context(), sessionstore.Commit{
 			SessionID: h.sessionID,
 			Activation: &sessionstore.ActivationChange{
@@ -1314,7 +1335,7 @@ func (h *configHarness) recordCall(t *testing.T, callID, toolName string) {
 		})
 		require.NoError(t, err)
 	}
-	if !h.mgr.applier.Has(h.sessionID) {
+	if len(h.mgr.applier.Calls(h.sessionID)) == 0 {
 		input, err := h.sessions.Enqueue(
 			context.Background(),
 			sessionstore.Input{SessionID: h.sessionID, Source: sessionstore.InputSourceUser, Content: "/config"},
@@ -1413,7 +1434,7 @@ func testConfigDocumentThroughHTTP(t *testing.T, damaged bool) {
 		command, read, edited := false, false, false
 		for _, input := range request.Messages {
 			command = command || input.Role == "user" && strings.Contains(input.Content, "/config")
-			if input.Role == "tool" && input.Name == "read" {
+			if input.Role == "tool" && input.Name == tool.IDConfigRead {
 				read = true
 				sawRead.Store(true)
 				assert.Contains(t, input.Content, "anthropic/claude-sonnet-4.6")
@@ -1422,7 +1443,7 @@ func testConfigDocumentThroughHTTP(t *testing.T, damaged bool) {
 			edited = edited || input.Role == "tool" && input.Name == tool.IDConfigEdit
 		}
 		if command && !edited {
-			name, args := "read", map[string]string{"file_path": configPath}
+			name, args := tool.IDConfigRead, map[string]string{}
 			if read {
 				name, args = tool.IDConfigEdit, map[string]string{"document": candidate}
 			}
@@ -1484,6 +1505,70 @@ func lastToolResultContent(msgs []llmwire.Message, toolName string) string {
 		}
 	}
 	return ""
+}
+
+func TestScenario_ConfigEditFromRoot(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "apply.db")
+	configDir := newApplyConfigDirWith(t, toolConfig)
+	first := newApplyDaemonWith(t, dbPath, configDir, configReadEditRespond)
+	sessionID := startConfigEditSession(t, first, "reconfigure the daemon")
+	first.waitUntil("restart requested", func() bool {
+		select {
+		case <-first.restarts:
+			return true
+		default:
+			return false
+		}
+	})
+	first.waitUntil("config suspended", func() bool {
+		return !first.mgr.HasActiveLoop(sessionID)
+	})
+	pending, err := first.ops.LoadPending()
+	require.NoError(t, err)
+	require.NotNil(t, pending, "the commit leaves a marker naming the waiting session")
+	require.Equal(t, sessionID, pending.SessionID)
+	require.Equal(t, configEditCallID, pending.ToolCallID)
+	require.Equal(t, tool.IDConfigEdit, pending.ToolName)
+	msgs := first.messages(sessionID)
+	assert.Equal(t, 1, countAssistantToolCallsFor(msgs, tool.IDConfigRead))
+	assert.Equal(t, 1, countToolResultsFor(msgs, tool.IDConfigRead))
+	require.Equal(t, 1, countAssistantToolCallsFor(msgs, tool.IDConfigEdit))
+	require.Zero(t, countToolResultsFor(msgs, tool.IDConfigEdit), "the call is out with the world")
+	consumed := currentActivationOf(t, first.harness, sessionID)
+	require.NotNil(t, consumed, "the /config grant exists")
+	require.Equal(t, sessionstore.ActivationConsumed, consumed.State,
+		"the successful apply spends the grant; it may not stay pending")
+	first.shutdown()
+	second := newApplyDaemonWith(t, dbPath, configDir, configReadEditRespond)
+	require.NoError(t, second.mgr.Start(second.ctx))
+	outcome, err := second.bootVerdict(t)
+	require.NoError(t, err)
+	require.True(t, outcome.Verdict.Applied, outcome.Verdict.Reason())
+	assert.False(t, outcome.RolledBack)
+	second.waitUntil("config verdict answered", func() bool {
+		return countToolResultsFor(second.messages(sessionID), tool.IDConfigEdit) == 1 &&
+			!second.mgr.HasActiveLoop(sessionID)
+	})
+	second.waitUntil("session idle", func() bool { return !second.mgr.HasActiveLoop(sessionID) })
+	msgs = second.messages(sessionID)
+	require.NoError(t, llm.ValidateToolPairing(msgs))
+	assert.Equal(t, 1, countAssistantToolCallsFor(msgs, tool.IDConfigEdit),
+		"the suspended call is answered, never re-executed")
+	assert.Equal(t, 1, countToolResultsFor(msgs, tool.IDConfigEdit))
+	assert.Contains(t, lastToolResultContent(msgs, tool.IDConfigEdit), "Config applied")
+	assert.Equal(t, 0, second.restartCount())
+	assert.NoFileExists(t, filepath.Join(configDir, coagenthome.PendingApplyFileName))
+	body, err := os.ReadFile(filepath.Join(configDir, "config.yaml"))
+	require.NoError(t, err)
+	assert.Contains(t, string(body), "id: claude-opus-5")
+	assert.Contains(t, string(body), "${WORK_API_KEY}", "credentials stay references on disk")
+}
+
+func configReadEditRespond(system string, messages []llmwire.Message) *llmwire.Response {
+	if hasConfigInput(messages) && !hasToolResultFor(messages, tool.IDConfigRead) {
+		return callReply("read-config", tool.IDConfigRead, `{}`)
+	}
+	return configEditRespond(system, messages)
 }
 
 // effortRequest is what one provider call named: its model and reasoning effort.

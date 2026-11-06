@@ -3,7 +3,6 @@ package config
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -625,7 +624,6 @@ managers:
     enabled: true
     bot_token: tg-token
     allowed_user_ids: [123]
-    target_chat_id: -100123456
     whisper:
       provider: openai
       model: whisper-1
@@ -638,43 +636,52 @@ managers:
 	m := cfg.Managers[0]
 	require.NotNil(t, m.Enabled)
 	assert.True(t, *m.Enabled)
-	assert.Equal(t, defaultTelegramServiceTopicName, m.ServiceTopicName)
-	assert.Equal(t, defaultTelegramServiceTopicIconEmojiID, m.ServiceTopicIconEmojiID)
-	assert.Equal(t, defaultTelegramSessionTopicIconEmojiID, m.SessionTopicIconEmojiID)
 	assert.Equal(t, defaultTelegramSendChunkDelayMS, m.SendChunkDelayMS)
 	assert.Equal(t, defaultTelegramPollTimeoutSec, m.PollTimeoutSec)
 }
 
-func TestUnifiedConfig_ServiceTopicNameUsesRuneLimit(t *testing.T) {
-	for _, tt := range []struct {
-		name    string
-		runes   int
-		wantErr bool
-	}{
-		{name: "one", runes: 1},
-		{name: "128 multibyte runes", runes: 128},
-		{name: "129 runes", runes: 129, wantErr: true},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			path := writeConfig(t, `providers:
-  ant:
-    driver: anthropic
-    api_key: key
-managers:
-  - id: tg
+func TestUnifiedConfig_Managers_RemovedChatTargetIsRecorded(t *testing.T) {
+	path := writeConfig(t, `managers:
+  - id: telegram-main
     driver: telegram
     enabled: true
-    bot_token: token
-    allowed_user_ids: [7]
-    target_chat_id: -100
-    service_topic_name: `+strings.Repeat("я", tt.runes)+"\n")
+    bot_token: tg-token
+    allowed_user_ids: [123]
+    target_chat_id: -100123456
+`)
+	cfg, err := LoadUnifiedConfig(path, nil)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"target_chat_id"}, cfg.RemovedManagerKeys)
+	require.Len(t, cfg.Managers, 1)
+	assert.Equal(t, []int64{123}, cfg.Managers[0].AllowedUserIDs)
+	encoded, err := MarshalUnifiedConfig(cfg)
+	require.NoError(t, err)
+	assert.NotContains(t, string(encoded), "target_chat_id")
+}
+
+func TestUnifiedConfig_Managers_RequiresOnePositiveAllowedUser(t *testing.T) {
+	for _, tt := range []struct {
+		name  string
+		users string
+	}{
+		{name: "missing"},
+		{name: "empty", users: "allowed_user_ids: []"},
+		{name: "multiple", users: "allowed_user_ids: [7, 8]"},
+		{name: "duplicate", users: "allowed_user_ids: [7, 7]"},
+		{name: "zero", users: "allowed_user_ids: [0]"},
+		{name: "negative", users: "allowed_user_ids: [-7]"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			path := writeConfig(t, `managers:
+  - id: telegram-main
+    driver: telegram
+    enabled: true
+    bot_token: tg-token
+    `+tt.users+"\n")
 			_, err := LoadUnifiedConfig(path, nil)
-			if tt.wantErr {
-				require.Error(t, err)
-				assert.Contains(t, err.Error(), "service_topic_name")
-				return
-			}
-			require.NoError(t, err)
+			require.EqualError(t, err,
+				`manager "telegram-main" (driver: telegram) requires exactly one positive "allowed_user_ids" entry`)
 		})
 	}
 }
@@ -690,7 +697,6 @@ managers:
     enabled: true
     bot_token: token
     allowed_user_ids: [7]
-    target_chat_id: -100
     poll_timeout_sec: 9223372022
 `)
 	_, err := LoadUnifiedConfig(path, nil)
@@ -705,7 +711,6 @@ managers:
     driver: telegram
     bot_token: tg-token
     allowed_user_ids: [123]
-    target_chat_id: -100123456
 `)
 
 	_, err := LoadUnifiedConfig(path, nil)
@@ -720,7 +725,6 @@ managers:
     driver: telegram
     enabled: true
     allowed_user_ids: [123]
-    target_chat_id: -100123456
 `)
 
 	_, err := LoadUnifiedConfig(path, nil)
@@ -749,13 +753,11 @@ managers:
     enabled: true
     bot_token: tg-token
     allowed_user_ids: [123]
-    target_chat_id: -100123456
   - id: telegram-main
     driver: telegram
     enabled: true
     bot_token: tg-token-2
     allowed_user_ids: [456]
-    target_chat_id: -100654321
 `)
 
 	_, err := LoadUnifiedConfig(path, nil)
@@ -775,7 +777,6 @@ managers:
     enabled: true
     bot_token: tg-token
     allowed_user_ids: [123]
-    target_chat_id: -100123456
     whisper:
       provider: does-not-exist
       model: whisper-1
@@ -794,7 +795,6 @@ managers:
     enabled: true
     bot_token: ${TG_MAIN_BOT_TOKEN}
     allowed_user_ids: [123]
-    target_chat_id: -100123456
 `)
 
 	cfg, err := LoadUnifiedConfig(path, Secrets{"TG_MAIN_BOT_TOKEN": "telegram-secret"})
@@ -810,7 +810,6 @@ managers:
     enabled: true
     bot_token: ${TG_MAIN_BOT_TOKEN}
     allowed_user_ids: [123]
-    target_chat_id: -100123456
 `)
 
 	_, err := LoadUnifiedConfig(path, nil)

@@ -73,7 +73,6 @@ type StatePatch struct {
 	MarkCompletionNudge  bool
 	ConfirmedAnswerID    *int64
 	EmptyStopStreak      *int
-	ManagerReplyPending  *bool
 	ResetContext         bool
 }
 
@@ -87,11 +86,8 @@ type Output struct {
 	MessageRef    int
 	Phase         string
 	ReleasesInput bool
-	FinalFooter   *Footer
 	Session       int64
 }
-
-type Footer struct{ BackgroundYield bool }
 
 type CommitResult struct {
 	MessageIDs  []int64

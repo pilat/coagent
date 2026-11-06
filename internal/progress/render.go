@@ -3,81 +3,11 @@ package progress
 import (
 	"fmt"
 	"math"
-	"strconv"
 	"strings"
 	"time"
 
 	"github.com/pilat/coagent/internal/logger"
 )
-
-const todoHint = "ℹ️ /status shows the full TODO list"
-
-func RenderCompact(snapshot Snapshot) string {
-	lines := []string{"**" + cardTitle(snapshot) + "**"}
-
-	if note := strings.TrimSpace(logger.Redact(snapshot.LatestModelProgress)); note != "" {
-		lines = append(lines, "", note)
-	}
-
-	if snapshot.Model != "" {
-		iteration := snapshot.RootIteration + snapshot.ChildIterations
-		lines = append(lines, "", fmt.Sprintf("🤖 `%s` · iteration %d", snapshot.Model, iteration))
-	}
-
-	if metrics := renderCardMetrics(snapshot); metrics != "" {
-		lines = append(lines, metrics)
-	}
-
-	if subagents := renderSubagents(snapshot); subagents != "" {
-		lines = append(lines, subagents)
-	}
-
-	if todoBlock := renderCardTodos(snapshot.Todos); len(todoBlock) > 0 {
-		lines = append(lines, todoBlock...)
-	}
-
-	if snapshot.Budget != nil {
-		lines = append(lines, renderBudget(*snapshot.Budget))
-	}
-
-	return strings.Join(lines, "\n")
-}
-
-// RenderFinalCompact is a trimmed progress footer for final output: model/iteration,
-// metrics, TODO, and budget. It renders counts only — no raw text, so no redact
-// is needed. Skipped when nothing is available. A background-yield final
-// prepends the 🟣 badge so the released card never reads as "your turn"; a
-// confirmed terminal stop stays badge-less.
-func RenderFinalCompact(snapshot Snapshot) string {
-	var lines []string
-
-	if snapshot.IsBackgroundYield {
-		lines = append(lines, "🟣 Background")
-	}
-
-	if snapshot.Model != "" {
-		iteration := snapshot.RootIteration + snapshot.ChildIterations
-		lines = append(lines, fmt.Sprintf("🤖 `%s` · iteration %d", snapshot.Model, iteration))
-	}
-
-	if metrics := renderCardMetrics(snapshot); metrics != "" {
-		lines = append(lines, metrics)
-	}
-
-	if todoBlock := renderCardTodos(snapshot.Todos); len(todoBlock) > 0 {
-		lines = append(lines, todoBlock...)
-	}
-
-	if snapshot.Budget != nil {
-		lines = append(lines, renderBudget(*snapshot.Budget))
-	}
-
-	if len(lines) == 0 {
-		return ""
-	}
-
-	return strings.Join(lines, "\n")
-}
 
 func RenderFull(snapshot Snapshot) string {
 	lines := []string{"## Session progress"}
@@ -101,10 +31,6 @@ func RenderFull(snapshot Snapshot) string {
 	}
 
 	lines = append(lines, renderTodos(snapshot.Todos)...)
-	if note := strings.TrimSpace(logger.Redact(snapshot.LatestModelProgress)); note != "" {
-		lines = append(lines, "- Latest agent note: "+note)
-	}
-
 	if len(snapshot.Waiting) > 0 {
 		lines = append(lines, fmt.Sprintf("- Waiting: %d item(s)", len(snapshot.Waiting)))
 	}
@@ -135,124 +61,6 @@ func RenderFull(snapshot Snapshot) string {
 	)
 
 	return strings.Join(lines, "\n")
-}
-
-// RenderFooter is the final-output tail: TODO summaries only, then the budget
-// line separated by one blank line. No TODO summary is produced when no list
-// exists.
-func RenderFooter(snapshot Snapshot) string {
-	var parts []string
-	if summary := renderTodoSummary(snapshot.Todos); summary != "" {
-		parts = append(parts, summary)
-	}
-
-	if snapshot.Budget != nil {
-		parts = append(parts, renderBudget(*snapshot.Budget))
-	}
-
-	return strings.Join(parts, "\n\n")
-}
-
-// A fired budget outranks live work; inactivity is explicit. Waiting items,
-// live subagents, and background processes all read as "in background, nothing
-// for the operator to do", so they share one title below 🟢.
-func cardTitle(snapshot Snapshot) string {
-	if snapshot.Budget != nil && snapshot.Budget.State == "fired" {
-		return "🛑 Budget reached"
-	}
-
-	if snapshot.MainModelWorking {
-		return "🟢 Working"
-	}
-
-	if len(snapshot.Waiting) > 0 || snapshot.ActiveSubagents > 0 || len(snapshot.BackgroundProcesses) > 0 {
-		return "🟣 Background"
-	}
-
-	return "⚪ Idle"
-}
-
-// renderCardMetrics joins only the available fragments; the whole line
-// disappears when nothing is measurable.
-func renderCardMetrics(snapshot Snapshot) string {
-	var fragments []string
-
-	if snapshot.EpisodeElapsed != nil {
-		fragments = append(fragments, "⌚ "+snapshot.EpisodeElapsed.Round(1e9).String())
-	}
-
-	if snapshot.Lifetime.Available && !math.IsNaN(snapshot.Lifetime.CostUSD) &&
-		!math.IsInf(snapshot.Lifetime.CostUSD, 0) {
-		fragments = append(fragments, "💰 $"+formatUSD(snapshot.Lifetime.CostUSD)+" total")
-	}
-
-	if snapshot.Context.Available && snapshot.Context.Max > 0 {
-		prefix := ""
-		if snapshot.Context.Approximate {
-			prefix = "~"
-		}
-
-		percent := float64(snapshot.Context.Used) * 100 / float64(snapshot.Context.Max)
-		fragments = append(fragments, fmt.Sprintf("🧠 context %s%.0f%%", prefix, percent))
-	}
-
-	return strings.Join(fragments, " · ")
-}
-
-func renderSubagents(snapshot Snapshot) string {
-	if snapshot.ActiveSubagents == 0 {
-		return ""
-	}
-
-	foreground := snapshot.ActiveSubagents - snapshot.BackgroundSubagents
-
-	return fmt.Sprintf(
-		"🧩 Subagents · %d foreground · %d background",
-		foreground,
-		snapshot.BackgroundSubagents,
-	)
-}
-
-// renderCardTodos renders counts only — item text belongs to /status.
-func renderCardTodos(items []TodoItem) []string {
-	if len(items) == 0 {
-		return nil
-	}
-
-	active, remaining, done, cancelled := Snapshot{Todos: items}.TodoCounts()
-
-	line := fmt.Sprintf("📋 TODO · %d active · %d remaining · %d done", active, remaining, done)
-	if cancelled > 0 {
-		line += fmt.Sprintf(" · %d cancelled", cancelled)
-	}
-
-	return []string{line, todoHint}
-}
-
-// renderTodoSummary is the final-output TODO tail. An empty list appends
-// nothing; finished work reads as success, unfinished work points at /status.
-func renderTodoSummary(items []TodoItem) string {
-	if len(items) == 0 {
-		return ""
-	}
-
-	active, remaining, done, cancelled := Snapshot{Todos: items}.TodoCounts()
-
-	if remaining == 0 {
-		summary := fmt.Sprintf("✅ TODO complete · %d done", done)
-		if cancelled > 0 {
-			summary += fmt.Sprintf(" · %d cancelled", cancelled)
-		}
-
-		return summary
-	}
-
-	summary := fmt.Sprintf("📋 TODO · %d active · %d remaining · %d done", active, remaining, done)
-	if cancelled > 0 {
-		summary += fmt.Sprintf(" · %d cancelled", cancelled)
-	}
-
-	return summary + " · /status shows the full list"
 }
 
 func renderContext(value Context) string {
@@ -336,17 +144,6 @@ func renderBudget(value Budget) string {
 	}
 
 	return line
-}
-
-// formatUSD renders at most six decimals with trailing zeroes trimmed while
-// always keeping one decimal digit, so costs never read as integers.
-func formatUSD(value float64) string {
-	fixed := strings.TrimRight(strconv.FormatFloat(value, 'f', 6, 64), "0")
-	if strings.HasSuffix(fixed, ".") {
-		return fixed + "0"
-	}
-
-	return fixed
 }
 
 // renderProcesses projects live background Bash processes. Only stable

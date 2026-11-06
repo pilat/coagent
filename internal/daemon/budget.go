@@ -47,7 +47,7 @@ func sessionRootID(record *sessionstore.SessionRecord) int64 {
 	return record.ID
 }
 
-func (s *svc) releaseArmedBudget(ctx context.Context, rootID int64, reason string) error {
+func (s *Service) releaseArmedBudget(ctx context.Context, rootID int64, reason string) error {
 	record, err := s.budgets.Get(ctx, rootID)
 	if errors.Is(err, budget.ErrNotFound) ||
 		(err == nil && record.State != budget.Armed) {
@@ -58,14 +58,22 @@ func (s *svc) releaseArmedBudget(ctx context.Context, rootID int64, reason strin
 		return fmt.Errorf("load budget for terminal release: %w", err)
 	}
 
-	if _, err := s.budgets.Release(ctx, rootID, record.Generation, reason); err != nil {
+	_, err = s.budgets.Release(ctx, rootID, record.Generation, reason)
+	if errors.Is(err, budget.ErrConflict) {
+		logger.Ctx(ctx).Named("daemon.budget").Info("terminal_budget_release_superseded",
+			zap.Int64("session_id", rootID), zap.Int64("generation", record.Generation), zap.String("reason", reason))
+
+		return nil
+	}
+
+	if err != nil {
 		return fmt.Errorf("release terminal budget: %w", err)
 	}
 
 	return nil
 }
 
-func (s *svc) settleRootBudget(
+func (s *Service) settleRootBudget(
 	ctx context.Context,
 	rootID int64,
 	suspended bool,
@@ -100,7 +108,7 @@ func (s *svc) settleRootBudget(
 	return s.releaseArmedBudget(ctx, rootID, "completed")
 }
 
-func (s *svc) retainBudgetForBackground(ctx context.Context, rootID int64) (bool, error) {
+func (s *Service) retainBudgetForBackground(ctx context.Context, rootID int64) (bool, error) {
 	record, err := s.budgets.Get(ctx, rootID)
 	if errors.Is(err, budget.ErrNotFound) ||
 		(err == nil && record.State != budget.Armed) {
@@ -119,7 +127,7 @@ func (s *svc) retainBudgetForBackground(ctx context.Context, rootID int64) (bool
 	return retained, nil
 }
 
-func (s *svc) settleRunBudget(
+func (s *Service) settleRunBudget(
 	ctx context.Context,
 	rec *sessionstore.SessionRecord,
 	result session.RunResult,
@@ -254,7 +262,7 @@ func (c *budgetClock) close() {
 	clear(c.due)
 }
 
-func (s *svc) refreshBudget(ctx context.Context, rootID int64) {
+func (s *Service) refreshBudget(ctx context.Context, rootID int64) {
 	record, err := s.store.Get(ctx, rootID)
 	if errors.Is(err, budget.ErrNotFound) {
 		return
@@ -270,7 +278,7 @@ func (s *svc) refreshBudget(ctx context.Context, rootID int64) {
 	s.clock.set(record)
 }
 
-func (s *svc) budgetDue(ctx context.Context, rootID int64) {
+func (s *Service) budgetDue(ctx context.Context, rootID int64) {
 	record, err := s.store.Get(ctx, rootID)
 	if errors.Is(err, budget.ErrNotFound) {
 		return
@@ -312,7 +320,7 @@ func (s *svc) budgetDue(ctx context.Context, rootID int64) {
 }
 
 // checkBudgetModel refuses an unpriced model for an armed cost-limited tree.
-func (s *svc) checkBudgetModel(ctx context.Context, rootID int64, model string) error {
+func (s *Service) checkBudgetModel(ctx context.Context, rootID int64, model string) error {
 	record, err := s.budgets.Get(ctx, rootID)
 	if errors.Is(err, budget.ErrNotFound) {
 		return nil
@@ -329,7 +337,7 @@ func (s *svc) checkBudgetModel(ctx context.Context, rootID int64, model string) 
 	return nil
 }
 
-func (s *svc) reconcileArmedBudgets(ctx context.Context) error {
+func (s *Service) reconcileArmedBudgets(ctx context.Context) error {
 	armed, err := s.budgets.ListArmed(ctx)
 	if err != nil {
 		return fmt.Errorf("list armed budgets: %w", err)
@@ -349,7 +357,7 @@ func (s *svc) reconcileArmedBudgets(ctx context.Context) error {
 	return nil
 }
 
-func (s *svc) parkBudgetTree(ctx context.Context, record *budget.Record) {
+func (s *Service) parkBudgetTree(ctx context.Context, record *budget.Record) {
 	if record == nil || record.State != budget.Fired || record.ParkOwner == "" {
 		return
 	}
@@ -405,14 +413,14 @@ func (s *svc) parkBudgetTree(ctx context.Context, record *budget.Record) {
 		return
 	}
 
-	s.progress.ReconcileLatestReadiness(ctx, record.RootSessionID)
+	s.publishIdle(ctx, record.RootSessionID)
 }
 
-func (s *svc) startPark(record *budget.Record) {
+func (s *Service) startPark(record *budget.Record) {
 	s.life.Go("daemon.budget", func(ctx context.Context) { s.parkBudgetTree(ctx, record) })
 }
 
-func (s *svc) awaitParkTree(ctx context.Context, rootID int64) (func(), error) {
+func (s *Service) awaitParkTree(ctx context.Context, rootID int64) (func(), error) {
 	for {
 		t, err := s.loadTree(ctx, rootID)
 		if err != nil {

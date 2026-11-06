@@ -37,7 +37,7 @@ func TestServer_StartingPhaseRefusesEveryOpWithOneAnswer(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = c.Close() })
 
-	_, err = c.Status(context.Background())
+	err = c.Call(context.Background(), OpStatus, nil, &StatusResult{})
 	require.ErrorIs(t, err, ErrStarting)
 
 	require.ErrorIs(t, c.Call(context.Background(), "no_such_op", nil, nil), ErrStarting)
@@ -46,7 +46,8 @@ func TestServer_StartingPhaseRefusesEveryOpWithOneAnswer(t *testing.T) {
 
 	// The same connection carries on: a client that dialled during the boot does
 	// not have to reconnect to see a ready daemon.
-	st, err := c.Status(context.Background())
+	var st StatusResult
+	err = c.Call(context.Background(), OpStatus, nil, &st)
 	require.NoError(t, err)
 	assert.Equal(t, testVersion, st.BinaryVersion)
 }

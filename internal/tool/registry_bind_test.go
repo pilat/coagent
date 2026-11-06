@@ -10,12 +10,12 @@ import (
 // bound to.
 type dispatchingTool struct {
 	*mockTool
-	reg Registry
+	reg *Registry
 }
 
 var _ RegistryBound = (*dispatchingTool)(nil)
 
-func (d *dispatchingTool) BindRegistry(reg Registry) Tool {
+func (d *dispatchingTool) BindRegistry(reg *Registry) Tool {
 	return &dispatchingTool{mockTool: d.mockTool, reg: reg}
 }
 
@@ -23,7 +23,7 @@ func (d *dispatchingTool) Execute(ctx context.Context, params json.RawMessage) (
 	return d.reg.Execute(ctx, string(params), json.RawMessage(`{}`))
 }
 
-func newDispatchRegistry() Registry {
+func newDispatchRegistry() *Registry {
 	r := NewRegistry()
 	r.Register(newMockTool("allowed", "Allowed"))
 	r.Register(newMockTool("forbidden", "Forbidden"))

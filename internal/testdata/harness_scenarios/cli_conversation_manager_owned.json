@@ -7,7 +7,8 @@
       "work_dir": "<workdir>",
       "attributes": {
         "channel": "cli",
-        "manager_id": "cli"
+        "manager_id": "cli",
+        "title": "configure coagent"
       }
     },
     {
@@ -18,5 +19,24 @@
       "type": "message",
       "message": "configuration answer"
     }
-  ]
+  ],
+  "outputs": [
+    {
+      "id": 1,
+      "session_id": 1,
+      "type": "session_opened",
+      "content": "",
+      "source_key": "session:1:opened"
+    },
+    {
+      "id": 2,
+      "session_id": 1,
+      "type": "message",
+      "content": "configuration answer",
+      "source_key": "message:4:final"
+    }
+  ],
+  "owners": {
+    "1": "cli"
+  }
 }

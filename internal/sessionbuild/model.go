@@ -1,13 +1,17 @@
 package sessionbuild
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"slices"
 	"strings"
 
+	"github.com/pilat/coagent/internal/catalog"
 	"github.com/pilat/coagent/internal/config"
 	"github.com/pilat/coagent/internal/llm"
+	"github.com/pilat/coagent/internal/loader"
+	"github.com/pilat/coagent/internal/registry"
 	"github.com/pilat/coagent/internal/sessionprompt"
 )
 
@@ -22,11 +26,25 @@ func ResolveReasoningLevel(models []config.ModelEntry, modelID, requested string
 	return "", fmt.Errorf("unknown model: %s", modelID)
 }
 
-// BuildClient validates and constructs a model before its record changes.
-func BuildClient(cfg *config.Config, model, requested string) (llm.Client, sessionprompt.ModelSection, error) {
-	if cfg == nil || cfg.UnifiedConfig == nil {
+// BuildClient applies agent policy and validates a model before its record changes.
+func BuildClient(
+	ctx context.Context,
+	in BuildInput,
+	model, requested string,
+) (llm.Client, sessionprompt.ModelSection, error) {
+	if in.Config == nil || in.Config.UnifiedConfig == nil {
 		return nil, sessionprompt.ModelSection{}, errors.New("no models configured")
 	}
+
+	if in.Record == nil {
+		return nil, sessionprompt.ModelSection{}, errors.New("session record is required")
+	}
+
+	if _, _, err := prepareClientInput(ctx, &in); err != nil {
+		return nil, sessionprompt.ModelSection{}, err
+	}
+
+	cfg := in.Config
 
 	level, err := ResolveReasoningLevel(cfg.UnifiedConfig.Models, model, requested)
 	if err != nil {
@@ -42,9 +60,65 @@ func BuildClient(cfg *config.Config, model, requested string) (llm.Client, sessi
 
 	return client, sessionprompt.ModelSection{
 		ID:           model,
-		Text:         sessionprompt.BuildModelsSection(model),
+		Text:         modelSection(cfg, model, level),
 		NativeSearch: cfg.UnifiedConfig.SearchNativeActive(model),
 	}, nil
+}
+
+func modelSection(cfg *config.Config, id, level string) string {
+	if cfg.UnifiedConfig != nil {
+		for _, entry := range cfg.UnifiedConfig.Models {
+			if entry.ID != id {
+				continue
+			}
+
+			if len(entry.EffortLevels) == 0 {
+				level = ""
+			} else if entry.Reasoning != nil {
+				level = catalog.ClampEffort(level, entry.Reasoning.Efforts)
+			}
+
+			return sessionprompt.BuildModelsSection(entry.Label(), id, level)
+		}
+	}
+
+	return sessionprompt.BuildModelsSection("", id, "")
+}
+
+func prepareClientInput(ctx context.Context, in *BuildInput) (*registry.Set, registry.AgentTypeConfig, error) {
+	cfg := *in.Config
+	cfg.WorkDir, cfg.RepoRoot = in.WorkDir, in.RepoRoot
+
+	cfg.Model = in.Record.Model
+	if cfg.Model == "" {
+		cfg.Model = cfg.DefaultModel()
+	}
+
+	in.Config = &cfg
+	if in.Loader == nil {
+		in.Loader = loader.New(in.MarketplaceCache)
+	}
+
+	set := registry.NewSet(loadProjectSubagents(ctx, *in, in.WorkDir))
+
+	agentType := registry.AgentType(in.Record.AgentType)
+	if agentType == "" {
+		agentType = registry.AgentTypeBuild
+	}
+
+	agent, ok := set.Get(agentType)
+	if !ok {
+		return nil, registry.AgentTypeConfig{}, fmt.Errorf("unknown agent type: %s", agentType)
+	}
+
+	if agent.DisableIntegratedSearch && cfg.UnifiedConfig != nil {
+		unified := *cfg.UnifiedConfig
+		disabled := false
+		unified.Tools.Search.Enabled = &disabled
+		cfg.UnifiedConfig = &unified
+	}
+
+	return set, agent, nil
 }
 
 // Models offering no effort choice must not receive an unsupported level.

@@ -108,7 +108,7 @@ func TestSessionInboxSchema_AcceptedIndex(t *testing.T) {
 	assert.Contains(t, indexSQL.String, "accepted_message_id IS NOT NULL")
 }
 
-func TestSessionOutboxSchema_ManagerHeadIndex(t *testing.T) {
+func TestSessionOutboxSchema_SessionTailIndex(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
@@ -116,14 +116,14 @@ func TestSessionOutboxSchema_ManagerHeadIndex(t *testing.T) {
 	record, err := store.CreateSession(ctx, projectID, "model", "", map[string]any{"manager_id": "telegram"})
 	require.NoError(t, err)
 	_, err = store.EnqueueOutput(ctx, sessionstore.OutputDraft{
-		SessionID: record.ID, Type: sessionstore.OutputMessagePersistent, Content: "queued",
+		SessionID: record.ID, Type: sessionstore.OutputMessage, Content: "logged",
 	})
 	require.NoError(t, err)
 
 	rows, err := db.QueryContext(ctx, `EXPLAIN QUERY PLAN
 		SELECT id FROM session_outbox
-		WHERE json_extract(attributes, '$.manager_id') = ? AND state <> 'delivered'
-		ORDER BY id LIMIT 1`, "telegram")
+		WHERE session_id = ? AND id > ?
+		ORDER BY id LIMIT 100`, record.ID, 0)
 	require.NoError(t, err)
 	defer rows.Close()
 
@@ -135,7 +135,11 @@ func TestSessionOutboxSchema_ManagerHeadIndex(t *testing.T) {
 		details = append(details, detail)
 	}
 	require.NoError(t, rows.Err())
-	assert.Contains(t, details, "SEARCH session_outbox USING INDEX idx_session_outbox_manager_head (<expr>=?)")
+	assert.Contains(
+		t,
+		details,
+		"SEARCH session_outbox USING COVERING INDEX idx_session_outbox_session_id (session_id=? AND id>?)",
+	)
 }
 
 func TestSubagentLinkSchema_ActivationSequenceStartsAtOne(t *testing.T) {
@@ -156,46 +160,4 @@ func TestSubagentLinkSchema_ActivationSequenceStartsAtOne(t *testing.T) {
 		`SELECT activation_seq FROM subagent_links WHERE child_id = ?`, childID,
 	).Scan(&activationSeq))
 	assert.Equal(t, int64(1), activationSeq)
-}
-
-func TestSessionDeliveriesSchema_RejectsInvalidAndDuplicateIdentities(t *testing.T) {
-	t.Parallel()
-
-	ctx := context.Background()
-	store, db, projectID := newTestStore(t)
-	rec, err := store.CreateSession(ctx, projectID, "model", "", nil)
-	require.NoError(t, err)
-	now := time.Now().UTC()
-
-	_, err = db.ExecContext(ctx, `
-		INSERT INTO session_deliveries
-			(session_id, delivery_id, kind, fingerprint, delivered_at)
-		VALUES (?, 'd1', 'tool_notification', 'fp', ?)`, rec.ID, now)
-	require.NoError(t, err)
-
-	tests := []struct {
-		name        string
-		sessionID   int64
-		deliveryID  string
-		kind        string
-		fingerprint string
-	}{
-		{name: "duplicate identity", sessionID: rec.ID, deliveryID: "d1", kind: "tool_notification", fingerprint: "fp"},
-		{name: "empty identity", sessionID: rec.ID, kind: "tool_notification", fingerprint: "fp"},
-		{name: "unknown kind", sessionID: rec.ID, deliveryID: "d2", kind: "message", fingerprint: "fp"},
-		{name: "empty fingerprint", sessionID: rec.ID, deliveryID: "d3", kind: "context_reset"},
-		{name: "missing session", sessionID: 999_999, deliveryID: "d4", kind: "context_reset", fingerprint: "fp"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			_, insertErr := db.ExecContext(ctx, `
-				INSERT INTO session_deliveries
-					(session_id, delivery_id, kind, fingerprint, delivered_at)
-				VALUES (?, ?, ?, ?, ?)`,
-				tt.sessionID, tt.deliveryID, tt.kind, tt.fingerprint, now,
-			)
-			require.Error(t, insertErr)
-		})
-	}
 }

@@ -15,28 +15,13 @@ import (
 	"github.com/pilat/coagent/internal/transcript"
 )
 
-var _ Service = (*svc)(nil)
-
-type Service interface {
-	Ops() configops.Service
-	PendingCall(sessionID int64) (configops.Pending, error)
-	ClaimApply() bool
-	ReleaseApply()
-	Restart() <-chan struct{}
-	Calls(sessionID int64) map[string]string
-	Has(sessionID int64) bool
-	RunStagedApply(ctx context.Context, sessionID int64)
-	Abandon(ctx context.Context, sessionID int64)
-	SettleStagedResults(ctx context.Context, sessionID int64) error
-	ConsumeConfigEditActivation(ctx context.Context, sessionID int64, callID string)
-}
-
 type stagedCall struct {
 	apply  *configops.Staged
 	result string
 }
 
-type svc struct {
+// Service serializes staged configuration changes and requests daemon restart.
+type Service struct {
 	ops      configops.Service
 	sessions *sessionstore.Store
 	restart  chan struct{}
@@ -45,8 +30,8 @@ type svc struct {
 	calls    map[int64]map[string]stagedCall
 }
 
-func New(ops configops.Service, sessions *sessionstore.Store) Service {
-	return &svc{
+func New(ops configops.Service, sessions *sessionstore.Store) *Service {
+	return &Service{
 		ops:      ops,
 		sessions: sessions,
 		restart:  make(chan struct{}, 1),
@@ -54,9 +39,9 @@ func New(ops configops.Service, sessions *sessionstore.Store) Service {
 	}
 }
 
-func (a *svc) Ops() configops.Service { return a.ops }
+func (a *Service) Ops() configops.Service { return a.ops }
 
-func (a *svc) PendingCall(sessionID int64) (configops.Pending, error) {
+func (a *Service) PendingCall(sessionID int64) (configops.Pending, error) {
 	p, err := a.ops.LoadPending()
 	if err != nil {
 		return configops.Pending{}, fmt.Errorf("load pending-apply marker: %w", err)
@@ -69,7 +54,7 @@ func (a *svc) PendingCall(sessionID int64) (configops.Pending, error) {
 	return *p, nil
 }
 
-func (a *svc) ClaimApply() bool {
+func (a *Service) ClaimApply() bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
@@ -82,9 +67,9 @@ func (a *svc) ClaimApply() bool {
 	return true
 }
 
-func (a *svc) ReleaseApply() { a.mu.Lock(); defer a.mu.Unlock(); a.claimed = false }
+func (a *Service) ReleaseApply() { a.mu.Lock(); defer a.mu.Unlock(); a.claimed = false }
 
-func (a *svc) Apply(staged *configops.Staged, p configops.Pending) configops.Verdict {
+func (a *Service) Apply(staged *configops.Staged, p configops.Pending) configops.Verdict {
 	if v := a.ops.Commit(staged, p); v.Failed() {
 		a.ReleaseApply()
 		return v
@@ -95,16 +80,16 @@ func (a *svc) Apply(staged *configops.Staged, p configops.Pending) configops.Ver
 	return configops.OK()
 }
 
-func (a *svc) Restart() <-chan struct{} { return a.restart }
+func (a *Service) Restart() <-chan struct{} { return a.restart }
 
-func (a *svc) RequestRestart() {
+func (a *Service) RequestRestart() {
 	select {
 	case a.restart <- struct{}{}:
 	default:
 	}
 }
 
-func (a *svc) Calls(sessionID int64) map[string]string {
+func (a *Service) Calls(sessionID int64) map[string]string {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
@@ -116,9 +101,7 @@ func (a *svc) Calls(sessionID int64) map[string]string {
 	return calls
 }
 
-func (a *svc) Has(sessionID int64) bool { return len(a.Calls(sessionID)) != 0 }
-
-func (a *svc) RunStagedApply(ctx context.Context, sessionID int64) {
+func (a *Service) RunStagedApply(ctx context.Context, sessionID int64) {
 	callID, sc, ok := a.takePendingApply(sessionID)
 	if !ok {
 		return
@@ -181,7 +164,7 @@ func (a *svc) RunStagedApply(ctx context.Context, sessionID int64) {
 	a.deliverResult(ctx, sessionID, callID, "Config change rejected — "+v.Reason())
 }
 
-func (a *svc) Abandon(ctx context.Context, sessionID int64) {
+func (a *Service) Abandon(ctx context.Context, sessionID int64) {
 	callID, _, ok := a.takePendingApply(sessionID)
 	if !ok {
 		return
@@ -195,7 +178,7 @@ func (a *svc) Abandon(ctx context.Context, sessionID int64) {
 	)
 }
 
-func (a *svc) SettleStagedResults(ctx context.Context, sessionID int64) error {
+func (a *Service) SettleStagedResults(ctx context.Context, sessionID int64) error {
 	a.mu.Lock()
 	results := make(map[string]string)
 
@@ -262,7 +245,7 @@ func (a *svc) SettleStagedResults(ctx context.Context, sessionID int64) error {
 	return nil
 }
 
-func (a *svc) ConsumeConfigEditActivation(ctx context.Context, sessionID int64, callID string) {
+func (a *Service) ConsumeConfigEditActivation(ctx context.Context, sessionID int64, callID string) {
 	activation, err := a.sessions.CurrentActivation(ctx, sessionID)
 	if err != nil {
 		if !errors.Is(err, sessionstore.ErrActivationNotFound) {
@@ -288,7 +271,7 @@ func (a *svc) ConsumeConfigEditActivation(ctx context.Context, sessionID int64, 
 	}
 }
 
-func (a *svc) stageApply(sessionID int64, callID string, staged *configops.Staged) bool {
+func (a *Service) stageApply(sessionID int64, callID string, staged *configops.Staged) bool {
 	if !a.ClaimApply() {
 		return false
 	}
@@ -305,7 +288,7 @@ func (a *svc) stageApply(sessionID int64, callID string, staged *configops.Stage
 	return true
 }
 
-func (a *svc) takePendingApply(sessionID int64) (string, stagedCall, bool) {
+func (a *Service) takePendingApply(sessionID int64) (string, stagedCall, bool) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
@@ -324,7 +307,7 @@ func (a *svc) takePendingApply(sessionID int64) (string, stagedCall, bool) {
 	return "", stagedCall{}, false
 }
 
-func (a *svc) resolve(sessionID int64, callID string) {
+func (a *Service) resolve(sessionID int64, callID string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
@@ -335,14 +318,14 @@ func (a *svc) resolve(sessionID int64, callID string) {
 	}
 }
 
-func (a *svc) stageResult(sessionID int64, callID, content string) {
+func (a *Service) stageResult(sessionID int64, callID, content string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
 	a.calls[sessionID][callID] = stagedCall{result: content}
 }
 
-func (a *svc) deliverResult(ctx context.Context, sessionID int64, callID, content string) {
+func (a *Service) deliverResult(ctx context.Context, sessionID int64, callID, content string) {
 	a.stageResult(sessionID, callID, content)
 
 	if err := a.SettleStagedResults(ctx, sessionID); err != nil {
@@ -352,7 +335,7 @@ func (a *svc) deliverResult(ctx context.Context, sessionID int64, callID, conten
 	}
 }
 
-func (a *svc) expireAbandonedActivation(ctx context.Context, sessionID int64, id string) error {
+func (a *Service) expireAbandonedActivation(ctx context.Context, sessionID int64, id string) error {
 	activation, err := a.sessions.PendingActivation(ctx, sessionID)
 	if err != nil && !errors.Is(err, sessionstore.ErrActivationNotFound) {
 		return fmt.Errorf("read abandoned activation: %w", err)

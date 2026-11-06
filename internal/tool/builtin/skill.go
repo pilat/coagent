@@ -19,16 +19,16 @@ type skillParams struct {
 }
 
 type skillTool struct {
-	loader loader.Registry
+	loader loader.SkillCatalog
 }
 
-func NewSkillTool(ldr loader.Registry) tool.Tool {
-	return &skillTool{loader: ldr}
-}
+func NewSkillTool(ldr *loader.Service) tool.Tool {
+	t := &skillTool{}
+	if ldr != nil {
+		t.loader = ldr
+	}
 
-// RenderSkill renders the canonical conversation envelope for a skill invocation.
-func RenderSkill(sk *loader.Skill, args string) string {
-	return loader.RenderSkillInvocation(sk, args)
+	return t
 }
 
 func (t *skillTool) ID() string         { return tool.IDSkill }
@@ -71,7 +71,7 @@ func (t *skillTool) Execute(ctx context.Context, params json.RawMessage) (*tool.
 
 	return &tool.Result{
 		Title:  sk.Name,
-		Output: RenderSkill(sk, p.Args),
+		Output: loader.RenderSkillInvocation(sk, p.Args),
 		Metadata: map[string]any{
 			"skill":     sk.Name,
 			metaKeyPath: sk.Path,

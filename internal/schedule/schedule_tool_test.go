@@ -38,6 +38,7 @@ type mockScheduleEntry struct {
 	inputMsg    string
 	lastFiredAt *time.Time
 	fresh       bool
+	sleep       bool
 }
 
 func (e *mockScheduleEntry) ID() int64               { return e.id }
@@ -46,7 +47,7 @@ func (e *mockScheduleEntry) OneShotAt() *time.Time   { return e.oneShotAt }
 func (e *mockScheduleEntry) InputMessage() string    { return e.inputMsg }
 func (e *mockScheduleEntry) LastFiredAt() *time.Time { return e.lastFiredAt }
 func (e *mockScheduleEntry) Fresh() bool             { return e.fresh }
-
+func (e *mockScheduleEntry) Sleep() bool             { return e.sleep }
 func (s *mockScheduleStore) ListSchedules(_ context.Context, _ int64) ([]schedule.Entry, error) {
 	result := make([]schedule.Entry, len(s.schedules))
 	for i := range s.schedules {

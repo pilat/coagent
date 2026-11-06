@@ -97,8 +97,8 @@ func TestMigrate_FreshDB(t *testing.T) {
 		"messages.retry_of_message_id must exist")
 	assert.True(t, columnExists(t, db, "sessions", "completion_check_candidate_id"),
 		"sessions.completion_check_candidate_id must exist")
-	assert.True(t, columnExists(t, db, "sessions", "manager_reply_pending"),
-		"sessions.manager_reply_pending must exist")
+	assert.False(t, columnExists(t, db, "sessions", "manager_reply_pending"),
+		"sessions.manager_reply_pending is retired")
 	assert.True(t, columnExists(t, db, "sessions", "empty_stop_streak"),
 		"sessions.empty_stop_streak must exist")
 }
@@ -663,4 +663,20 @@ func TestMigrate_MessageAttachments(t *testing.T) {
 	require.NoError(t,
 		db.QueryRowContext(ctx, `SELECT attachments FROM messages WHERE session_id = 1`).Scan(&attachments))
 	assert.False(t, attachments.Valid, "pre-existing row defaults attachments to NULL")
+}
+
+func stringColumn(t *testing.T, db *sql.DB, query string) []string {
+	t.Helper()
+	rows, err := db.QueryContext(t.Context(), query)
+	require.NoError(t, err)
+	defer rows.Close()
+	var values []string
+	for rows.Next() {
+		var value string
+		require.NoError(t, rows.Scan(&value))
+		values = append(values, value)
+	}
+	require.NoError(t, rows.Err())
+
+	return values
 }

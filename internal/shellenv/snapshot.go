@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"go.uber.org/zap"
+
+	"github.com/pilat/coagent/internal/logger"
 )
 
 // Snapshot ensures a fresh snapshot for workDir and returns its path, or "" when
@@ -26,9 +28,11 @@ func (p *provider) Snapshot(ctx context.Context, runner ConfinedRunner, workDir 
 		return ""
 	}
 
+	log := logger.Named("shellenv")
+
 	dir, err := p.ensureCacheDir()
 	if err != nil {
-		p.log().Warn("cache_dir_failed", zap.Error(err))
+		log.Warn("cache_dir_failed", zap.Error(err))
 		return ""
 	}
 
@@ -51,12 +55,12 @@ func (p *provider) Snapshot(ctx context.Context, runner ConfinedRunner, workDir 
 
 	content, err := p.captureFn(ctx, runner, workDir)
 	if err != nil {
-		p.log().Warn("capture_failed", zap.String("workDir", workDir), zap.Error(err))
+		log.Warn("capture_failed", zap.String("workDir", workDir), zap.Error(err))
 		return ""
 	}
 
 	if err := writeSnapshot(dir, path, content); err != nil {
-		p.log().Warn("write_failed", zap.Error(err))
+		log.Warn("write_failed", zap.Error(err))
 		return ""
 	}
 

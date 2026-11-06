@@ -46,7 +46,7 @@ type stopPlan struct {
 	links      []subagent.Link
 }
 
-func (s *svc) kill(ctx context.Context, input *sessionstore.InboxInput) error {
+func (s *Service) kill(ctx context.Context, input *sessionstore.InboxInput) error {
 	unlock, err := s.lockSessionTree(ctx, input.SessionID)
 	if err != nil {
 		return err
@@ -65,7 +65,7 @@ func (s *svc) kill(ctx context.Context, input *sessionstore.InboxInput) error {
 }
 
 // The already-stopped check and receipt share the fence with tree cleanup.
-func (s *svc) stop(ctx context.Context, input *sessionstore.InboxInput) error {
+func (s *Service) stop(ctx context.Context, input *sessionstore.InboxInput) error {
 	unlock, err := s.lockSessionTree(ctx, input.SessionID)
 	if err != nil {
 		return err
@@ -92,7 +92,7 @@ func (s *svc) stop(ctx context.Context, input *sessionstore.InboxInput) error {
 	return s.stopLocked(ctx, input.SessionID, input.ID)
 }
 
-func (s *svc) Fence(fenceCtx context.Context, rootSessionID int64) (func(), error) {
+func (s *Service) Fence(fenceCtx context.Context, rootSessionID int64) (func(), error) {
 	unlock, err := s.lockSessionTree(fenceCtx, rootSessionID)
 	if err != nil {
 		return nil, fmt.Errorf("lock process tree %d: %w", rootSessionID, err)
@@ -126,7 +126,7 @@ func (s *svc) Fence(fenceCtx context.Context, rootSessionID int64) (func(), erro
 	return unlock, nil
 }
 
-func (s *svc) killLocked(ctx context.Context, sessionID int64) error {
+func (s *Service) killLocked(ctx context.Context, sessionID int64) error {
 	rs, ok := s.runners.load(sessionID)
 
 	if ok {
@@ -143,7 +143,7 @@ func (s *svc) killLocked(ctx context.Context, sessionID int64) error {
 
 	rec, err := s.store.GetSession(ctx, sessionID)
 	if err != nil {
-		return fmt.Errorf("session %d not found", sessionID)
+		return fmt.Errorf("load kill session %d: %w", sessionID, err)
 	}
 
 	if rec.KilledAt != nil {
@@ -181,16 +181,14 @@ func (s *svc) killLocked(ctx context.Context, sessionID int64) error {
 
 	s.killDescendants(cleanupCtx, sessionID, 0)
 
-	if ownerlessSession(rec) {
-		s.publish(sessionID, sessionevent.Notification{
-			Type: sessionevent.NotifyStateChanged, Status: controllerapi.StateIdle, Reason: "killed",
-		})
-	}
+	s.publish(sessionID, sessionevent.Notification{
+		Type: sessionevent.NotifyStateChanged, Status: controllerapi.StateIdle, Reason: "killed",
+	})
 
 	return nil
 }
 
-func (s *svc) stopLocked(ctx context.Context, sessionID, inputID int64) error {
+func (s *Service) stopLocked(ctx context.Context, sessionID, inputID int64) error {
 	record, getErr := s.store.GetSession(ctx, sessionID)
 	if getErr != nil {
 		// Fail closed: an unread session must not be classified as ownerless,
@@ -229,7 +227,7 @@ func (s *svc) stopLocked(ctx context.Context, sessionID, inputID int64) error {
 		return err
 	}
 
-	if record != nil && ownerlessSession(record) {
+	if record != nil {
 		s.publish(sessionID, sessionevent.Notification{
 			Type: sessionevent.NotifyStateChanged, Status: controllerapi.StateIdle, Reason: "stopped",
 		})
@@ -240,7 +238,7 @@ func (s *svc) stopLocked(ctx context.Context, sessionID, inputID int64) error {
 
 // A committed start receipt needs a terminal output even if ownership lookup failed.
 
-func (s *svc) convergeOrphanedStopStart(
+func (s *Service) convergeOrphanedStopStart(
 	ctx context.Context,
 	sessionID, inputID int64,
 	cancelledProcesses int,
@@ -260,7 +258,7 @@ func (s *svc) convergeOrphanedStopStart(
 }
 
 //nolint:wsl_v5 // The second stop phase belongs beside the public Stop transition.
-func (s *svc) stopTreeCleanup(ctx context.Context, sessionID int64, options stopTreeOptions) error {
+func (s *Service) stopTreeCleanup(ctx context.Context, sessionID int64, options stopTreeOptions) error {
 	cleanupCtx := context.WithoutCancel(ctx)
 
 	plan, err := s.beginStop(cleanupCtx, sessionID)
@@ -322,7 +320,7 @@ func (s *svc) stopTreeCleanup(ctx context.Context, sessionID int64, options stop
 	return nil
 }
 
-func (s *svc) stopTreeBackgroundProcesses(ctx context.Context, sessionID int64, options stopTreeOptions) error {
+func (s *Service) stopTreeBackgroundProcesses(ctx context.Context, sessionID int64, options stopTreeOptions) error {
 	if options.preserveBackgroundProcesses {
 		return nil
 	}
@@ -341,7 +339,7 @@ func (s *svc) stopTreeBackgroundProcesses(ctx context.Context, sessionID int64, 
 
 // Settling after writers join prevents replaying tool calls whose producers stopped.
 
-func (s *svc) settleStoppedTree(ctx context.Context, ids []int64) error {
+func (s *Service) settleStoppedTree(ctx context.Context, ids []int64) error {
 	for _, id := range ids {
 		if err := s.commitStoppedSession(ctx, id); err != nil {
 			return err
@@ -351,7 +349,7 @@ func (s *svc) settleStoppedTree(ctx context.Context, ids []int64) error {
 	return nil
 }
 
-func (s *svc) clear(ctx context.Context, input *sessionstore.InboxInput) (int64, error) {
+func (s *Service) clear(ctx context.Context, input *sessionstore.InboxInput) (int64, error) {
 	unlock, err := s.lockSessionTree(ctx, input.SessionID)
 	if err != nil {
 		return 0, err
@@ -365,7 +363,7 @@ func (s *svc) clear(ctx context.Context, input *sessionstore.InboxInput) (int64,
 	return s.clearLocked(ctx, input.SessionID, input.ID)
 }
 
-func (s *svc) clearLocked(ctx context.Context, sessionID, inputID int64) (int64, error) {
+func (s *Service) clearLocked(ctx context.Context, sessionID, inputID int64) (int64, error) {
 	log := logger.Ctx(ctx).Named("manager.clear")
 
 	s.routes.claim.Lock()
@@ -421,7 +419,7 @@ func (s *svc) clearLocked(ctx context.Context, sessionID, inputID int64) (int64,
 }
 
 // newProcessService shares the tree lock between process admission and stop.
-func (s *svc) newProcessService(ctx context.Context) backgroundprocess.Service {
+func (s *Service) newProcessService(ctx context.Context) backgroundprocess.Service {
 	outputRoot, err := coagenthome.Join(coagenthome.ProcessesDirName)
 	if err != nil {
 		logger.Ctx(ctx).Named("daemon.process").Warn("process_output_dir", zap.Error(err))
@@ -437,7 +435,7 @@ func (s *svc) newProcessService(ctx context.Context) backgroundprocess.Service {
 	})
 }
 
-func (s *svc) removeSchedules(ctx context.Context, sessionID int64) {
+func (s *Service) removeSchedules(ctx context.Context, sessionID int64) {
 	if err := s.schedules.RemoveAllForSession(ctx, sessionID); err != nil {
 		logger.Ctx(ctx).Named("daemon.manager").
 			Warn("remove_schedules_failed", zap.Int64("session_id", sessionID), zap.Error(err))
@@ -460,7 +458,7 @@ func (l *sessionTreeLock) acquire(ctx context.Context) (func(), error) {
 	}
 }
 
-func (s *svc) lockSessionTree(ctx context.Context, sessionID int64) (func(), error) {
+func (s *Service) lockSessionTree(ctx context.Context, sessionID int64) (func(), error) {
 	record, err := s.store.GetSession(ctx, sessionID)
 	if err != nil {
 		return nil, fmt.Errorf("load session tree lock: %w", err)
@@ -471,7 +469,7 @@ func (s *svc) lockSessionTree(ctx context.Context, sessionID int64) (func(), err
 
 // commitStoppedSession is runner-owned transcript mutation used by the /stop
 // lifecycle after every live writer has joined.
-func (s *svc) commitStoppedSession(ctx context.Context, sessionID int64) error {
+func (s *Service) commitStoppedSession(ctx context.Context, sessionID int64) error {
 	messages, err := s.store.LoadActiveMessages(ctx, sessionID)
 	if err != nil {
 		return fmt.Errorf("settle stopped transcript: %w", err)
@@ -485,7 +483,7 @@ func (s *svc) commitStoppedSession(ctx context.Context, sessionID int64) error {
 	return s.settleCalls(ctx, sessionID, calls, "Stopped by user.", true)
 }
 
-func (s *svc) settleCalls(ctx context.Context, sessionID int64, calls []session.PendingToolCall,
+func (s *Service) settleCalls(ctx context.Context, sessionID int64, calls []session.PendingToolCall,
 	notice string, expireActivation bool,
 ) error {
 	commit := sessionstore.Commit{
@@ -513,7 +511,7 @@ func (s *svc) settleCalls(ctx context.Context, sessionID int64, calls []session.
 	return nil
 }
 
-func (s *svc) loadTree(ctx context.Context, sessionID int64) (*tree, error) {
+func (s *Service) loadTree(ctx context.Context, sessionID int64) (*tree, error) {
 	rec, err := s.store.GetSession(ctx, sessionID)
 	if err != nil {
 		return nil, fmt.Errorf("load tree session: %w", err)
@@ -587,7 +585,7 @@ func (t *tree) stopIDs() []int64 {
 	return ids
 }
 
-func (s *svc) liveRunners(t *tree) []*runner {
+func (s *Service) liveRunners(t *tree) []*runner {
 	ids := make([]int64, 0, len(t.byID))
 	for id := range t.byID {
 		ids = append(ids, id)
@@ -620,7 +618,7 @@ func (p *stopPlan) SessionIDs() []int64 {
 	return append([]int64(nil), p.sessionIDs...)
 }
 
-func (s *svc) beginStop(ctx context.Context, rootID int64) (*stopPlan, error) {
+func (s *Service) beginStop(ctx context.Context, rootID int64) (*stopPlan, error) {
 	plan, err := s.stopPlan(ctx, rootID)
 	if err != nil {
 		return nil, err
@@ -641,7 +639,7 @@ func (s *svc) beginStop(ctx context.Context, rootID int64) (*stopPlan, error) {
 	return plan, nil
 }
 
-func (s *svc) cancelStopInputs(ctx context.Context, plan *stopPlan) error {
+func (s *Service) cancelStopInputs(ctx context.Context, plan *stopPlan) error {
 	if _, err := s.store.CancelPendingInputsForStop(ctx, plan.sessionIDs, "stopped"); err != nil {
 		return fmt.Errorf("cancel stopped session input: %w", err)
 	}
@@ -649,7 +647,7 @@ func (s *svc) cancelStopInputs(ctx context.Context, plan *stopPlan) error {
 	return nil
 }
 
-func (s *svc) finishStop(ctx context.Context, plan *stopPlan, keepRootStopping bool) error {
+func (s *Service) finishStop(ctx context.Context, plan *stopPlan, keepRootStopping bool) error {
 	for _, link := range plan.links {
 		if err := s.links.MakeStoppedLinkResumable(ctx, link.ChildID); err != nil {
 			return fmt.Errorf("detach stopped subagent %d: %w", link.ChildID, err)
@@ -669,7 +667,7 @@ func (s *svc) finishStop(ctx context.Context, plan *stopPlan, keepRootStopping b
 	return nil
 }
 
-func (s *svc) completeExplicitStop(
+func (s *Service) completeExplicitStop(
 	ctx context.Context,
 	rootID, inputID int64,
 	cancelledProcesses int,
@@ -678,22 +676,18 @@ func (s *svc) completeExplicitStop(
 		return fmt.Errorf("commit explicit stop completion: %w", err)
 	}
 
+	s.publish(rootID, sessionevent.Notification{
+		Type: sessionevent.NotifyStateChanged, Status: controllerapi.StateIdle, Reason: "stopped",
+	})
+
 	if _, err := s.store.ReactivateForSchedule(ctx, rootID); err != nil {
 		return fmt.Errorf("complete explicit stop: %w", err)
-	}
-
-	record, err := s.store.GetSession(ctx, rootID)
-	if err == nil {
-		owner, _ := record.Attributes[controllerapi.SessionAttributeManagerID].(string)
-		if owner != "" {
-			_, _ = s.store.WakeOutputHead(ctx, owner)
-		}
 	}
 
 	return nil
 }
 
-func (s *svc) stopPlan(ctx context.Context, rootID int64) (*stopPlan, error) {
+func (s *Service) stopPlan(ctx context.Context, rootID int64) (*stopPlan, error) {
 	t, err := s.loadTree(ctx, rootID)
 	if err != nil {
 		return nil, err
@@ -741,7 +735,12 @@ func (s *svc) stopPlan(ctx context.Context, rootID int64) (*stopPlan, error) {
 
 // yieldedChildren finds children whose session completed a yield while their
 // activation stays open on a live background process (ADR-0071).
-func (s *svc) yieldedChildren(ctx context.Context, t *tree, rootID int64, included map[int64]bool) ([]int64, error) {
+func (s *Service) yieldedChildren(
+	ctx context.Context,
+	t *tree,
+	rootID int64,
+	included map[int64]bool,
+) ([]int64, error) {
 	subtree, err := t.subtree(rootID)
 	if err != nil {
 		return nil, err
@@ -776,7 +775,7 @@ func stopActive(status sessionstore.SessionStatus) bool {
 		status == sessionstore.SessionStatusStopped
 }
 
-func (s *svc) cancelSessionSubtreeProcesses(
+func (s *Service) cancelSessionSubtreeProcesses(
 	ctx context.Context,
 	sessionID int64,
 	intent backgroundprocess.HostIntent,
@@ -799,7 +798,7 @@ func (s *svc) cancelSessionSubtreeProcesses(
 	return cancelled, nil
 }
 
-func (s *svc) retireTreeToolResources(ctx context.Context, sessionID int64) error {
+func (s *Service) retireTreeToolResources(ctx context.Context, sessionID int64) error {
 	t, err := s.loadTree(ctx, sessionID)
 	if err != nil {
 		return err

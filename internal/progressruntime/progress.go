@@ -1,4 +1,3 @@
-//nolint:wrapcheck // Snapshot assembly preserves durable projection errors.; nosemgrep: semgrep.coagent-no-preamble-before-package
 package progressruntime
 
 import (
@@ -6,59 +5,39 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"time"
 
 	"github.com/pilat/coagent/internal/budget"
-	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/progress"
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/todo"
 )
 
-func (r *runtime) current(
+func (r *Runtime) Current(
 	ctx context.Context,
 	rootID int64,
-) (*controllerapi.ProgressData, error) {
+) (string, error) {
 	facts, err := r.sessionStore.CaptureProgress(ctx, rootID)
 	if err != nil {
-		return nil, err
+		return "", fmt.Errorf("capture status: %w", err)
 	}
 
 	now := time.Now().UTC()
 
 	snapshot, err := r.progressSnapshot(facts, now)
 	if err != nil {
-		return nil, err
+		return "", err
 	}
 
 	if live := r.liveState(facts.RootID); live.Active {
 		snapshot.Context = live.Context
 	}
 
-	return &controllerapi.ProgressData{
-		SessionID: rootID, Revision: snapshot.Revision, OutboxWatermark: snapshot.OutboxWatermark,
-		ObservedAt: now, Rendered: progress.RenderFull(snapshot),
-	}, nil
+	return progress.RenderFull(snapshot), nil
 }
 
-func (r *runtime) refresh(ctx context.Context, rootID int64) error {
-	_, _, err := r.enqueueProgressChange(ctx, rootID)
-	// Supersession is successful suppression, never a failure: a manager that
-	// refreshes a just-fenced root must not treat the stale snapshot as an error.
-	if errors.Is(err, sessionstore.ErrProgressSuperseded) {
-		return nil
-	}
-
-	if err == nil {
-		r.wakeProgress()
-	}
-
-	return err
-}
-
-func (r *runtime) progressSnapshot(
+func (r *Runtime) progressSnapshot(
 	facts *sessionstore.ProgressFacts,
 	observedAt time.Time,
 ) (progress.Snapshot, error) {
@@ -72,18 +51,14 @@ func (r *runtime) progressSnapshot(
 	todo.SortCanonical(todoItems)
 
 	snapshot := progress.Snapshot{
-		RootID: facts.RootID, DurableWatermark: facts.MessageWatermark,
-		OutboxWatermark: facts.OutboxWatermark, PersistedReason: string(facts.Status),
+		RootID: facts.RootID, PersistedReason: string(facts.Status),
 		ObservedAt: observedAt, Model: facts.Model, RootIteration: facts.Iteration,
-		MainModelWorking: r.liveState(facts.RootID).Working && facts.Status != sessionstore.SessionStatusSuspended,
-		ChildCount:       facts.ChildCount, ChildIterations: facts.ChildIterations,
+		ChildCount: facts.ChildCount, ChildIterations: facts.ChildIterations,
 		Lifetime: progress.Usage{
 			PromptTokens:     facts.PromptTokens,
 			CompletionTokens: facts.CompletionTokens, CostUSD: facts.CostUSD, Available: true,
 		},
-		LatestModelProgress:  facts.LatestModelProgress,
-		LastSemanticOutputAt: facts.LastSemanticOutputAt,
-		ActiveSubagents:      facts.ActiveSubagents, BackgroundSubagents: facts.BackgroundSubagents,
+		ActiveSubagents: facts.ActiveSubagents, BackgroundSubagents: facts.BackgroundSubagents,
 	}
 	if r.liveState(facts.RootID).Active {
 		snapshot.RuntimeState = "running"
@@ -135,7 +110,6 @@ func (r *runtime) progressSnapshot(
 	return snapshot, nil
 }
 
-//nolint:wsl_v5 // Derived budget fields are assembled as one projection.
 func progressBudget(record *budget.Record, cost float64, now time.Time) *progress.Budget {
 	if record == nil {
 		return nil
@@ -147,10 +121,7 @@ func progressBudget(record *budget.Record, cost float64, now time.Time) *progres
 	}
 	used := cost - record.BaselineCostUSD
 	value.CostUsedUSD = &used
-	if record.CostLimitUSD != nil {
-		remaining := max(*record.CostLimitUSD-used, 0)
-		value.CostRemainingUSD = &remaining
-	}
+	value.CostRemainingUSD, value.DurationRemaining = record.Remaining(cost, now)
 
 	if record.DurationSeconds != nil {
 		limit := time.Duration(*record.DurationSeconds) * time.Second
@@ -159,8 +130,6 @@ func progressBudget(record *budget.Record, cost float64, now time.Time) *progres
 		if !now.Before(record.ArmedAt) {
 			elapsed := now.Sub(record.ArmedAt)
 			value.Elapsed = &elapsed
-			remaining := max(limit-elapsed, 0)
-			value.DurationRemaining = &remaining
 		}
 	}
 

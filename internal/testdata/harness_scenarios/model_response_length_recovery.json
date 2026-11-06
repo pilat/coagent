@@ -6,7 +6,8 @@
       "name": "<name>",
       "work_dir": "<workdir>",
       "attributes": {
-        "manager_id": "telegram:main"
+        "manager_id": "telegram:main",
+        "title": "exercise response recovery"
       }
     },
     {
@@ -22,28 +23,23 @@
       "status": "idle"
     }
   ],
-  "claims": [
+  "outputs": [
     {
+      "id": 1,
+      "session_id": 1,
       "type": "session_opened",
       "content": "",
-      "attributes": {
-        "manager_id": "telegram:main",
-        "name": "002",
-        "work_dir": "<workdir>"
-      },
-      "source_key": "session:1:opened",
-      "releases_input": false
+      "source_key": "session:1:opened"
     },
     {
-      "type": "message_persistent",
-      "content": "recovered complete answer\n\n🤖 `fake-model` · iteration 3\n💰 $0.5 total",
-      "attributes": {
-        "manager_id": "telegram:main",
-        "model_input_generation": 1
-      },
-      "source_key": "message:6:final",
-      "model_input_generation": 1,
-      "releases_input": true
+      "id": 2,
+      "session_id": 1,
+      "type": "message",
+      "content": "recovered complete answer",
+      "source_key": "message:6:final"
     }
-  ]
+  ],
+  "owners": {
+    "1": "telegram:main"
+  }
 }

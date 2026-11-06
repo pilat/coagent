@@ -37,7 +37,7 @@ func newConfigEditFixture() (*configEditTool, *fakeDocumentStager, *bool) {
 		staged:  &configops.Staged{Data: []byte("providers: {}"), Hash: "abc", Summary: "replace"},
 		verdict: configops.OK(),
 	}
-	service := &svc{ops: stager, calls: make(map[int64]map[string]stagedCall)}
+	service := &Service{ops: stager, calls: make(map[int64]map[string]stagedCall)}
 	return &configEditTool{service: service, sessionID: 7}, stager, &service.claimed
 }
 
@@ -156,7 +156,7 @@ func TestConfigEditTool_StatesWholeDocumentReplacementWhereTheModelDecides(t *te
 
 	for _, want := range []string{
 		"not a patch or merge",
-		"First read the current file with the read tool",
+		"First read the current file with config_read",
 		"change only what the user asked for",
 		"every untouched section copied verbatim",
 		"providers, models, managers, marketplaces, sandbox",

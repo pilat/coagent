@@ -31,11 +31,6 @@ const (
 	ProcessesDirName      = "processes"
 	MCPAttachmentsDirName = "mcp-attachments"
 	SandboxDirName        = "sandbox"
-
-	// TelegramServiceFilePattern is the legacy target-chat-keyed service record.
-	TelegramServiceFilePattern = "tg-service-%d.json"
-	// TelegramServiceManagerFilePattern is keyed by a manager-ID digest.
-	TelegramServiceManagerFilePattern = "tg-service-manager-%s.json"
 )
 
 var (

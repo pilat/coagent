@@ -34,14 +34,15 @@ type Input struct {
 	ImageAuthorizer          llm.ImageAuthorizer
 	Record                   *sessionstore.SessionRecord
 	Client                   llm.Client
-	Loader                   loader.Service
-	Registry                 tool.Registry
+	Loader                   *loader.Service
+	Registry                 *tool.Registry
 	Prompt                   *sessionprompt.Builder
 	Store                    Store
 	Events                   Events
 	ExternalCalls            map[string]string
 	OpeningContext           string
 	OutputEnabled            bool
+	ToolTrail                bool
 	PreserveStopped          bool
 	Schedules                string
 	Status                   string
@@ -55,8 +56,8 @@ type Session struct {
 	workDir           string
 	projectID         int64
 	llmClient         llm.Client
-	loader            loader.Service
-	registry          tool.Registry
+	loader            *loader.Service
+	registry          *tool.Registry
 	activationIndex   map[string]string
 	currentActivation *tool.ActivationGrant
 	agentsMD          string
@@ -76,6 +77,7 @@ type Session struct {
 	schedules       string
 	status          string
 	outputEnabled   bool
+	toolTrail       bool
 	preserveStopped bool
 	budgetFired     bool
 
@@ -155,6 +157,7 @@ func New(ctx context.Context, in Input) (*Session, error) {
 		status:                   in.Status,
 		events:                   in.Events,
 		outputEnabled:            in.OutputEnabled,
+		toolTrail:                in.ToolTrail,
 		preserveStopped:          in.PreserveStopped,
 		activeBackgroundSnapshot: in.BackgroundSnapshot,
 		compactionDeferAnnounced: in.CompactionDeferAnnounced,
@@ -172,9 +175,8 @@ func New(ctx context.Context, in Input) (*Session, error) {
 	s.installPersistedBaseline(r.ContextBaseline())
 	s.seedResumeCompletion(
 		&sessionstore.CompletionCheckState{
-			CandidateID:         r.CompletionCheckCandidateID,
-			ManagerReplyPending: r.ManagerReplyPending,
-			EmptyStopStreak:     r.EmptyStopStreak,
+			CandidateID:     r.CompletionCheckCandidateID,
+			EmptyStopStreak: r.EmptyStopStreak,
 		},
 	)
 
@@ -431,7 +433,7 @@ func (s *Session) renderSessionHelp() string {
 		"`/compact [focus]` — compact the context",
 		"`/schedules` — list schedules",
 		"`/budget <request>` — arm, replace, inspect, or clear a one-shot cost/wall-time checkpoint",
-		"`/gwt <name>` — fork into a worktree (Telegram session topics only)",
+		"`/gwt <name>` — fork into a worktree",
 	}
 	if s.loader == nil {
 		return strings.Join(lines, "\n")

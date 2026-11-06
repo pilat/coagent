@@ -85,12 +85,6 @@ func displayWidth(s string) int {
 	return utf8.RuneCountInString(s)
 }
 
-// cellToHTML escapes the cell, then wraps `inline code` — safe because escaping never emits a backtick.
-func cellToHTML(cell string) string {
-	escaped := escapeHTML(cell)
-	return reInlineCode.ReplaceAllString(escaped, "<code>$1</code>")
-}
-
 func renderNarrowTable(headers []string, rows [][]string, colWidths []int) string {
 	pad := func(s string, w int) string {
 		return s + strings.Repeat(" ", w-displayWidth(s))
@@ -135,7 +129,16 @@ func renderTwoColTable(rows [][]string) string {
 			val = r[1]
 		}
 
-		lines = append(lines, "<b>"+cellToHTML(key)+"</b>: "+cellToHTML(val))
+		lines = append(
+			lines,
+			"<b>"+reInlineCode.ReplaceAllString(
+				escapeHTML(key),
+				"<code>$1</code>",
+			)+"</b>: "+reInlineCode.ReplaceAllString(
+				escapeHTML(val),
+				"<code>$1</code>",
+			),
+		)
 	}
 
 	return strings.Join(lines, "\n")
@@ -156,10 +159,13 @@ func renderCardTable(headers []string, rows [][]string) string {
 				val = r[i]
 			}
 
-			fields = append(fields, "<b>"+escapeHTML(headers[i])+"</b>: "+cellToHTML(val))
+			fields = append(
+				fields,
+				"<b>"+escapeHTML(headers[i])+"</b>: "+reInlineCode.ReplaceAllString(escapeHTML(val), "<code>$1</code>"),
+			)
 		}
 
-		card := "━━ " + cellToHTML(title) + " ━━"
+		card := "━━ " + reInlineCode.ReplaceAllString(escapeHTML(title), "<code>$1</code>") + " ━━"
 		if len(fields) > 0 {
 			card += "\n" + strings.Join(fields, "\n")
 		}

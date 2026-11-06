@@ -44,24 +44,7 @@ func newModels(cfg *config.Config) models {
 	return result
 }
 
-// The marker crosses JSON as a bool or string; only explicit false-like values opt out.
-func isManagementSurface(attrs map[string]any) bool {
-	v, ok := attrs[controllerapi.SessionAttributeManagementSurface]
-	if !ok || v == nil {
-		return false
-	}
-
-	switch v := v.(type) {
-	case bool:
-		return v
-	case string:
-		return v != "" && v != "false" && v != "0"
-	default:
-		return true
-	}
-}
-
-func (s *svc) openSession(
+func (s *Service) openSession(
 	ctx context.Context,
 	sessionID int64,
 	workDir string,
@@ -98,21 +81,13 @@ func (s *svc) openSession(
 		return nil, nil, fmt.Errorf("capture construction status: %w", statusErr)
 	}
 
-	in.Status = status.Rendered
+	in.Status = status
 
 	owner, _ := rec.Attributes[controllerapi.SessionAttributeManagerID].(string)
 	in.OutputEnabled = rec.ParentID == 0 && owner != ""
+	in.ToolTrail = in.OutputEnabled
 	in.ActiveSubagents = s.activeSubagentInfos(ctx, sessionID)
 	in.ActiveProcesses = s.activeProcessInfos(ctx, sessionID)
-
-	if rec.ParentID == 0 && isManagementSurface(rec.Attributes) {
-		skill, err := loader.BuiltinSkill(loader.ManagementSkillName)
-		if err != nil {
-			return nil, nil, fmt.Errorf("load management skill: %w", err)
-		}
-
-		in.ExtraSkills = append(in.ExtraSkills, skill)
-	}
 
 	in.OwnerTools = s.ownerTools(rec, in.Loader)
 
@@ -125,7 +100,7 @@ func (s *svc) openSession(
 }
 
 // Children do not copy manager-owned attributes, so confinement follows the durable root.
-func (s *svc) sessionRepoRoot(ctx context.Context, rec *sessionstore.SessionRecord) (string, error) {
+func (s *Service) sessionRepoRoot(ctx context.Context, rec *sessionstore.SessionRecord) (string, error) {
 	if rec.RootID == 0 {
 		repoRoot, _ := rec.Attributes["repo_root"].(string)
 
@@ -147,7 +122,7 @@ func (s *svc) sessionRepoRoot(ctx context.Context, rec *sessionstore.SessionReco
 }
 
 // Ownership comes from producer ledgers and exact queued results, never tool names alone.
-func (s *svc) callOwners(ctx context.Context, sessionID int64) (map[string]string, error) {
+func (s *Service) callOwners(ctx context.Context, sessionID int64) (map[string]string, error) {
 	stored, err := s.store.LoadActiveMessages(ctx, sessionID)
 	if err != nil {
 		return nil, fmt.Errorf("load pending external calls: %w", err)
@@ -213,7 +188,7 @@ func (s *svc) callOwners(ctx context.Context, sessionID int64) (map[string]strin
 	return calls, nil
 }
 
-func (s *svc) activeSubagentInfos(ctx context.Context, sessionID int64) []sessionprompt.ActiveSubagentInfo {
+func (s *Service) activeSubagentInfos(ctx context.Context, sessionID int64) []sessionprompt.ActiveSubagentInfo {
 	links, err := s.links.ListPendingChildLinks(ctx, sessionID)
 	if err != nil {
 		logger.Ctx(ctx).Named("daemon.runner").
@@ -238,7 +213,7 @@ func (s *svc) activeSubagentInfos(ctx context.Context, sessionID int64) []sessio
 	return infos
 }
 
-func (s *svc) activeProcessInfos(ctx context.Context, sessionID int64) []sessionprompt.ActiveProcessInfo {
+func (s *Service) activeProcessInfos(ctx context.Context, sessionID int64) []sessionprompt.ActiveProcessInfo {
 	processes, err := s.processStore.ListRunningBySessions(ctx, []int64{sessionID})
 	if err != nil {
 		logger.Ctx(ctx).Named("daemon.runner").
@@ -261,7 +236,7 @@ func (s *svc) activeProcessInfos(ctx context.Context, sessionID int64) []session
 	return infos
 }
 
-func (s *svc) ownerTools(rec *sessionstore.SessionRecord, ldr loader.Service) []tool.Tool {
+func (s *Service) ownerTools(rec *sessionstore.SessionRecord, ldr *loader.Service) []tool.Tool {
 	tools := []tool.Tool{
 		subagent.NewTaskTool(subagent.Spawner(s), rec.ID, ldr, s.models.infos),
 		subagent.NewGetSubagentResultTool(subagent.Spawner(s)), subagent.NewSendToSubagentTool(subagent.Spawner(s)),
@@ -274,18 +249,28 @@ func (s *svc) ownerTools(rec *sessionstore.SessionRecord, ldr loader.Service) []
 	tools = append(tools, s.schedules.SleepTool(rec.ID))
 
 	if rec.ParentID == 0 {
-		tools = append(tools, mcpstore.NewTools(s.mcpStore, rec.ProjectID)...)
-
-		tools = append(tools,
-			configapply.NewConfigEdit(rec.ID, s.applier),
-			budget.NewTool(budget.Store(s.store), rec.ID, s.models.priced(rec.Model)),
-		)
+		tools = append(tools, s.administrationTools(rec, rec.ProjectID)...)
+		if owner, _ := rec.Attributes[controllerapi.SessionAttributeManagerID].(string); owner != "" {
+			tools = append(
+				tools,
+				configapply.NewConfigEdit(rec.ID, s.applier),
+				configapply.NewConfigRead(rec.ID, s.applier),
+			)
+		}
 	}
 
 	return tools
 }
 
-func (s *svc) pendingResultOwners(ctx context.Context, sessionID int64, actual, calls map[string]string) error {
+func (s *Service) administrationTools(rec *sessionstore.SessionRecord, projectID int64) []tool.Tool {
+	tools := mcpstore.NewTools(s.mcpStore, projectID)
+
+	return append(tools,
+		budget.NewTool(budget.Store(s.store), rec.ID, s.models.priced(rec.Model)),
+	)
+}
+
+func (s *Service) pendingResultOwners(ctx context.Context, sessionID int64, actual, calls map[string]string) error {
 	pending, err := s.store.ListPending(ctx, sessionID)
 	if err != nil {
 		return fmt.Errorf("load pending result owners: %w", err)

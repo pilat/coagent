@@ -31,7 +31,9 @@ func statusOf(ctx context.Context, socket string) int {
 
 	defer func() { _ = client.Close() }()
 
-	st, err := client.Status(ctx)
+	var st ctl.StatusResult
+
+	err = client.Call(ctx, ctl.OpStatus, nil, &st)
 	if err != nil {
 		return reportStatusFailure(err)
 	}
@@ -101,21 +103,6 @@ func managerLine(m ctl.ManagerStatus) string {
 	line := fmt.Sprintf("manager %s (%s) · %s", m.ID, m.Driver, state)
 	if m.Error != "" {
 		line += " · " + m.Error
-	}
-
-	if m.PendingOutputs > 0 {
-		line += fmt.Sprintf(" · %d pending output", m.PendingOutputs)
-	}
-
-	if m.BlockedOutputID != 0 {
-		line += fmt.Sprintf(" · blocked #%d", m.BlockedOutputID)
-		if m.BlockedForSeconds > 0 {
-			line += " for " + humanDuration(m.BlockedForSeconds)
-		}
-
-		if m.DeliveryError != "" {
-			line += " · " + m.DeliveryError
-		}
 	}
 
 	return line

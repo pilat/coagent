@@ -91,7 +91,7 @@ func printBuildInfo(ctx context.Context) {
 		return
 	}
 
-	info := mgr.Info()
+	info := mgr.Info(ctx)
 	if !info.Supported {
 		return
 	}

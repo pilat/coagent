@@ -10,7 +10,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/pilat/coagent/internal/backgroundprocess"
-	"github.com/pilat/coagent/internal/progressruntime"
 	"github.com/pilat/coagent/internal/sessionstore"
 )
 
@@ -24,7 +23,7 @@ func TestManager_Shutdown(t *testing.T) {
 	pidB := testProject(t, s, t.TempDir())
 	_, err = mgr.Send(ctx, pidB, "init", "", nil)
 	require.NoError(t, err)
-	mgr.Shutdown(5 * time.Second)
+	mgr.Shutdown(t.Context(), 5*time.Second)
 	remaining, _ := runnerCounts(mgr.runners)
 	assert.Zero(t, remaining, "all loops should be cleaned up after shutdown")
 }
@@ -47,7 +46,7 @@ func TestShutdownCancelsBackgroundRecovery(t *testing.T) {
 	}
 	shutdownDone := make(chan struct{})
 	go func() {
-		h.mgr.Shutdown(time.Second)
+		h.mgr.Shutdown(t.Context(), time.Second)
 		close(shutdownDone)
 	}()
 	select {
@@ -70,40 +69,40 @@ func TestShutdownCancelsBackgroundRecovery(t *testing.T) {
 
 // Runner cancellation must not wait for an unrelated background owner to join:
 // the composition root may close persistence as soon as Shutdown returns.
-func TestShutdownCancelsRunnersBeforeWaitingForProgress(t *testing.T) {
+func TestShutdownCancelsRunnersBeforeWaitingForWorkers(t *testing.T) {
 	h := newHarness(t, harnessOptions{configure: withTestModels, clientFor: (&mockFactory{}).client})
 	mgr := h.mgr
 	runnerCtx, cancel := context.WithCancel(context.Background())
 	activeRunner := newRunner(
-		cancel, t.TempDir(), &sessionstore.SessionRecord{ID: 1}, waitingRunner{sessionID: 1}, false,
+		cancel,
+		t.TempDir(),
+		&sessionstore.SessionRecord{ID: 1},
+		waitingRunner{sessionID: 1},
+		false,
 	)
 	_, registered := mgr.runners.register(activeRunner)
 	require.True(t, registered)
-	go func() {
-		<-runnerCtx.Done()
-		activeRunner.Complete()
-	}()
-	progress := &blockingProgressStop{entered: make(chan struct{}), release: make(chan struct{})}
-	mgr.progress = progress
+	go func() { <-runnerCtx.Done(); activeRunner.Complete() }()
+	workerCancelled := make(chan struct{})
+	release := make(chan struct{})
+	unblock := sync.OnceFunc(func() { close(release) })
+	t.Cleanup(unblock)
+	require.True(t, mgr.life.Go("test.shutdown", func(ctx context.Context) {
+		<-ctx.Done()
+		close(workerCancelled)
+		<-release
+	}))
 	shutdownDone := make(chan struct{})
-	go func() {
-		mgr.Shutdown(time.Second)
-		close(shutdownDone)
-	}()
-	<-progress.entered
-	select {
-	case <-runnerCtx.Done():
-		close(progress.release)
-	case <-time.After(250 * time.Millisecond):
-		close(progress.release)
-		<-shutdownDone
-		t.Fatal("runner cancellation waited for progress shutdown")
-	}
+	go func() { mgr.Shutdown(t.Context(), 5*time.Second); close(shutdownDone) }()
+	requireBarrierSignal(t, workerCancelled, "shutdown did not cancel background workers")
+	requireBarrierSignal(t, runnerCtx.Done(), "runner cancellation waited for worker shutdown")
 	select {
 	case <-shutdownDone:
-	case <-time.After(time.Second):
-		t.Fatal("shutdown did not join the released progress owner and runner")
+		t.Fatal("shutdown returned before the background worker exited")
+	default:
 	}
+	unblock()
+	requireBarrierSignal(t, shutdownDone, "shutdown did not join the released worker and runner")
 }
 
 func TestShutdownWaitsForStartupProcessRecovery(t *testing.T) {
@@ -119,7 +118,7 @@ func TestShutdownWaitsForStartupProcessRecovery(t *testing.T) {
 	go func() { startupDone <- mgr.Start(t.Context()) }()
 	requireBarrierSignal(t, processes.entered, "startup did not reach process recovery")
 	shutdownDone := make(chan struct{})
-	go func() { mgr.Shutdown(time.Second); close(shutdownDone) }()
+	go func() { mgr.Shutdown(t.Context(), time.Second); close(shutdownDone) }()
 	select {
 	case <-shutdownDone:
 		t.Fatal("shutdown returned before startup process recovery")
@@ -128,20 +127,6 @@ func TestShutdownWaitsForStartupProcessRecovery(t *testing.T) {
 	close(processes.release)
 	require.ErrorIs(t, <-startupDone, errDaemonShuttingDown)
 	requireBarrierSignal(t, shutdownDone, "shutdown did not join startup process recovery")
-}
-
-type blockingProgressStop struct {
-	progressruntime.Service
-
-	entered chan struct{}
-	release chan struct{}
-	once    sync.Once
-}
-
-func (s *blockingProgressStop) Stop(context.Context) error {
-	s.once.Do(func() { close(s.entered) })
-	<-s.release
-	return nil
 }
 
 type blockingStartupProcesses struct {

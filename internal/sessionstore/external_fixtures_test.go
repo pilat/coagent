@@ -178,7 +178,7 @@ func answerTool(ctx context.Context, s *sessionstore.Store,
 		parts = append(
 			parts,
 			sessionstore.Output{
-				Type:          sessionstore.OutputMessagePersistent,
+				Type:          sessionstore.OutputMessage,
 				Content:       draft,
 				Key:           fmt.Sprintf("tool:%s:direct:%d", message.ToolCallID, i),
 				ReleasesInput: true,
@@ -222,7 +222,7 @@ func scheduledTurn(ctx context.Context, s *sessionstore.Store,
 			Messages:  []*transcript.Message{assistant, result},
 			Outputs: []sessionstore.Output{
 				{
-					Type:       sessionstore.OutputMessagePersistent,
+					Type:       sessionstore.OutputMessage,
 					Content:    result.Content,
 					Key:        "schedule:" + key + ":announcement",
 					Attributes: map[string]any{"source": "scheduler"},

@@ -37,25 +37,25 @@ type StackConfig struct {
 	RepoRoot        string                      // main repository path for worktree sessions; empty otherwise
 	Servers         map[string]mcp.ServerConfig // resolved MCP definitions; empty = no MCP
 	Unified         *config.UnifiedConfig       // for the sandbox config
-	Loader          loader.Service
-	Todo            todo.Service
+	Loader          *loader.Service
+	Todo            *todo.Service
 	TodoReplacement TodoReplacement
 	FileReadTracker FileReadTracker
 	Provider        shellenv.Provider         // optional injected provider; nil creates a stack-owned provider
-	Resources       Resources                 // optional session owner across activations
+	Resources       *Resources                // optional session owner across activations
 	ProcessService  backgroundprocess.Service // session-bound process lifecycle; may be nil
 }
 
 // Stack owns activation-local tools and leases session resources until Close.
 type Stack struct {
-	Registry  tool.Registry
+	Registry  *tool.Registry
 	lspMgr    lsp.Manager
 	mcpSvc    mcp.Service // nil when no MCP servers configured
 	resources *resourceLease
 	closeOnce sync.Once
 	closeErr  error
 	runner    bashsandbox.Runner
-	access    safefile.Access
+	access    *safefile.Access
 	sessionID int64
 	web       []*http.Transport
 }
@@ -212,7 +212,7 @@ func (s *Stack) SandboxedGit() git.Client {
 
 // Access returns the stack's rooted filesystem authority, or nil when the stack
 // has none.
-func (s *Stack) Access() safefile.Access {
+func (s *Stack) Access() *safefile.Access {
 	if s == nil {
 		return nil
 	}
@@ -254,11 +254,11 @@ func (s *Stack) close() error {
 // order never reaches the wire — List() sorts by ID and that sorted membership
 // is what feeds the LLM prompt-cache key.
 func registerCoreTools(
-	registry tool.Registry,
+	registry *tool.Registry,
 	workDir string,
-	access safefile.Access,
-	ldr loader.Service,
-	todoSvc todo.Service,
+	access *safefile.Access,
+	ldr *loader.Service,
+	todoSvc *todo.Service,
 	todoReplacement TodoReplacement,
 	lspMgr lsp.Manager,
 	bashRunner bashsandbox.Runner,

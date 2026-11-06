@@ -36,11 +36,10 @@ func TestDeliverCompletionToStoppingParentSettlesLink(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, won)
 
-	var deliveredAt, inputID sql.NullInt64
-	require.NoError(t, db.QueryRowContext(ctx, `SELECT delivered_at, delivered_input_id
-		FROM subagent_links WHERE child_id = ?`, childID).Scan(&deliveredAt, &inputID))
+	var deliveredAt sql.NullInt64
+	require.NoError(t, db.QueryRowContext(ctx, `SELECT delivered_at
+		FROM subagent_links WHERE child_id = ?`, childID).Scan(&deliveredAt))
 	assert.True(t, deliveredAt.Valid)
-	assert.False(t, inputID.Valid)
 	var count int
 	require.NoError(t, db.QueryRowContext(ctx, `SELECT COUNT(*) FROM session_inbox
 		WHERE session_id = ? AND source = 'call_result'`, parent.ID).Scan(&count))
@@ -103,8 +102,7 @@ func TestLinkStore_DeliverBackgroundCompletionToInbox(t *testing.T) {
 	require.True(t, won)
 	updated, err := links.GetLink(ctx, childID)
 	require.NoError(t, err)
-	require.Positive(t, updated.DeliveredInputID)
-	assert.Zero(t, updated.DeliveredMsgID)
+	require.Positive(t, updated.DeliveredAt)
 
 	input, err := ss.PeekPending(ctx, parent.ID)
 	require.NoError(t, err)
@@ -172,7 +170,6 @@ func TestLinkStore_KilledParentRecoversBackgroundCompletionForSuppression(t *tes
 	require.NoError(t, err)
 	require.NotNil(t, updated)
 	assert.Positive(t, updated.DeliveredAt)
-	assert.Zero(t, updated.DeliveredInputID)
 	_, err = ss.PeekPending(ctx, parent.ID)
 	require.ErrorIs(t, err, sessionstore.ErrNoPendingInput)
 }
@@ -385,7 +382,6 @@ func TestLinkStore_ResetRunning(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, StateRunning, link.State)
 	assert.Zero(t, link.DeliveredAt)
-	assert.Zero(t, link.DeliveredMsgID)
 	// result/outcome are intentionally left stale until the next terminalization.
 	assert.Equal(t, "answer", link.Result)
 }

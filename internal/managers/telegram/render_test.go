@@ -113,8 +113,6 @@ func TestDisableLinkPreview(t *testing.T) {
 		wantSet bool
 	}{
 		{"send message injects", "sendMessage", map[string]any{tgKeyText: "hi"}, true},
-		{"edit message injects", "editMessageText", map[string]any{tgKeyText: "hi"}, true},
-		{"callback untouched", "answerCallbackQuery", map[string]any{tgKeyText: "hi"}, false},
 		{"typing untouched", "sendChatAction", map[string]any{}, false},
 	}
 

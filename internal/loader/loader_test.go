@@ -23,8 +23,7 @@ func TestNew(t *testing.T) {
 
 	_ = service
 
-	s, ok := service.(*svc)
-	require.True(t, ok)
+	s := service
 	assert.NotNil(t, s.skills)
 	assert.NotNil(t, s.subagents)
 	assert.Empty(t, s.skills)
@@ -1021,7 +1020,7 @@ func TestLoadSkills_MarketplaceEscapingSymlinkRejected(t *testing.T) {
 	))
 	require.NoError(t, os.WriteFile(filepath.Join(skillsDir, "ok.md"), []byte("fine skill"), 0o644))
 
-	svc := New().(*svc)
+	svc := New()
 	svc.marketplaceSkillPaths = []sourceInfo{{path: skillsDir, pluginName: "plug", root: repo}}
 	require.NoError(t, svc.LoadSkills(t.TempDir()))
 
@@ -1045,7 +1044,7 @@ func TestLoadSkills_MarketplaceSiblingRepoSymlinkRejected(t *testing.T) {
 		filepath.Join(skillsDir, "sneak.md"),
 	))
 
-	svc := New().(*svc)
+	svc := New()
 	svc.marketplaceSkillPaths = []sourceInfo{{path: skillsDir, pluginName: "plug", root: repoA}}
 	require.NoError(t, svc.LoadSkills(t.TempDir()))
 

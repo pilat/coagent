@@ -18,11 +18,7 @@ import (
 	"github.com/pilat/coagent/internal/sessionstore"
 )
 
-func (s *svc) Send(ctx context.Context, projectID int64, prompt, model string, attrs map[string]any) (int64, error) {
-	return s.send(ctx, projectID, prompt, model, attrs)
-}
-
-func (s *svc) sendToSession(ctx context.Context, sessionID int64, prompt string) error {
+func (s *Service) sendToSession(ctx context.Context, sessionID int64, prompt string) error {
 	input, err := s.enqueueUserSessionInput(ctx, sessionID, prompt)
 	if err != nil {
 		if errors.Is(err, sessionstore.ErrSessionNotAcceptingInput) {
@@ -55,7 +51,7 @@ func (s *svc) sendToSession(ctx context.Context, sessionID int64, prompt string)
 	return s.sendToSessionLocked(ctx, sessionID, prompt)
 }
 
-func (s *svc) sendToSessionLocked(ctx context.Context, sessionID int64, prompt string) error {
+func (s *Service) sendToSessionLocked(ctx context.Context, sessionID int64, prompt string) error {
 	_, ok := s.runners.load(sessionID)
 	if ok {
 		return nil
@@ -86,7 +82,7 @@ func (s *svc) sendToSessionLocked(ctx context.Context, sessionID int64, prompt s
 	return s.startLocked(ctx, sessionID)
 }
 
-func (s *svc) SendToSessionResolved(ctx context.Context, sessionID int64, prompt string) (int64, error) {
+func (s *Service) SendToSessionResolved(ctx context.Context, sessionID int64, prompt string) (int64, error) {
 	record, err := s.store.GetSession(ctx, sessionID)
 	if err != nil {
 		return 0, fmt.Errorf("load session for replacement resolution: %w", err)
@@ -108,8 +104,8 @@ func (s *svc) SendToSessionResolved(ctx context.Context, sessionID int64, prompt
 	return sessionID, nil
 }
 
-// The tree fence keeps construction and the persisted model choice consistent.
-func (s *svc) SetModel(ctx context.Context, sessionID int64, model, reasoningLevel string) error {
+// SetModel keeps client construction and the persisted model choice consistent under the tree fence.
+func (s *Service) SetModel(ctx context.Context, sessionID int64, model, reasoningLevel string) error {
 	if err := s.models.configured(model); err != nil {
 		return err
 	}
@@ -131,7 +127,15 @@ func (s *svc) SetModel(ctx context.Context, sessionID int64, model, reasoningLev
 		return fmt.Errorf("load budget for model switch: %w", err)
 	}
 
-	client, section, err := sessionbuild.BuildClient(s.build.Config, model, reasoningLevel)
+	workDir, err := s.store.GetProjectWorkDir(ctx, record.ProjectID)
+	if err != nil {
+		return fmt.Errorf("resolve model-switch project: %w", err)
+	}
+
+	in := s.build
+	in.Record, in.WorkDir, in.Loader = record, workDir, nil
+
+	client, section, err := sessionbuild.BuildClient(ctx, in, model, reasoningLevel)
 	if err != nil {
 		return fmt.Errorf("construct model %s: %w", model, err)
 	}
@@ -155,7 +159,7 @@ func (s *svc) SetModel(ctx context.Context, sessionID int64, model, reasoningLev
 	return nil
 }
 
-func (s *svc) SetAttributes(ctx context.Context, sessionID int64, attrs map[string]any) error {
+func (s *Service) SetAttributes(ctx context.Context, sessionID int64, attrs map[string]any) error {
 	s.routes.claim.Lock()
 	defer s.routes.claim.Unlock()
 
@@ -201,7 +205,7 @@ func (s *svc) SetAttributes(ctx context.Context, sessionID int64, attrs map[stri
 }
 
 // A runner exit also dispatches pending commands, so the second holder of the fence finds this one resolved.
-func (s *svc) commandPending(ctx context.Context, input *sessionstore.InboxInput) (bool, error) {
+func (s *Service) commandPending(ctx context.Context, input *sessionstore.InboxInput) (bool, error) {
 	rows, err := s.store.ListPending(ctx, input.SessionID)
 	if err != nil {
 		return false, fmt.Errorf("list pending commands: %w", err)
@@ -210,7 +214,7 @@ func (s *svc) commandPending(ctx context.Context, input *sessionstore.InboxInput
 	return slices.ContainsFunc(rows, func(row *sessionstore.InboxInput) bool { return row.ID == input.ID }), nil
 }
 
-func (s *svc) handleGenericCommand(ctx context.Context, input *sessionstore.InboxInput) (bool, error) {
+func (s *Service) handleGenericCommand(ctx context.Context, input *sessionstore.InboxInput) (bool, error) {
 	if input.Source != sessionstore.InputSourceUser || !isEnqueueCommand(input.RawContent) {
 		return false, nil
 	}
@@ -236,7 +240,7 @@ func (s *svc) handleGenericCommand(ctx context.Context, input *sessionstore.Inbo
 	}
 }
 
-func (s *svc) handleStatusInput(ctx context.Context, input *sessionstore.InboxInput) error {
+func (s *Service) handleStatusInput(ctx context.Context, input *sessionstore.InboxInput) error {
 	current, err := s.progress.Current(ctx, input.SessionID)
 	if err != nil {
 		return fmt.Errorf("current progress: %w", err)
@@ -248,7 +252,7 @@ func (s *svc) handleStatusInput(ctx context.Context, input *sessionstore.InboxIn
 			{InputID: input.ID, State: sessionstore.InputStateHandled, Reason: "status command", LinkRef: -1},
 		},
 		Outputs: []sessionstore.Output{
-			{Type: sessionstore.OutputMessagePersistent, Content: current.Rendered, MessageRef: -1},
+			{Type: sessionstore.OutputMessage, Content: current, MessageRef: -1},
 		},
 	})
 	if errors.Is(err, sessionstore.ErrInputResolved) {
@@ -259,7 +263,7 @@ func (s *svc) handleStatusInput(ctx context.Context, input *sessionstore.InboxIn
 		return fmt.Errorf("handle status input: %w", err)
 	}
 
-	s.publish(input.SessionID, sessionevent.Notification{Type: sessionevent.NotifyMessage, Message: current.Rendered})
+	s.publish(input.SessionID, sessionevent.Notification{Type: sessionevent.NotifyMessage, Message: current})
 
 	if !s.HasActiveLoop(input.SessionID) {
 		s.publish(
@@ -271,7 +275,7 @@ func (s *svc) handleStatusInput(ctx context.Context, input *sessionstore.InboxIn
 	return nil
 }
 
-func (s *svc) handleStoppedStop(ctx context.Context, input *sessionstore.InboxInput) error {
+func (s *Service) handleStoppedStop(ctx context.Context, input *sessionstore.InboxInput) error {
 	_, err := s.store.Commit(ctx, sessionstore.Commit{
 		SessionID: input.SessionID,
 		Accept: []sessionstore.Accept{
@@ -279,7 +283,7 @@ func (s *svc) handleStoppedStop(ctx context.Context, input *sessionstore.InboxIn
 		},
 		Outputs: []sessionstore.Output{
 			{
-				Type:       sessionstore.OutputMessagePersistent,
+				Type:       sessionstore.OutputMessage,
 				Content:    "Session already stopped.",
 				Key:        fmt.Sprintf("input:%d:stop:already_stopped", input.ID),
 				MessageRef: -1,
@@ -293,7 +297,7 @@ func (s *svc) handleStoppedStop(ctx context.Context, input *sessionstore.InboxIn
 	return nil
 }
 
-func (s *svc) handleLifecycleInput(ctx context.Context, input *sessionstore.InboxInput, content string) error {
+func (s *Service) handleLifecycleInput(ctx context.Context, input *sessionstore.InboxInput, content string) error {
 	command := strings.TrimPrefix(strings.TrimSpace(input.RawContent), "/")
 
 	if _, owned := input.Attributes[controllerapi.SessionAttributeManagerID].(string); !owned {
@@ -319,9 +323,9 @@ func (s *svc) handleLifecycleInput(ctx context.Context, input *sessionstore.Inbo
 	return nil
 }
 
-func (s *svc) enqueuePersistentOutput(ctx context.Context, sessionID int64, content string) error {
+func (s *Service) enqueuePersistentOutput(ctx context.Context, sessionID int64, content string) error {
 	if _, err := s.store.EnqueueOutput(ctx, sessionstore.OutputDraft{
-		SessionID: sessionID, Type: sessionstore.OutputMessagePersistent, Content: content,
+		SessionID: sessionID, Type: sessionstore.OutputMessage, Content: content,
 	}); err != nil {
 		return fmt.Errorf("enqueue persistent output: %w", err)
 	}
@@ -329,7 +333,7 @@ func (s *svc) enqueuePersistentOutput(ctx context.Context, sessionID int64, cont
 	return nil
 }
 
-func (s *svc) prepareStoppedSessionInput(
+func (s *Service) prepareStoppedSessionInput(
 	ctx context.Context,
 	record *sessionstore.SessionRecord,
 	prompt string,
@@ -356,28 +360,14 @@ func (s *svc) prepareStoppedSessionInput(
 	return !commandOnly, nil
 }
 
-func (s *svc) enqueueUserSessionInput(
+func (s *Service) enqueueUserSessionInput(
 	ctx context.Context,
 	sessionID int64,
 	prompt string,
 ) (*sessionstore.InboxInput, error) {
-	attributes := make(map[string]any)
-
-	switch strings.TrimSpace(prompt) {
-	case "/schedules":
-		content, err := s.schedules.Render(ctx, sessionID)
-		if err != nil {
-			return nil, fmt.Errorf("render schedules: %w", err)
-		}
-
-		attributes["schedules"] = content
-	case statusCommand:
-		current, err := s.progress.Current(ctx, sessionID)
-		if err != nil {
-			return nil, fmt.Errorf("current progress: %w", err)
-		}
-
-		attributes["status"] = current.Rendered
+	attributes, err := s.sessionInputAttributes(ctx, sessionID, prompt)
+	if err != nil {
+		return nil, err
 	}
 
 	result, err := s.store.Enqueue(
@@ -396,7 +386,35 @@ func (s *svc) enqueueUserSessionInput(
 	return result.Input, nil
 }
 
-func (s *svc) send(ctx context.Context, projectID int64, prompt, model string, attrs map[string]any) (int64, error) {
+func (s *Service) sessionInputAttributes(ctx context.Context, sessionID int64, prompt string) (map[string]any, error) {
+	attributes := make(map[string]any)
+
+	switch strings.TrimSpace(prompt) {
+	case "/schedules":
+		content, err := s.schedules.Render(ctx, sessionID)
+		if err != nil {
+			return nil, fmt.Errorf("render schedules: %w", err)
+		}
+
+		attributes["schedules"] = content
+	case statusCommand:
+		current, err := s.progress.Current(ctx, sessionID)
+		if err != nil {
+			return nil, fmt.Errorf("current progress: %w", err)
+		}
+
+		attributes["status"] = current
+	}
+
+	return attributes, nil
+}
+
+func (s *Service) Send(
+	ctx context.Context,
+	projectID int64,
+	prompt, model string,
+	attrs map[string]any,
+) (int64, error) {
 	workDir, err := s.store.GetProjectWorkDir(ctx, projectID)
 	if err != nil {
 		return 0, fmt.Errorf("resolve project %d: %w", projectID, err)

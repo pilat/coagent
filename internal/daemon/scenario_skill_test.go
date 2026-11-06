@@ -116,10 +116,8 @@ func TestHarnessScenario_SkillActivationReceiptOrdersTheOutputChain(t *testing.T
 	require.NoError(t, h.mgr.sendToSession(h.ctx, root, "invoke the skill yourself"))
 	closeOnce(modelFollowUpQueued)
 	collector.waitMessage(root, "model activation complete")
-	controller := newChainController(t, h)
-	drainScenarioClaims(t, "skill_activation_receipt.json", controller)
 	collector.waitIdleAfter(root, "model activation complete")
-	assertHarnessTrace(t, "skill_activation_receipt.json", collector.snapshot(), root)
+	assertHarnessTrace(t, h, "skill_activation_receipt.json", collector.snapshot(), root)
 
 	// Exactly one receipt row per activation path, each a persistent message
 	// carrying the canonical skill name and nothing else.
@@ -131,28 +129,18 @@ func TestHarnessScenario_SkillActivationReceiptOrdersTheOutputChain(t *testing.T
 	}
 	require.Len(t, receipts, 2, "one receipt per activation path")
 	for _, row := range receipts {
-		assert.Equal(t, "message_persistent", row.Type)
+		assert.Equal(t, "message", row.Type)
 		assert.Equal(t, "🔧 Activated skill: review", row.Content)
 	}
 
-	// A replaceable progress output exists before the first receipt and later
-	// progress starts after it: the persistent receipt closed the chain.
-	var progressBefore int
-	for _, row := range h.outbox(root) {
-		if row.Type == "message_replaceable" && row.ID < receipts[0].ID {
-			progressBefore++
-		}
-	}
-	assert.Positive(t, progressBefore, "a replaceable card existed before the receipt")
-
-	// The accepted input binds one skill receipt across promotion replay, published as its own persistent claim.
+	// The accepted input binds one skill receipt across promotion replay, published as its own output row.
 	var receiptClaim int
-	for _, claim := range traceClaims(t, "skill_activation_receipt.json") {
+	for _, claim := range traceOutputs(t, "skill_activation_receipt.json") {
 		if claim.SourceKey == fmt.Sprintf("input:%d:skill_receipt", inputIDOf(t, h, root)) {
 			receiptClaim++
 		}
 	}
-	assert.Equal(t, 1, receiptClaim, "the receipt is claimed exactly once by its input key")
+	assert.Equal(t, 1, receiptClaim, "the receipt is appended exactly once by its input key")
 
 	// Explicit activation emits exactly one message receipt; model-tool receipts use their claim, and skill content stays
 	// hidden.
@@ -334,13 +322,13 @@ func skillScenarioHasEnvelope(msgs []llmwire.Message) bool {
 	return false
 }
 
-func traceClaims(t *testing.T, name string) []harnessTraceClaim {
+func traceOutputs(t *testing.T, name string) []harnessTraceOutput {
 	t.Helper()
 	data, err := os.ReadFile(harnessTracePath(name))
 	require.NoError(t, err)
 	var file harnessTraceFile
 	require.NoError(t, json.Unmarshal(data, &file))
-	return file.Claims
+	return file.Outputs
 }
 
 func inputIDOf(t *testing.T, h *harness, root int64) int64 {

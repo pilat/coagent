@@ -37,7 +37,7 @@ func isEnqueueCommand(content string) bool {
 	return content == statusCommand || content == stopCommand || content == clearCommand || content == killCommand
 }
 
-func (s *svc) startWake() {
+func (s *Service) startWake() {
 	s.life.Go("daemon.input", func(ctx context.Context) {
 		for {
 			select {
@@ -62,7 +62,7 @@ func (s *svc) startWake() {
 	})
 }
 
-func (s *svc) inputReady(ctx context.Context, id int64) error {
+func (s *Service) inputReady(ctx context.Context, id int64) error {
 	rec, err := s.store.GetSession(ctx, id)
 	if err != nil {
 		return fmt.Errorf("load input-ready session %d: %w", id, err)
@@ -105,14 +105,14 @@ func wakeWorthy(rec *sessionstore.SessionRecord, rows []*sessionstore.InboxInput
 
 	if rec.Status == sessionstore.SessionStatusError {
 		return rec.ParentID == 0 && slices.ContainsFunc(rows, func(row *sessionstore.InboxInput) bool {
-			return row.Source == sessionstore.InputSourceSchedule
+			return row.Source == sessionstore.InputSourceSchedule || row.Source == sessionstore.InputSourceAgent
 		})
 	}
 
 	return true
 }
 
-func (s *svc) pendingRunnable(ctx context.Context, id int64, rows []*sessionstore.InboxInput) (bool, error) {
+func (s *Service) pendingRunnable(ctx context.Context, id int64, rows []*sessionstore.InboxInput) (bool, error) {
 	if len(rows) == 0 {
 		return false, nil
 	}
@@ -147,7 +147,7 @@ func (s *svc) pendingRunnable(ctx context.Context, id int64, rows []*sessionstor
 	return true, nil
 }
 
-func (s *svc) commandOnlyStoppedRoot(ctx context.Context, rec *sessionstore.SessionRecord) (bool, error) {
+func (s *Service) commandOnlyStoppedRoot(ctx context.Context, rec *sessionstore.SessionRecord) (bool, error) {
 	if rec.Status != sessionstore.SessionStatusStopped || rec.ParentID != 0 {
 		return false, nil
 	}
@@ -164,7 +164,7 @@ func (s *svc) commandOnlyStoppedRoot(ctx context.Context, rec *sessionstore.Sess
 	return isReadOnlyCommand(head.RawContent), nil
 }
 
-func (s *svc) recoverableRunnable(ctx context.Context, id int64) (bool, error) {
+func (s *Service) recoverableRunnable(ctx context.Context, id int64) (bool, error) {
 	rec, err := s.store.GetSession(ctx, id)
 	if err != nil {
 		return false, fmt.Errorf("load recoverable session %d: %w", id, err)
@@ -216,7 +216,7 @@ func (s *svc) recoverableRunnable(ctx context.Context, id int64) (bool, error) {
 	return len(calls) == 0, nil
 }
 
-func (s *svc) handleTerminalChildInputReady(
+func (s *Service) handleTerminalChildInputReady(
 	ctx context.Context,
 	record *sessionstore.SessionRecord,
 ) (bool, error) {
@@ -244,7 +244,7 @@ func (s *svc) handleTerminalChildInputReady(
 	return true, s.rearmChildForAsyncInput(ctx, record)
 }
 
-func (s *svc) rearmChildForAsyncInput(ctx context.Context, child *sessionstore.SessionRecord) error {
+func (s *Service) rearmChildForAsyncInput(ctx context.Context, child *sessionstore.SessionRecord) error {
 	unlock, err := s.lockSessionTree(ctx, child.ID)
 	if err != nil {
 		return err

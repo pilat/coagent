@@ -17,25 +17,10 @@ import (
 	"github.com/pilat/coagent/internal/schedule"
 	"github.com/pilat/coagent/internal/sessionbuild"
 	"github.com/pilat/coagent/internal/sessionbus"
-	"github.com/pilat/coagent/internal/sessionevent"
 	"github.com/pilat/coagent/internal/subagent"
 )
 
-var (
-	_ Service                = (*svc)(nil)
-	_ schedule.SessionSender = (*svc)(nil)
-)
-
-type Service interface {
-	Start(ctx context.Context) error
-	Shutdown(timeout time.Duration)
-	Send(ctx context.Context, projectID int64, prompt, model string, attrs map[string]any) (int64, error)
-	SendToSessionResolved(ctx context.Context, sessionID int64, prompt string) (int64, error)
-	SetModel(ctx context.Context, sessionID int64, model, reasoningLevel string) error
-	SetAttributes(ctx context.Context, sessionID int64, attrs map[string]any) error
-	HasActiveLoop(sessionID int64) bool
-	NotifySession(sessionID int64, n sessionevent.Notification)
-}
+var _ schedule.SessionSender = (*Service)(nil)
 
 type lifetime struct {
 	mu      sync.Mutex
@@ -45,17 +30,18 @@ type lifetime struct {
 	closing bool
 }
 
-type svc struct {
+// Service owns session runners, admission and recovery for the daemon lifetime.
+type Service struct {
 	store        Store
 	links        subagent.Store
 	schedules    schedule.Service
 	budgets      budget.Service
 	processStore backgroundprocess.Store
 	processes    backgroundprocess.Service
-	progress     progressruntime.Service
-	applier      configapply.Service
+	progress     *progressruntime.Runtime
+	applier      *configapply.Service
 	mcpStore     mcpstore.Store
-	bus          sessionbus.Bus
+	bus          *sessionbus.Bus
 	build        sessionbuild.BuildInput
 	models       models
 	life         *lifetime
@@ -74,14 +60,14 @@ func New(
 	links subagent.Store,
 	budgetSvc budget.Service,
 	processStore backgroundprocess.Store,
-	progressSvc progressruntime.Service,
-	pubsub sessionbus.Bus,
+	progressSvc *progressruntime.Runtime,
+	pubsub *sessionbus.Bus,
 	scheduleSvc schedule.Service,
 	cfg *config.Config,
 	mcpStore mcpstore.Store,
-	applier configapply.Service,
-) Service {
-	s := &svc{
+	applier *configapply.Service,
+) *Service {
+	s := &Service{
 		runners:      newRunnerSet(),
 		build:        build,
 		store:        store,
@@ -107,8 +93,8 @@ func New(
 	return s
 }
 
-func (s *svc) Shutdown(timeout time.Duration) {
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+func (s *Service) Shutdown(ctx context.Context, timeout time.Duration) {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	s.life.close()
@@ -124,8 +110,6 @@ func (s *svc) Shutdown(timeout time.Duration) {
 		if _, err := s.processes.CancelAll(ctx, backgroundprocess.IntentDaemonShutdown); err != nil {
 			logger.Ctx(ctx).Named("daemon.process").Warn("shutdown_cancel_failed", zap.Error(err))
 		}
-
-		_ = s.progress.Stop(ctx)
 
 		for _, rs := range runners {
 			<-rs.Done()
@@ -203,17 +187,3 @@ func (l *lifetime) close() {
 }
 
 func (l *lifetime) wait() { l.wg.Wait() }
-
-// whileOpen runs fn under the lifetime lock unless Shutdown began; close waits for it.
-func (l *lifetime) whileOpen(fn func()) bool {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-
-	if l.closing {
-		return false
-	}
-
-	fn()
-
-	return true
-}

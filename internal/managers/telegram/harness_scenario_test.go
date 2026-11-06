@@ -4,14 +4,10 @@ import (
 	"bytes"
 	"encoding/json"
 	"flag"
-	"io"
 	"net/http"
 	"os"
 	"path/filepath"
-	"strconv"
-	"strings"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -21,13 +17,9 @@ import (
 	"github.com/pilat/coagent/internal/sessionevent"
 )
 
-// The inputs of this scenario are not authored here: internal/testdata/harness_scenarios
-// holds the exact notification traces the daemon scenarios recorded from a real
-// run. Only the rendered Telegram traffic below is this package's own golden.
 const (
 	harnessSessionID = 42
-	harnessChatID    = -100123
-	harnessTopicID   = 7001
+	harnessChatID    = 7
 	renderedGolden   = "rendered.json"
 )
 
@@ -40,24 +32,18 @@ var updateHarnessTraces = flag.Bool(
 // harnessTraceFile mirrors the shared schema written by internal/daemon. Unknown
 // fields are rejected so a schema change on the daemon side cannot pass silently.
 type harnessTraceFile struct {
-	SourceTest string              `json:"source_test"`
-	Trace      []harnessTraceEvent `json:"trace"`
-	Claims     []harnessTraceClaim `json:"claims,omitempty"`
+	SourceTest string               `json:"source_test"`
+	Trace      []harnessTraceEvent  `json:"trace"`
+	Outputs    []harnessTraceOutput `json:"outputs"`
+	Owners     map[int64]string     `json:"owners,omitempty"`
 }
 
-// harnessTraceClaim mirrors the daemon's sanitized OutputClaimData record.
-// Generations stay exact (nil is legacy absence); message receipts are
-// placeholders the replay resolves against its own deliveries.
-type harnessTraceClaim struct {
-	Type                         string         `json:"type"`
-	Content                      string         `json:"content"`
-	Attributes                   map[string]any `json:"attributes,omitempty"`
-	SourceKey                    string         `json:"source_key,omitempty"`
-	ModelInputGeneration         *int64         `json:"model_input_generation,omitempty"`
-	PreviousMessageType          string         `json:"previous_message_type,omitempty"`
-	PreviousModelInputGeneration *int64         `json:"previous_model_input_generation,omitempty"`
-	PreviousMessageIDs           []string       `json:"previous_message_ids,omitempty"`
-	ReleasesInput                bool           `json:"releases_input"`
+type harnessTraceOutput struct {
+	ID        int64  `json:"id"`
+	SessionID int64  `json:"session_id"`
+	Type      string `json:"type"`
+	Content   string `json:"content"`
+	SourceKey string `json:"source_key,omitempty"`
 }
 
 type harnessTraceEvent struct {
@@ -91,14 +77,10 @@ type telegramRenderedScenario struct {
 type telegramHarnessCall struct {
 	Method    string `json:"method"`
 	ChatID    int64  `json:"chat_id"`
-	ThreadID  int64  `json:"thread_id,omitempty"`
 	Text      string `json:"text,omitempty"`
 	ParseMode string `json:"parse_mode,omitempty"`
 }
 
-// This is the exact reported cross-manager leak: another manager's
-// conversation is visible on the global notification subscription, but it must
-// produce no Telegram traffic — neither a topic nor the model's answer.
 func TestHarnessScenario_ForeignConversationIsNotRenderedInTelegram(t *testing.T) {
 	var calls []telegramHarnessCall
 	manager := newTelegramHarnessManager(t, &fakeController{}, &calls)
@@ -121,56 +103,6 @@ func TestHarnessScenario_ForeignConversationIsNotRenderedInTelegram(t *testing.T
 	})
 
 	assert.Empty(t, calls, "a Telegram manager must ignore another manager's conversation")
-}
-
-func TestHarnessScenario_BotForumGeneralGuidesWithoutCreatingSession(t *testing.T) {
-	var calls []telegramHarnessCall
-	controller := &fakeController{}
-	manager := newTelegramHarnessManager(t, controller, &calls)
-	manager.cfg.AllowedUserIDs = []int64{7}
-	manager.cfg.TargetChatID = nil
-	manager.cfg.ServiceTopicName = "Coagent"
-	manager.target = forumTarget{chatID: 7, topology: forumTopologyBot}
-
-	manager.processUpdate(t.Context(), telegramUpdate{Message: &telegramMessage{
-		From: &telegramUser{ID: 7}, Chat: telegramChat{ID: 7}, Text: "hello",
-	}})
-
-	require.Len(t, calls, 1)
-	assert.Equal(t, telegramHarnessCall{
-		Method: "sendMessage", ChatID: 7,
-		Text: "Open the “Coagent” topic to create or manage sessions.", ParseMode: tgParseModeHTML,
-	}, calls[0])
-	assert.Empty(t, controller.createSessionCalls)
-}
-
-func harnessNotification(t *testing.T, event harnessTraceEvent) sessionevent.Notification {
-	t.Helper()
-
-	n := sessionevent.Notification{
-		Type:       sessionevent.NotificationType(event.Type),
-		Message:    event.Message,
-		Name:       event.Name,
-		Status:     sessionevent.State(event.Status),
-		Reason:     event.Reason,
-		Source:     event.Source,
-		WorkDir:    event.WorkDir,
-		Attributes: event.Attributes,
-	}
-
-	wake := time.Date(2026, time.January, 2, 15, 4, 0, 0, time.UTC)
-	for i, item := range event.Waiting {
-		wait := sessionevent.WaitItem{Kind: sessionevent.WaitKind(item.Kind)}
-		switch wait.Kind {
-		case sessionevent.WaitSubagent:
-			wait.ChildID = int64(i + 1)
-		case sessionevent.WaitSleep:
-			wait.WakeAt = &wake
-		}
-		n.Waiting = append(n.Waiting, wait)
-	}
-
-	return n
 }
 
 func daemonTraceNames(t *testing.T) []string {
@@ -246,50 +178,26 @@ func newTelegramHarnessManager(
 	calls *[]telegramHarnessCall,
 ) *Manager {
 	t.Helper()
-
-	// No topic is pre-registered: the recorded session_created event is what must
-	// bind one, exactly as it does in production.
-	return &Manager{
-		id: "telegram-main",
-		cfg: config.ManagerEntry{
-			ID: "telegram-main", BotToken: "test-token", TargetChatID: new(int64(harnessChatID)),
-			SendChunkDelayMS: 0,
-		},
-		controller:     controller,
-		httpClient:     &http.Client{Transport: telegramHarnessRecorder(t, calls)},
-		navPaths:       map[int64]string{},
-		pathToNav:      map[string]int64{},
-		sessionToTopic: map[int64]int64{},
-		topicToSession: map[int64]int64{},
-		workDirs:       map[int64]string{},
-	}
+	manager, err := New(config.ManagerEntry{
+		ID: "telegram-main", BotToken: "test-token", AllowedUserIDs: []int64{harnessChatID},
+	}, nil, controller)
+	require.NoError(t, err)
+	manager.httpClient = &http.Client{Transport: telegramHarnessRecorder(t, calls)}
+	return manager
 }
 
 func telegramHarnessRecorder(t *testing.T, calls *[]telegramHarnessCall) roundTripFunc {
 	t.Helper()
-
 	return func(request *http.Request) (*http.Response, error) {
 		var body struct {
 			ChatID    int64  `json:"chat_id"`
-			ThreadID  int64  `json:"message_thread_id"`
 			Text      string `json:"text"`
 			ParseMode string `json:"parse_mode"`
 		}
 		require.NoError(t, json.NewDecoder(request.Body).Decode(&body))
-		parts := strings.Split(request.URL.Path, "/")
 		*calls = append(*calls, telegramHarnessCall{
-			Method: parts[len(parts)-1], ChatID: body.ChatID, ThreadID: body.ThreadID,
-			Text: body.Text, ParseMode: body.ParseMode,
+			Method: filepath.Base(request.URL.Path), ChatID: body.ChatID, Text: body.Text, ParseMode: body.ParseMode,
 		})
-
-		return &http.Response{
-			StatusCode: http.StatusOK,
-			Body: io.NopCloser(strings.NewReader(
-				`{"ok":true,"result":{"message_id":123,"message_thread_id":` +
-					strconv.Itoa(harnessTopicID) + `}}`,
-			)),
-			Header:  make(http.Header),
-			Request: request,
-		}, nil
+		return telegramResponse(request, `{"ok":true,"result":{"message_id":123}}`), nil
 	}
 }

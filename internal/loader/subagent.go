@@ -17,7 +17,7 @@ import (
 // LoadSubagents finds and parses all subagent definition files.
 // Local subagents take priority over global. .claude over .coagent.
 // Marketplace subagents are prefixed with plugin name (e.g., "pilat:code-reviewer").
-func (s *svc) LoadSubagents(workDir string) error {
+func (s *Service) LoadSubagents(workDir string) error {
 	s.subagents = make(map[string]*Subagent)
 
 	// Build search sources - lowest priority first
@@ -59,7 +59,7 @@ func (s *svc) LoadSubagents(workDir string) error {
 	return errors.Join(errs...)
 }
 
-func (s *svc) loadSubagentsFromPath(source sourceInfo, access safefile.Access) error {
+func (s *Service) loadSubagentsFromPath(source sourceInfo, access *safefile.Access) error {
 	entries, err := readSourceDir(source.path, access)
 	if err != nil {
 		return fmt.Errorf("scan subagent directory %s: %w", source.path, err)
@@ -91,7 +91,7 @@ func (s *svc) loadSubagentsFromPath(source sourceInfo, access safefile.Access) e
 	return nil
 }
 
-func parseSubagentFile(path string, access safefile.Access) (*Subagent, error) {
+func parseSubagentFile(path string, access *safefile.Access) (*Subagent, error) {
 	frontmatter, content, err := parseSourceFrontmatter(path, access)
 	if err != nil {
 		return nil, err
@@ -111,12 +111,12 @@ func parseSubagentFile(path string, access safefile.Access) (*Subagent, error) {
 	return agent, nil
 }
 
-func (s *svc) GetSubagent(name string) *Subagent {
+func (s *Service) GetSubagent(name string) *Subagent {
 	return s.subagents[name]
 }
 
 // ListSubagents returns all loaded subagents sorted by name for stable ordering.
-func (s *svc) ListSubagents() []*Subagent {
+func (s *Service) ListSubagents() []*Subagent {
 	subagents := make([]*Subagent, 0, len(s.subagents))
 	for _, sa := range s.subagents {
 		subagents = append(subagents, sa)
@@ -128,6 +128,6 @@ func (s *svc) ListSubagents() []*Subagent {
 }
 
 // RegisterSubagent adds a subagent directly, bypassing filesystem discovery.
-func (s *svc) RegisterSubagent(subagent *Subagent) {
+func (s *Service) RegisterSubagent(subagent *Subagent) {
 	s.subagents[subagent.Name] = subagent
 }

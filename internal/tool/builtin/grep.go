@@ -59,7 +59,7 @@ type grepParams struct {
 
 type grepTool struct {
 	workDir string
-	access  safefile.Access
+	access  *safefile.Access
 }
 
 type grepMatch struct {
@@ -73,7 +73,7 @@ func newGrepTool(workDir string) *grepTool {
 	return &grepTool{workDir: workDir}
 }
 
-func newGrepToolWithAccess(workDir string, access safefile.Access) *grepTool {
+func newGrepToolWithAccess(workDir string, access *safefile.Access) *grepTool {
 	return &grepTool{workDir: workDir, access: access}
 }
 

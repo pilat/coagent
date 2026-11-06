@@ -64,7 +64,7 @@ func TestProcessInputRearmsCompletedChildAfterPriorOutcomeHandoff(t *testing.T) 
 		}
 		return false
 	})
-	mgr.Shutdown(3 * time.Second)
+	mgr.Shutdown(t.Context(), 3*time.Second)
 }
 
 func TestProcessInputDoesNotRearmCompletedChildAfterStop(t *testing.T) {

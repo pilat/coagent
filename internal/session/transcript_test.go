@@ -111,7 +111,7 @@ func TestHasPendingExternalCall(t *testing.T) {
 			agent.stagedCalls = tt.staged
 			setTestMessages(agent, tt.msgs)
 
-			assert.Equal(t, tt.want, agent.HasPendingExternalCall())
+			assert.Equal(t, tt.want, len(agent.PendingExternalCalls()) > 0)
 		})
 	}
 }
@@ -195,7 +195,7 @@ func TestRepair_LeavesAPendingExternalCallAlone(t *testing.T) {
 	agent.stagedCalls = map[string]string{"c1": tool.IDConfigEdit}
 	setTestMessages(agent, msgs)
 
-	repaired := repairTranscriptExcluding(msgs, agent.pendingExternalCallIDs())
+	repaired := repairTranscript(msgs, agent.pendingExternalCallIDs())
 
 	for _, m := range repaired {
 		assert.NotEqual(t, "c1", m.ToolCallID, "the open tool_use must not be stubbed")
@@ -203,7 +203,7 @@ func TestRepair_LeavesAPendingExternalCallAlone(t *testing.T) {
 
 	// Without the exclusion it would be stubbed — which is what makes the
 	// exclusion load-bearing rather than decorative.
-	stubbed := repairTranscriptExcluding(msgs, nil)
+	stubbed := repairTranscript(msgs, nil)
 	found := false
 
 	for _, m := range stubbed {
@@ -420,7 +420,7 @@ func TestRepairTranscript_NoOrphans(t *testing.T) {
 		{Role: llmwire.RoleAssistant, ToolCalls: []llmwire.ToolCall{{ID: "c1", Name: "read"}}},
 		{Role: llmwire.RoleTool, ToolCallID: "c1", ToolName: "read", Content: "ok"},
 	}
-	result := repairTranscript(msgs)
+	result := repairTranscript(msgs, nil)
 	assert.Len(t, result, 2)
 }
 
@@ -431,7 +431,7 @@ func TestRepairTranscript_RemovesOrphans(t *testing.T) {
 		{Role: llmwire.RoleAssistant, ToolCalls: []llmwire.ToolCall{{ID: "c1", Name: "bash"}}},
 		{Role: llmwire.RoleTool, ToolCallID: "c1", ToolName: "bash", Content: "ok"},
 	}
-	result := repairTranscript(msgs)
+	result := repairTranscript(msgs, nil)
 	assert.Len(t, result, 2)
 	assert.Equal(t, llmwire.RoleAssistant, result[0].Role)
 	assert.Equal(t, "c1", result[1].ToolCallID)
@@ -448,7 +448,7 @@ func TestRepairTranscriptExcluding_DoesNotStubPendingCall(t *testing.T) {
 		{Role: llmwire.RoleTool, ToolCallID: "read-1", ToolName: "read", Content: "ok"},
 	}
 
-	result := repairTranscriptExcluding(msgs, map[string]bool{"task-1": true})
+	result := repairTranscript(msgs, map[string]bool{"task-1": true})
 
 	// read-1 keeps its result; task-1 is left unmatched (no synthetic stub).
 	for _, m := range result {
@@ -467,7 +467,7 @@ func TestRepairTranscriptExcluding_StubsNonExcludedMissingResult(t *testing.T) {
 		{Role: llmwire.RoleAssistant, ToolCalls: []llmwire.ToolCall{{ID: "task-1", Name: "task"}}},
 	}
 
-	result := repairTranscriptExcluding(msgs, nil)
+	result := repairTranscript(msgs, nil)
 
 	assert.Len(t, result, 2)
 	assert.Equal(t, "task-1", result[1].ToolCallID)
@@ -482,7 +482,7 @@ func TestRepairTranscript_SyntheticErrorForMissingResult(t *testing.T) {
 		}},
 		{Role: llmwire.RoleTool, ToolCallID: "c1", ToolName: "read", Content: "file content"},
 	}
-	result := repairTranscript(msgs)
+	result := repairTranscript(msgs, nil)
 	assert.Len(t, result, 3)
 	assert.Equal(t, "c1", result[1].ToolCallID)
 	assert.Equal(t, "c2", result[2].ToolCallID)
@@ -498,7 +498,7 @@ func TestRepairTranscript_ReordersResults(t *testing.T) {
 		{Role: llmwire.RoleTool, ToolCallID: "c2", ToolName: "grep", Content: "found"},
 		{Role: llmwire.RoleTool, ToolCallID: "c1", ToolName: "read", Content: "content"},
 	}
-	result := repairTranscript(msgs)
+	result := repairTranscript(msgs, nil)
 	assert.Len(t, result, 3)
 	assert.Equal(t, "c1", result[1].ToolCallID)
 	assert.Equal(t, "c2", result[2].ToolCallID)
@@ -512,13 +512,13 @@ func TestRepairTranscript_SkipsSyntheticForIncompleteToolCalls(t *testing.T) {
 		}},
 		{Role: llmwire.RoleTool, ToolCallID: "c1", ToolName: "read", Content: "ok"},
 	}
-	result := repairTranscript(msgs)
+	result := repairTranscript(msgs, nil)
 	assert.Len(t, result, 2)
 	assert.Equal(t, "c1", result[1].ToolCallID)
 }
 
 func TestRepairTranscript_Empty(t *testing.T) {
-	result := repairTranscript(nil)
+	result := repairTranscript(nil, nil)
 	assert.Nil(t, result)
 }
 

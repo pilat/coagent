@@ -10,6 +10,7 @@ type Entry interface {
 	InputMessage() string
 	LastFiredAt() *time.Time
 	Fresh() bool
+	Sleep() bool
 }
 
 // Created describes a freshly added schedule.

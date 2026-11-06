@@ -116,7 +116,7 @@ func TestMigrate_40_DeletesCLIGraphAndKeepsUnrelatedData(t *testing.T) {
 
 	cliID, keepID := seedLegacyCLIGraph(ctx, t, db)
 
-	_, err = provider.Up(ctx)
+	_, err = provider.UpTo(ctx, 40)
 	require.NoError(t, err)
 
 	require.True(t, columnExists(t, db, "projects", "hidden"))

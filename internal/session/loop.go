@@ -52,7 +52,6 @@ type runState struct {
 	terminalState      bool
 	handledControl     bool
 	boundaryAgain      bool
-	directReply        bool
 	backgroundInserted bool
 	compactionFailures int
 	autoCompactionOff  bool
@@ -79,7 +78,7 @@ type sessionStatus struct {
 }
 
 func (s *Session) Run(ctx context.Context) (RunResult, error) {
-	ctx = logger.With(ctx)
+	ctx = logger.ToContext(ctx, logger.Ctx(ctx).With())
 	if err := s.prepareRun(ctx); err != nil {
 		return RunResult{}, err
 	}
@@ -94,7 +93,7 @@ func (s *Session) Run(ctx context.Context) (RunResult, error) {
 	)
 	defer s.startHeartbeat(ctx)()
 
-	if !s.HasPendingExternalCall() {
+	if len(s.PendingExternalCalls()) == 0 {
 		s.compactionDeferAnnounced = false
 	}
 
@@ -146,7 +145,7 @@ func (s *Session) runIteration(ctx context.Context, r *runState) (bool, error) {
 		return true, nil
 	}
 
-	if s.HasPendingExternalCall() {
+	if len(s.PendingExternalCalls()) > 0 {
 		r.result.Suspended = true
 		return false, nil
 	}
@@ -272,15 +271,6 @@ func (s *Session) commit(ctx context.Context, c sessionstore.Commit) (*sessionst
 		s.resetContextBaseline()
 	}
 
-	if c.ObserveBudget && c.State.Iteration != nil {
-		s.emit(
-			sessionevent.Notification{
-				Type:       sessionevent.NotifyIterationPersisted,
-				Attributes: map[string]any{"iteration": *c.State.Iteration},
-			},
-		)
-	}
-
 	s.emit(sessionevent.Notification{Type: sessionevent.NotifyContextChanged})
 	s.emitCommitted(s.liveOutputs(c, result), result.BudgetFired)
 
@@ -372,7 +362,7 @@ func (s *Session) expireActivation(ctx context.Context, suspended bool) error {
 
 	c.Outputs = []sessionstore.Output{
 		{
-			Type:          sessionstore.OutputMessagePersistent,
+			Type:          sessionstore.OutputMessage,
 			Content:       grant.Command + " was not changed",
 			Key:           fmt.Sprintf("input:%d:activation:expired", grant.InputID),
 			MessageRef:    -1,
@@ -586,9 +576,15 @@ func (s *Session) commitRunState(ctx context.Context, r *runState, runErr error)
 			r.result.ErrorNotice = projectionErrorNotice(runErr)
 		}
 
+		state, stateErr := s.store.LoadCompletionCheckState(ctx, s.id)
+		if stateErr != nil {
+			return errors.Join(runErr, stateErr)
+		}
+
+		key := fmt.Sprintf("run:%d:%d:error", state.ModelInputGeneration, iteration)
 		c.Outputs = []sessionstore.Output{{
-			Type: sessionstore.OutputMessagePersistent, Content: r.result.ErrorNotice,
-			Key: fmt.Sprintf("run:%d:error", iteration), MessageRef: -1, ReleasesInput: true,
+			Type: sessionstore.OutputMessage, Content: r.result.ErrorNotice,
+			Key: key, MessageRef: -1, ReleasesInput: true,
 		}}
 	}
 
