@@ -41,7 +41,8 @@ func TestClient_StopReturnsPromptlyWhenServerMute(t *testing.T) {
 	start := time.Now()
 	go func() { done <- c.stop(context.Background()) }()
 	select {
-	case <-done:
+	case err := <-done:
+		require.NoError(t, err)
 		require.Less(t, time.Since(start), 5*time.Second)
 	case <-time.After(10 * time.Second):
 		t.Fatal("stop hung on a server that never answers shutdown")

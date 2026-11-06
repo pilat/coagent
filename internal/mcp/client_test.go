@@ -161,7 +161,8 @@ func TestClient_CloseKillsBeforeBlockingClose(t *testing.T) {
 	go func() { done <- c.Close() }()
 
 	select {
-	case <-done:
+	case err := <-done:
+		require.NoError(t, err)
 	case <-time.After(5 * time.Second):
 		t.Fatal("Close hung — cancelRun not called before the blocking client.Close")
 	}
