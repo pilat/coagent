@@ -97,6 +97,15 @@ During an implementation session run by a coding agent:
   subagent's job is only to report what to do next — the session decides and
   performs the fixes.
 
+## Merge Gate
+
+Nothing merges without a cold review of the final diff: a reviewer with none of
+the authoring context (a fresh same-model subagent or a human). This includes
+CI, dependency, test-only and bot PRs. Grade findings P0 (critical), P1
+(behavior, security or data-integrity failure) or P2 (smaller concrete defect);
+nits don't block. Confirm each finding in code, fix every confirmed P0–P2, and
+re-review whatever changed after the review. A green CI run does not replace it.
+
 ## Testing Strategy
 
 Read **[docs/testing.md](docs/testing.md)** before designing tests for any change
