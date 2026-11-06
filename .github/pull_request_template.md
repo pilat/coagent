@@ -14,3 +14,4 @@
 - [ ] `make all` passes.
 - [ ] Lifecycle/durable/concurrent changes follow `docs/testing.md`.
 - [ ] Architecture documentation is synchronized without exceeding its budget.
+- [ ] A cold review of the final diff left no confirmed P0–P2 open.
