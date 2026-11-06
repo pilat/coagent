@@ -597,7 +597,7 @@ func addAnthropicNativeCacheMarkers(messages []anthropic.MessageParam) {
 	}
 
 	if firstUserIdx >= 0 {
-		setMessageCacheControl(&messages[firstUserIdx], cc)
+		setMessageCacheControl(messages[firstUserIdx].OfUser, cc)
 	}
 
 	// Breakpoint 2: sliding window — second-to-last user message
@@ -618,26 +618,17 @@ func addAnthropicNativeCacheMarkers(messages []anthropic.MessageParam) {
 	}
 
 	if secondLastUserIdx > firstUserIdx {
-		setMessageCacheControl(&messages[secondLastUserIdx], cc)
+		setMessageCacheControl(messages[secondLastUserIdx].OfUser, cc)
 	}
 }
 
 // setMessageCacheControl sets cache_control on the last content block of a message.
-func setMessageCacheControl(msg *anthropic.MessageParam, cc anthropic.CacheControlEphemeralParam) {
-	var content []anthropic.ContentBlockParamUnion
-
-	switch {
-	case msg.OfUser != nil:
-		content = msg.OfUser.Content
-	case msg.OfAssistant != nil:
-		content = msg.OfAssistant.Content
-	}
-
-	if len(content) == 0 {
+func setMessageCacheControl(msg *anthropic.UserMessageParam, cc anthropic.CacheControlEphemeralParam) {
+	if len(msg.Content) == 0 {
 		return
 	}
 
-	last := &content[len(content)-1]
+	last := &msg.Content[len(msg.Content)-1]
 	if last.OfText != nil {
 		last.OfText.CacheControl = cc
 	} else if last.OfToolResult != nil {

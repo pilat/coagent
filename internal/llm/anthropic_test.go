@@ -203,6 +203,56 @@ func TestCacheMarkers_ToolResultMessage(t *testing.T) {
 	assert.Equal(t, "ephemeral", string(paramBlocks(msgs[0])[0].OfToolResult.CacheControl.Type))
 }
 
+func TestCacheMarkers_ConvertedMessagesJSON(t *testing.T) {
+	t.Parallel()
+
+	c := &anthropicClient{}
+	msgs := []llmwire.Message{
+		{Role: "system", Content: "system prompt"},
+		{Role: "user", Content: "first"},
+		{
+			Role:      "assistant",
+			Content:   "checking",
+			ToolCalls: []llmwire.ToolCall{{ID: "tc_1", Name: "read", Arguments: []byte(`{}`)}},
+		},
+		{Role: "tool", Content: "result", ToolCallID: "tc_1"},
+		{Role: "assistant", Content: "reply"},
+		{Role: "user", Content: "last"},
+	}
+	params := c.buildMessageParams("system prompt", msgs, nil, 1024)
+	data, err := json.Marshal(params.Messages)
+	require.NoError(t, err)
+
+	var decoded []struct {
+		Role    string `json:"role"`
+		Content []struct {
+			Type         string          `json:"type"`
+			CacheControl json.RawMessage `json:"cache_control"`
+			Content      json.RawMessage `json:"content"`
+		} `json:"content"`
+	}
+	require.NoError(t, json.Unmarshal(data, &decoded))
+	wantRoles := []string{"user", "assistant", "user", "assistant", "user"}
+	require.Len(t, decoded, len(wantRoles))
+	for i, msg := range decoded {
+		assert.Equal(t, wantRoles[i], msg.Role, "message %d", i)
+		assert.NotEqual(t, "system", msg.Role)
+		require.NotEmpty(t, msg.Content)
+		for j, block := range msg.Content {
+			if i == 0 || i == 2 {
+				assert.JSONEq(t, `{"type":"ephemeral"}`, string(block.CacheControl))
+			} else {
+				assert.Empty(t, block.CacheControl, "message %d block %d", i, j)
+			}
+			assert.NotContains(t, string(block.Content), `"cache_control"`)
+		}
+	}
+	require.Len(t, decoded[0].Content, 1)
+	assert.Equal(t, "text", decoded[0].Content[0].Type)
+	require.Len(t, decoded[2].Content, 1)
+	assert.Equal(t, "tool_result", decoded[2].Content[0].Type)
+}
+
 func TestCacheMarkers_EmptyMessages(t *testing.T) {
 	var msgs []anthropic.MessageParam
 	// Should not panic
