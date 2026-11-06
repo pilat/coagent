@@ -96,6 +96,9 @@ During an implementation session run by a coding agent:
   permitted only inside that subagent run) to a subagent (same model); the
   subagent's job is only to report what to do next — the session decides and
   performs the fixes.
+- Nothing merges without a cold review of the final diff, graded P0/P1/P2 with
+  every finding confirmed in code, and the fixes applied. A green CI run does
+  not replace it; this includes CI, dependency and test-only changes.
 
 ## Testing Strategy
 
