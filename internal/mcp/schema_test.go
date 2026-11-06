@@ -43,8 +43,13 @@ func TestNormalizeToolSchema(t *testing.T) {
 			want: `{"type":"object","properties":{},"required":[]}`,
 		},
 		{
-			name: "null before first concrete type",
+			name: "object preferred after another concrete type",
 			raw:  `{"type":["null","string","object"]}`,
+			want: `{"type":"object"}`,
+		},
+		{
+			name: "first non-null type without object",
+			raw:  `{"type":["null","string","number"]}`,
 			want: `{"type":"string"}`,
 		},
 		{
@@ -112,6 +117,33 @@ func TestClientToolSchema(t *testing.T) {
 	require.NoError(t, err)
 	assert.JSONEq(t, `{"type":"object","properties":{"id":{"$ref":"#/$defs/id"}},
 		"required":["id"],"additionalProperties":false,"$defs":{"id":{"type":"string"}}}`, string(got))
+}
+
+func TestClientToolSchemaFromToolsList(t *testing.T) {
+	t.Parallel()
+	var listed mcp.ListToolsResult
+	require.NoError(t, json.Unmarshal([]byte(`{"tools":[{
+		"name":"lookup",
+		"inputSchema":{
+			"$schema":"http://json-schema.org/draft-07/schema#",
+			"title":"LookupArguments","type":"object",
+			"properties":{"id":{"type":"string"}},"required":["id"],
+			"anyOf":[{"required":["id"]}]
+		}
+	}]}`), &listed))
+	require.Len(t, listed.Tools, 1)
+	client := &Client{tools: map[string]mcp.Tool{listed.Tools[0].Name: listed.Tools[0]}}
+	got, err := client.ToolSchema("lookup")
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"type":"object","properties":{"id":{"type":"string"}},"required":["id"]}`, string(got))
+}
+
+func TestClientToolSchemaEmptyInputSchema(t *testing.T) {
+	t.Parallel()
+	client := &Client{tools: map[string]mcp.Tool{"empty": {}}}
+	got, err := client.ToolSchema("empty")
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"type":"object","properties":{},"required":[]}`, string(got))
 }
 
 func TestMCPToolParametersNormalizedSchema(t *testing.T) {

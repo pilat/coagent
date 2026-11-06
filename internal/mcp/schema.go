@@ -3,6 +3,7 @@ package mcp
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 )
 
 const (
@@ -34,6 +35,14 @@ func normalizeToolSchema(raw []byte) ([]byte, error) {
 				break
 			}
 		}
+
+		if slices.Contains(types, schemaTypeObject) {
+			normalized[schemaKeyType] = schemaTypeObject
+		}
+	}
+
+	if normalized[schemaKeyType] == "" {
+		normalized[schemaKeyType] = schemaTypeObject
 	}
 
 	encoded, err := json.Marshal(normalized)
