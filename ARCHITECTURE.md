@@ -1043,6 +1043,11 @@ Catalogs never outlive their clients. Registry mutations change the next stack
 only; an active stack's tools and schemas stay fixed
 ([ADR-0063](docs/adr/0063-explicit-filesystem-boundary.md)).
 
+The MCP client normalizes model-facing input schemas before tool registration:
+only top-level `type`, `properties`, `required`, `additionalProperties` and
+`$defs` survive. Type arrays select the first non-null type; nested schemas
+remain unchanged. Playwright adds its required task-state property afterward.
+
 Schedule owns cron validation, schedule-list rendering, durable schedule records and execution of sleep
 and schedule tools, including the sleep guard over pending producer obligations. It enqueues through session-store and uses a narrow sender
 only for event publication. Curated memory is distinct from conversation history and scoped
