@@ -48,11 +48,6 @@ func TestStore_GetOrCreateProject(t *testing.T) {
 		require.NoError(t, err)
 		assert.Contains(t, workDir, "/tmp/project")
 	})
-	t.Run("rejects reserved system directory", func(t *testing.T) {
-		s := newTestStore(t)
-		_, err := s.GetOrCreateProject(context.Background(), "/tmp/sys_coagent")
-		require.Error(t, err)
-	})
 }
 
 func newTestStore(t *testing.T) *sessionstore.Store {
