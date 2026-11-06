@@ -80,7 +80,7 @@ func (s *svc) waitForExit(ctx context.Context, launched *launchResult) (State, *
 
 			_ = killProcessGroup(launched.processGroup)
 
-			<-waitErr
+			<-waitErr //nolint:errcheck // the deadline decides the outcome, not the exit error
 
 			return StateTimedOut, nil
 		case <-flush.C:

@@ -54,6 +54,31 @@ func TestRenderFull_KeepsDiagnostics(t *testing.T) {
 	assert.Contains(t, rendered, "- Observed: 2026-08-29 12:00:00 UTC · revision `rev`")
 }
 
+func TestRenderFull_PreservesLiteralCodeValues(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		value  string
+		quoted string
+	}{
+		{name: "plain", value: "value/v1", quoted: "`value/v1`"},
+		{name: "backtick", value: "a`b", quoted: "`a`b`"},
+		{name: "newline", value: "a\nb", quoted: "`a\nb`"},
+		{name: "controls", value: "a\r\t\x00b", quoted: "`a\r\t\x00b`"},
+		{name: "invalid UTF-8", value: "a\xffb", quoted: "`a\xffb`"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			rendered := RenderFull(Snapshot{Model: tt.value, Revision: tt.value, RootIteration: 5})
+			assert.Contains(t, rendered, "- Model: "+tt.quoted+" · root iteration 5\n")
+			assert.True(t, strings.HasSuffix(rendered, " · revision "+tt.quoted))
+		})
+	}
+}
+
 // Icon-only rows use the exact shape `  - <emoji> <content>`; the legend follows
 // one blank line after the rows and disappears with the list itself.
 func TestRenderFull_TodoRowsAndLegend(t *testing.T) {

@@ -20,7 +20,9 @@ func RenderFull(snapshot Snapshot) string {
 	lines = append(lines, "- State: "+state)
 
 	if snapshot.Model != "" {
-		lines = append(lines, fmt.Sprintf("- Model: `%s` · root iteration %d", snapshot.Model, snapshot.RootIteration))
+		lines = append(lines, fmt.Sprintf(
+			"- Model: %s · root iteration %d", "`"+snapshot.Model+"`", snapshot.RootIteration,
+		))
 	}
 
 	lines = append(lines, renderContext(snapshot.Context), renderUsage(snapshot.Lifetime))
@@ -54,9 +56,9 @@ func RenderFull(snapshot Snapshot) string {
 		lines,
 		fmt.Sprintf("- Children: %d · child iterations %d", snapshot.ChildCount, snapshot.ChildIterations),
 		fmt.Sprintf(
-			"- Observed: %s · revision `%s`",
+			"- Observed: %s · revision %s",
 			snapshot.ObservedAt.UTC().Format("2006-01-02 15:04:05 UTC"),
-			snapshot.Revision,
+			"`"+snapshot.Revision+"`",
 		),
 	)
 
