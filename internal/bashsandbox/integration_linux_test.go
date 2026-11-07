@@ -248,38 +248,86 @@ func TestSandboxRefusesSymlinkEscape(t *testing.T) {
 	assert.Equal(t, "escaped-secret", string(content))
 }
 
-// TestBubblewrapIntegrationProtectsNestedMount proves a host mount nested
-// inside a granted directory stays read-only. It needs mount privileges, so it
-// runs only in a disposable VM where the fixture can create a real mount.
+// Nested host mounts stay read-only unless a later read-write rule grants them;
+// an outer rootless Bubblewrap supplies the nested tmpfs.
 func TestBubblewrapIntegrationProtectsNestedMount(t *testing.T) {
-	if os.Getenv("COAGENT_BWRAP_MOUNT_INTEGRATION") != "1" {
-		t.Skip("set COAGENT_BWRAP_MOUNT_INTEGRATION=1 in a disposable Linux VM")
+	const childEnv = "COAGENT_NESTED_MOUNT_CHILD"
+
+	if os.Getenv(childEnv) == "1" {
+		testSandboxHome(t)
+		cwd, err := os.Getwd()
+		require.NoError(t, err)
+		project, err := filepath.EvalSymlinks(filepath.Join(cwd, "project"))
+		require.NoError(t, err)
+		nested := filepath.Join(project, "nested-mount")
+		mountPoints, err := readMountPoints(mountInfoPath)
+		require.NoError(t, err)
+		require.Contains(t, mountPoints, nested)
+		require.NoError(t, os.WriteFile(filepath.Join(nested, "fixture-writable"), []byte("fixture"), 0o600))
+
+		outerFile := filepath.Join(project, "outer-write")
+		nestedFile := filepath.Join(nested, "blocked-write")
+		runner := testRunnerFromPolicy(t, compileFixturePolicy(t, project, nil), project, "nested")
+		output, err := runSandboxCommand(t, runner,
+			"touch "+shellQuote(outerFile)+" && ! touch "+shellQuote(nestedFile), project)
+		require.NoError(t, err, output)
+		assert.FileExists(t, outerFile)
+		assert.NoFileExists(t, nestedFile)
+
+		policy := compileFixturePolicy(t, project, func(req *sandboxpolicy.Request) {
+			req.ProjectRules = []sandboxpolicy.Rule{{Allow: nested, Mode: sandboxpolicy.ModeReadWrite}}
+		})
+		granted := testRunnerFromPolicy(t, policy, project, "nested-granted")
+		grantedFile := filepath.Join(nested, "granted-write")
+		output, err = runSandboxCommand(t, granted, "touch "+shellQuote(grantedFile), project)
+		require.NoError(t, err, output)
+		assert.FileExists(t, grantedFile)
+
+		return
 	}
 
 	requireBubblewrap(t)
 
-	home := testSandboxHome(t)
-	project := testDir(t, filepath.Join(home, "project"))
+	workDir := t.TempDir()
+	childHome := testDir(t, filepath.Join(workDir, "home"))
+	childTemp := testDir(t, filepath.Join(workDir, "tmp"))
+	project := testDir(t, filepath.Join(workDir, "project"))
+	project, err := filepath.EvalSymlinks(project)
+	require.NoError(t, err)
 	nested := testDir(t, filepath.Join(project, "nested-mount"))
 
-	if output, err := exec.Command("mount", "-t", "tmpfs", "tmpfs", nested).CombinedOutput(); err != nil {
-		t.Skipf("cannot create the nested mount fixture: %v: %s", err, output)
-	}
-	t.Cleanup(func() {
-		if output, err := exec.Command("umount", nested).CombinedOutput(); err != nil {
-			t.Errorf("unmount nested tmpfs: %v: %s", err, output)
-		}
-	})
+	testBinary, err := os.Executable()
+	require.NoError(t, err)
 
-	outerFile := filepath.Join(project, "outer-write")
-	nestedFile := filepath.Join(nested, "blocked-write")
+	ctx, cancel := context.WithTimeout(t.Context(), 60*time.Second)
+	defer cancel()
 
-	runner := testRunnerFromPolicy(t, compileFixturePolicy(t, project, nil), project, "nested")
-	output, err := runSandboxCommand(t, runner,
-		"touch "+shellQuote(outerFile)+" && ! touch "+shellQuote(nestedFile), project)
-	require.NoError(t, err, output)
-	assert.FileExists(t, outerFile)
-	assert.NoFileExists(t, nestedFile)
+	cmd := exec.CommandContext(ctx, bubblewrapExecutable,
+		"--die-with-parent",
+		"--ro-bind", "/", "/",
+		"--dev", devPath,
+		"--bind", workDir, workDir,
+		"--tmpfs", nested,
+		"--chdir", workDir,
+		"--proc", "/proc",
+		"--unshare-user",
+		"--cap-drop", "ALL",
+		"--clearenv",
+		"--setenv", "PATH", "/usr/bin:/bin",
+		"--setenv", "HOME", childHome,
+		"--setenv", "TMPDIR", childTemp,
+		"--setenv", "XDG_CACHE_HOME", filepath.Join(childHome, ".cache"),
+		"--setenv", childEnv, "1",
+		"--",
+		testBinary,
+		"-test.run=^TestBubblewrapIntegrationProtectsNestedMount$",
+		"-test.v",
+	)
+	cmd.Dir = workDir
+	output, err := cmd.CombinedOutput()
+	require.NoError(t, err, string(output))
+	assert.Contains(t, string(output), "--- PASS: TestBubblewrapIntegrationProtectsNestedMount")
+	assert.FileExists(t, filepath.Join(project, "outer-write"))
 }
 
 // TestSandboxOperatorWritableRuleAllowsWrites proves the operator's global

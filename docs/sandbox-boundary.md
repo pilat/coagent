@@ -76,6 +76,12 @@ sandbox:
 - A read-only `allow` can reopen reads after a `deny` or revoke writes from an
   earlier writable grant. With only the implicit host read-only default,
   `allow: ~/.ssh/config` adds no authority.
+- A writable `allow` covers the filesystem it names, not other filesystems
+  mounted beneath it (a bind of a data directory, a separate partition, a
+  tmpfs, a container volume). Each stays read-only until a later `mode: rw`
+  rule names that mount; for a mount inside a project, put that rule in the
+  project's own `rules`, because the project's writable default comes after
+  every global rule.
 - An effective `deny` target must exist. A read-only exception beneath a writable
   grant must also exist. Missing targets fail policy compilation or process
   preparation; they are never silently skipped or created as deny placeholders.
