@@ -410,6 +410,142 @@ func TestBuildMountPlanInstallsAFreshProcAndDevLast(t *testing.T) {
 	}
 }
 
+func TestBuildMountPlanRebindsHostMountsStrictlyInsideAWritableGrant(t *testing.T) {
+	entries := []sandboxpolicy.Entry{
+		rootEntry(),
+		{
+			Path: "/p", Action: sandboxpolicy.ActionAllow, Mode: sandboxpolicy.ModeReadWrite,
+			Kind: sandboxpolicy.KindDir, Present: true,
+		},
+	}
+	plan, err := buildMountPlan(entries,
+		[]string{"/", "/home", "/p", "/p/b", "/p/a", "/p/a/deep", "/pother", "/proc", "/proc/sys", "/dev"})
+	require.NoError(t, err)
+	rw := opIndex(plan, opBindRW, "/p")
+	require.NotEqual(t, -1, rw)
+	assert.Equal(t, []mountOp{
+		{kind: opBindRW, source: "/p", target: "/p", fd: 0, optional: false},
+		{kind: opBindRO, source: "/p/a", target: "/p/a", fd: 0, optional: false},
+		{kind: opBindRO, source: "/p/b", target: "/p/b", fd: 0, optional: false},
+		{kind: opBindRO, source: "/p/a/deep", target: "/p/a/deep", fd: 0, optional: false},
+		{kind: opProc, target: "/proc", fd: 0, optional: false},
+		{kind: opDev, target: devPath, fd: 0, optional: false},
+		{kind: opTmpfs, target: "/dev/shm", fd: 0, optional: false},
+	}, plan.ops[rw:])
+}
+
+func TestBuildMountPlanKeepsAGrantThatIsItselfAMountWritable(t *testing.T) {
+	entries := []sandboxpolicy.Entry{
+		rootEntry(),
+		{
+			Path: "/p", Action: sandboxpolicy.ActionAllow, Mode: sandboxpolicy.ModeReadWrite,
+			Kind: sandboxpolicy.KindDir, Present: true,
+		},
+	}
+	plan, err := buildMountPlan(entries, []string{"/", "/p"})
+	require.NoError(t, err)
+	assert.Equal(t, []mountOp{
+		{kind: opBindRO, source: "/", target: "/", fd: 0, optional: false},
+		{kind: opBindRO, source: "/p", target: "/p", fd: 0, optional: false},
+		{kind: opBindRW, source: "/p", target: "/p", fd: 0, optional: false},
+		{kind: opProc, target: "/proc", fd: 0, optional: false},
+		{kind: opDev, target: devPath, fd: 0, optional: false},
+		{kind: opTmpfs, target: "/dev/shm", fd: 0, optional: false},
+	}, plan.ops)
+}
+
+func TestBuildMountPlanLaterWritableRuleForANestedMountWins(t *testing.T) {
+	entries := []sandboxpolicy.Entry{
+		rootEntry(),
+		{
+			Path: "/p", Action: sandboxpolicy.ActionAllow, Mode: sandboxpolicy.ModeReadWrite,
+			Kind: sandboxpolicy.KindDir, Present: true,
+		},
+		{
+			Path: "/p/data", Action: sandboxpolicy.ActionAllow, Mode: sandboxpolicy.ModeReadWrite,
+			Kind: sandboxpolicy.KindDir, Present: true,
+		},
+	}
+	plan, err := buildMountPlan(entries, []string{"/", "/p/data", "/p/data/inner"})
+	require.NoError(t, err)
+	assert.Equal(t, []mountOp{
+		{kind: opBindRO, source: "/", target: "/", fd: 0, optional: false},
+		{kind: opBindRO, source: "/p/data", target: "/p/data", fd: 0, optional: false},
+		{kind: opBindRO, source: "/p/data/inner", target: "/p/data/inner", fd: 0, optional: false},
+		{kind: opBindRW, source: "/p", target: "/p", fd: 0, optional: false},
+		{kind: opBindRO, source: "/p/data", target: "/p/data", fd: 0, optional: false},
+		{kind: opBindRO, source: "/p/data/inner", target: "/p/data/inner", fd: 0, optional: false},
+		{kind: opBindRW, source: "/p/data", target: "/p/data", fd: 0, optional: false},
+		{kind: opBindRO, source: "/p/data/inner", target: "/p/data/inner", fd: 0, optional: false},
+		{kind: opProc, target: "/proc", fd: 0, optional: false},
+		{kind: opDev, target: devPath, fd: 0, optional: false},
+		{kind: opTmpfs, target: "/dev/shm", fd: 0, optional: false},
+	}, plan.ops)
+}
+
+func TestBuildMountPlanNestedWritableGrantGetsItsOwnRebindPass(t *testing.T) {
+	entries := []sandboxpolicy.Entry{
+		rootEntry(),
+		{
+			Path: "/p", Action: sandboxpolicy.ActionAllow, Mode: sandboxpolicy.ModeReadWrite,
+			Kind: sandboxpolicy.KindDir, Present: true,
+		},
+		{
+			Path: "/p/w", Action: sandboxpolicy.ActionAllow, Mode: sandboxpolicy.ModeReadWrite,
+			Kind: sandboxpolicy.KindDir, Present: true,
+		},
+		{
+			Path: "/p/data", Action: sandboxpolicy.ActionAllow, Mode: sandboxpolicy.ModeReadWrite,
+			Kind: sandboxpolicy.KindDir, Present: true,
+		},
+		{Path: "/p/m/keys", Action: sandboxpolicy.ActionDeny, Kind: sandboxpolicy.KindDir, Present: true},
+	}
+	plan, err := buildMountPlan(entries,
+		[]string{"/", "/proc", "/dev", "/home", "/p/m", "/p/data", "/p/w", "/p/w/cache"})
+	require.NoError(t, err)
+	assert.Equal(t, []mountOp{
+		{kind: opBindRO, source: "/", target: "/", fd: 0, optional: false},
+		{kind: opBindRO, source: "/home", target: "/home", fd: 0, optional: true},
+		{kind: opBindRO, source: "/p/data", target: "/p/data", fd: 0, optional: false},
+		{kind: opBindRO, source: "/p/m", target: "/p/m", fd: 0, optional: false},
+		{kind: opBindRO, source: "/p/w", target: "/p/w", fd: 0, optional: false},
+		{kind: opBindRO, source: "/p/w/cache", target: "/p/w/cache", fd: 0, optional: false},
+		{kind: opBindRW, source: "/p", target: "/p", fd: 0, optional: false},
+		{kind: opBindRO, source: "/p/data", target: "/p/data", fd: 0, optional: false},
+		{kind: opBindRO, source: "/p/m", target: "/p/m", fd: 0, optional: false},
+		{kind: opBindRO, source: "/p/w", target: "/p/w", fd: 0, optional: false},
+		{kind: opBindRO, source: "/p/w/cache", target: "/p/w/cache", fd: 0, optional: false},
+		{kind: opBindRW, source: "/p/w", target: "/p/w", fd: 0, optional: false},
+		{kind: opBindRO, source: "/p/w/cache", target: "/p/w/cache", fd: 0, optional: false},
+		{kind: opBindRW, source: "/p/data", target: "/p/data", fd: 0, optional: false},
+		{kind: opTmpfs, target: "/p/m/keys", fd: 0, optional: false},
+		{kind: opProc, target: "/proc", fd: 0, optional: false},
+		{kind: opDev, target: devPath, fd: 0, optional: false},
+		{kind: opTmpfs, target: "/dev/shm", fd: 0, optional: false},
+	}, plan.ops)
+}
+
+func TestBuildMountPlanRebindPassAfterAWritableRootSkipsRootAndKernelMounts(t *testing.T) {
+	entries := []sandboxpolicy.Entry{
+		rootEntry(),
+		{
+			Path: "/", Action: sandboxpolicy.ActionAllow, Mode: sandboxpolicy.ModeReadWrite,
+			Kind: sandboxpolicy.KindDir, Present: true,
+		},
+	}
+	plan, err := buildMountPlan(entries, []string{"/", "/home", "/proc", "/proc/sys", "/dev", "/dev/shm"})
+	require.NoError(t, err)
+	assert.Equal(t, []mountOp{
+		{kind: opBindRO, source: "/", target: "/", fd: 0, optional: false},
+		{kind: opBindRO, source: "/home", target: "/home", fd: 0, optional: false},
+		{kind: opBindRW, source: "/", target: "/", fd: 0, optional: false},
+		{kind: opBindRO, source: "/home", target: "/home", fd: 0, optional: false},
+		{kind: opProc, target: "/proc", fd: 0, optional: false},
+		{kind: opDev, target: devPath, fd: 0, optional: false},
+		{kind: opTmpfs, target: "/dev/shm", fd: 0, optional: false},
+	}, plan.ops)
+}
+
 func TestMountArgsTranslatesEveryOperation(t *testing.T) {
 	args := mountArgs([]mountOp{
 		{kind: opBindRO, target: "/ro", fd: 3},

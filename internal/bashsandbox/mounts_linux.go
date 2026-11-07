@@ -192,7 +192,7 @@ func decodeMountInfoPath(value string) (string, error) {
 	return decoded.String(), nil
 }
 
-// Nested host mounts need their own read-only binds before ordered policy entries.
+// Nested host mounts are re-bound read-only before ordered entries and after each writable grant.
 // Fresh proc and dev mounts come last to prevent policy entries from shadowing them.
 func buildMountPlan(entries []sandboxpolicy.Entry, hostMountPoints []string) (mountPlan, error) {
 	entries = (sandboxpolicy.Policy{Entries: entries}).EffectiveEntries()
@@ -217,6 +217,12 @@ func buildMountPlan(entries []sandboxpolicy.Entry, hostMountPoints []string) (mo
 		plan.ops = append(plan.ops, ops...)
 		if isHostRootEntry(entry) {
 			plan.ops = append(plan.ops, hostMountOps(hostMountPoints, writableRoots)...)
+		}
+
+		if entry.Action == sandboxpolicy.ActionAllow && entry.Mode == sandboxpolicy.ModeReadWrite {
+			// A writable bind re-imports the mounts beneath it with their host flags.
+			plan.ops = append(plan.ops,
+				hostMountOps(mountPointsStrictlyWithin(hostMountPoints, entry.Path), writableRoots)...)
 		}
 	}
 
@@ -273,7 +279,7 @@ func rwEntryOps(entry sandboxpolicy.Entry) ([]mountOp, error) {
 	return []mountOp{{kind: opBindRW, source: entry.Path, target: entry.Path}}, nil
 }
 
-// hostMountOps re-binds every host mount point read-only. Bubblewrap's
+// hostMountOps re-binds the given mount points read-only. Bubblewrap's
 // read-only bind of the root applies MS_RDONLY to the top mount alone, so a
 // nested mount would otherwise stay writable. Mounts outside writable grants
 // are optional at the pin.
@@ -312,6 +318,18 @@ func withinWritableGrant(path string, writableRoots []string) bool {
 	}
 
 	return false
+}
+
+func mountPointsStrictlyWithin(mountPoints []string, root string) []string {
+	var nested []string
+
+	for _, mountPoint := range mountPoints {
+		if mountPoint != root && pathWithinRoot(mountPoint, root) {
+			nested = append(nested, mountPoint)
+		}
+	}
+
+	return nested
 }
 
 func kernelOwned(path string) bool {

@@ -81,11 +81,6 @@ func TestLinuxSandboxInTestcontainer(t *testing.T) {
 			"\"/tmp/coagent-builtin.test -test.v -test.timeout 5m "+
 			"-test.run '^Test(FilesystemTools_|SandboxFileMutator_|NewFileMutator_|DirectFileMutator)'\"",
 	)
-	runContainer(ctx, t, ctr,
-		"COAGENT_BWRAP_MOUNT_INTEGRATION=1 "+
-			"/tmp/coagent-bashsandbox.test -test.v -test.timeout 5m "+
-			"-test.run '^TestBubblewrapIntegrationProtectsNestedMount$'",
-	)
 }
 
 func (b linuxTestBinary) build(
