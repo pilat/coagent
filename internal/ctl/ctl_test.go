@@ -73,7 +73,8 @@ func newHarness(t *testing.T, cfg *config.Config) *harness {
 
 	h.server = srv
 
-	go func() { _ = srv.Serve(context.Background()) }()
+	srv.MarkReady()
+	go func() { _ = srv.ServeStarting(context.Background()) }()
 	<-srv.serveReady
 
 	t.Cleanup(func() { _ = srv.Close() })
@@ -118,7 +119,6 @@ func TestServer_GreetingAndSocketMode(t *testing.T) {
 	assert.Equal(t, AppName, g.App)
 	assert.Equal(t, testVersion, g.BinaryVersion)
 	assert.Equal(t, ProtocolVersion, g.ProtocolVersion)
-	assert.False(t, c.SkewsFrom())
 
 	info, err := os.Stat(h.socket)
 	require.NoError(t, err)

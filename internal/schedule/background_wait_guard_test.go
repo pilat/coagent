@@ -33,7 +33,11 @@ func TestBackgroundWaitGuardRejectsSleepUntilCompletionDelivered(t *testing.T) {
 	db, err := migrate.OpenDB(t.Context(), dbPath)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
-	require.NoError(t, migrate.Run(t.Context(), db, dbPath))
+
+	provider, err := migrate.NewProvider(db)
+	require.NoError(t, err)
+	_, err = provider.Up(t.Context())
+	require.NoError(t, err)
 	sessions := sessionstore.NewStore(db)
 	projectID, err := sessions.GetOrCreateProject(t.Context(), t.TempDir())
 	require.NoError(t, err)

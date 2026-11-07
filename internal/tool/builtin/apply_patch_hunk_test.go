@@ -207,7 +207,8 @@ func TestApplyHunkReplacesTargetRange(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := applyHunk(lines, tt.hunk)
+			got, _, err := applyHunkAt(lines, tt.hunk, tt.hunk.OldStart-1, false)
+			require.NoError(t, err)
 			assert.Equal(t, tt.want, got)
 		})
 	}
@@ -251,7 +252,7 @@ func TestApplyPatchToolRejectsOversizedHunkHeader(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	result, err := newApplyPatchTool(dir, directFileMutator{}).Execute(context.Background(), raw)
+	result, err := newApplyPatchToolWithAccess(dir, nil, directFileMutator{}, nil).Execute(context.Background(), raw)
 	require.Error(t, err)
 	assert.Nil(t, result)
 

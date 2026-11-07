@@ -160,7 +160,7 @@ func TestGrepToolContextWindow(t *testing.T) {
 
 func TestGrepToolRejectsBadInput(t *testing.T) {
 	dir := t.TempDir()
-	grepTool := newGrepTool(dir)
+	grepTool := newGrepToolWithAccess(dir, nil)
 
 	tests := []struct {
 		name    string
@@ -188,7 +188,7 @@ func runGrep(t *testing.T, dir string, p grepParams) *tool.Result {
 	raw, err := json.Marshal(p)
 	require.NoError(t, err)
 
-	result, err := newGrepTool(dir).Execute(context.Background(), raw)
+	result, err := newGrepToolWithAccess(dir, nil).Execute(context.Background(), raw)
 	require.NoError(t, err)
 
 	return result
@@ -254,7 +254,7 @@ func TestGrepToolTitle(t *testing.T) {
 			raw, err := json.Marshal(grepParams{Pattern: "needle", Path: tt.path})
 			require.NoError(t, err)
 
-			result, err := newGrepTool(tt.workDir).Execute(context.Background(), raw)
+			result, err := newGrepToolWithAccess(tt.workDir, nil).Execute(context.Background(), raw)
 			require.NoError(t, err)
 
 			assert.Equal(t, tt.want, result.Title)

@@ -11,14 +11,11 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"github.com/pilat/coagent/internal/coagenthome"
 )
 
 func TestControlledPaths_WalkUpAndGlobals(t *testing.T) {
 	home := t.TempDir()
-	restore := coagenthome.Override(home)
-	defer restore()
+	t.Setenv("HOME", home)
 
 	set := make(map[string]bool)
 	for _, p := range controlledPaths("/x/y/z") {
@@ -140,8 +137,7 @@ func TestSnapshot_InvalidateForcesRecapture(t *testing.T) {
 
 func TestFingerprint_ContentOutsideAdmissionIsNotRead(t *testing.T) {
 	home := t.TempDir()
-	restore := coagenthome.Override(home)
-	defer restore()
+	t.Setenv("HOME", home)
 
 	rc := filepath.Join(home, ".bashrc")
 	require.NoError(t, os.WriteFile(rc, []byte("export A=1\n"), 0o600))
@@ -170,8 +166,7 @@ func TestFingerprint_ContentOutsideAdmissionIsNotRead(t *testing.T) {
 
 func TestFingerprint_NilAdmissionReadsEverything(t *testing.T) {
 	home := t.TempDir()
-	restore := coagenthome.Override(home)
-	defer restore()
+	t.Setenv("HOME", home)
 
 	rc := filepath.Join(home, ".bashrc")
 	require.NoError(t, os.WriteFile(rc, []byte("export A=1\n"), 0o600))

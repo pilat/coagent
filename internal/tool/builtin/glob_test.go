@@ -28,7 +28,7 @@ func TestGlobTool_Execute(t *testing.T) {
 	_ = os.WriteFile(filepath.Join(tmpDir, "src", "pkg", "util.go"), []byte("util"), 0o644)
 	_ = os.WriteFile(filepath.Join(tmpDir, "README.md"), []byte("readme"), 0o644)
 
-	tool := newGlobTool(tmpDir)
+	tool := newGlobToolWithAccess(tmpDir, nil)
 
 	t.Run("find all go files", func(t *testing.T) {
 		params, _ := json.Marshal(globParams{Pattern: "**/*.go"})
@@ -151,7 +151,7 @@ func TestGlobTool_Truncation(t *testing.T) {
 		_ = os.WriteFile(filepath.Join(tmpDir, fmt.Sprintf("file%03d.txt", i)), []byte("content"), 0o644)
 	}
 
-	tool := newGlobTool(tmpDir)
+	tool := newGlobToolWithAccess(tmpDir, nil)
 	params, _ := json.Marshal(globParams{Pattern: "*.txt"})
 	result, err := tool.Execute(context.Background(), params)
 	if err != nil {
@@ -170,7 +170,7 @@ func TestGlobTool_Truncation(t *testing.T) {
 }
 
 func TestGlobTool_Metadata(t *testing.T) {
-	tool := newGlobTool("/tmp")
+	tool := newGlobToolWithAccess("/tmp", nil)
 
 	t.Run("ID", func(t *testing.T) {
 		if tool.ID() != "glob" {

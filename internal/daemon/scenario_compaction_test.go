@@ -13,7 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/pilat/coagent/internal/controllerapi"
-	"github.com/pilat/coagent/internal/llm"
+	"github.com/pilat/coagent/internal/llm/llmtest"
 	"github.com/pilat/coagent/internal/llmwire"
 	"github.com/pilat/coagent/internal/sessionevent"
 	"github.com/pilat/coagent/internal/subagent"
@@ -48,7 +48,7 @@ func TestScenario_AutomaticCompactionRunsInsideTheDaemon(t *testing.T) {
 			lastAssistantTextDTO(h.messages(parentID)) == "work complete"
 	})
 	msgs := h.messages(parentID)
-	require.NoError(t, llm.ValidateToolPairing(msgs), "the rebuilt transcript must stay provider-valid")
+	require.NoError(t, llmtest.ValidateToolPairing(msgs), "the rebuilt transcript must stay provider-valid")
 
 	// Compaction preserves the header, marked summary, verbatim follow-up tail and resumed work in order.
 	summaryAt := indexOfSummary(msgs)
@@ -134,7 +134,7 @@ func TestScenario_AutoCompactionWhileABackgroundChildIsInFlight(t *testing.T) {
 	// Delivery commits the inbox before the parent resumes; an idle gap is not completion.
 	events.waitIdleAfter(parentID, "child completion handled")
 	msgs := h.messages(parentID)
-	require.NoError(t, llm.ValidateToolPairing(msgs),
+	require.NoError(t, llmtest.ValidateToolPairing(msgs),
 		"a completion committed around a compaction must not cross or orphan a tool pair")
 	assert.Equal(t, 1, countSummaryRows(msgs), "exactly one summary row")
 	needle := "child_id: " + strconv.FormatInt(link.ChildID, 10)
@@ -315,7 +315,7 @@ func TestScenario_CompactWaitsForABlockingChildThenRuns(t *testing.T) {
 	// Settle the tool result before queued compaction so pending-call resolution sees no dangling pair.
 	final := h.messages(parentID)
 	assert.True(t, hasSummaryRow(final), "the deferred /compact ran once the call was settled")
-	require.NoError(t, llm.ValidateToolPairing(final))
+	require.NoError(t, llmtest.ValidateToolPairing(final))
 	// The newest settled launch pair must remain in the nonempty verbatim tail.
 	assert.True(t, (countAssistantToolCallsFor(final, "task") > 0), "the settled pair stays verbatim in the tail")
 	assert.Equal(t, 1, countToolResultsFor(final, "task"), "the result landed before the deferred compact ran")
@@ -350,7 +350,7 @@ func TestScenario_DeferredCompactSurvivesADaemonRestart(t *testing.T) {
 	second.waitUntil("restart compact completed", func() bool {
 		return hasSummaryRow(second.messages(parentID))
 	})
-	require.NoError(t, llm.ValidateToolPairing(second.messages(parentID)))
+	require.NoError(t, llmtest.ValidateToolPairing(second.messages(parentID)))
 }
 
 // Compact cannot abandon interrupted work; a settled first round supplies history beyond the mandatory verbatim tail.
@@ -405,7 +405,7 @@ func TestHarnessScenario_CompactMidActivationStillAnswersTheInterruptedWork(t *t
 		return countPublishedMessage(e, sessionID, "work done") == 1
 	})
 	msgs := h.messages(sessionID)
-	require.NoError(t, llm.ValidateToolPairing(msgs))
+	require.NoError(t, llmtest.ValidateToolPairing(msgs))
 	assert.True(t, hasSummaryRow(msgs), "the requested compaction ran")
 	h.requireInboxDrained(sessionID)
 }

@@ -158,9 +158,9 @@ rules:
       include: ["internal/configops/*.go"]
       exclude: ["*_test.go"]
     message: >-
-      internal/configops must load config through LoadRawUnifiedConfig, which keeps
-      ${VAR} references unresolved. LoadUnifiedConfig returns resolved credentials,
-      and marshalling that draft writes them into config.yaml as plaintext.
+      internal/configops must not load a secret-resolved config. LoadUnifiedConfig
+      returns resolved credentials, and marshalling that draft writes them into
+      config.yaml as plaintext.
     pattern: config.LoadUnifiedConfig(...)
 
   # Child sessions are controller-invisible end to end; the drop happens in one

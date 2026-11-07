@@ -665,7 +665,11 @@ func FuzzHarnessProtocol(f *testing.F) {
 	templatePath := filepath.Join(f.TempDir(), "harness-template.db")
 	db, err := migrate.OpenDB(f.Context(), templatePath)
 	require.NoError(f, err)
-	require.NoError(f, migrate.Run(f.Context(), db, ""))
+
+	provider, err := migrate.NewProvider(db)
+	require.NoError(f, err)
+	_, err = provider.Up(f.Context())
+	require.NoError(f, err)
 	require.NoError(f, db.Close())
 	migratedDB, err := os.ReadFile(templatePath)
 	require.NoError(f, err)

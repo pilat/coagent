@@ -127,8 +127,7 @@ func TestBuildStack_ToolCount(t *testing.T) {
 }
 
 func TestBuildStack_BashSandboxConfigurationError(t *testing.T) {
-	restore := coagenthome.Override(t.TempDir())
-	t.Cleanup(restore)
+	t.Setenv("HOME", t.TempDir())
 
 	workDir := t.TempDir()
 	unified := &config.UnifiedConfig{}
@@ -158,8 +157,7 @@ func TestBashSandboxConfig_NilUnified(t *testing.T) {
 }
 
 func TestBashSandboxConfig_Configured(t *testing.T) {
-	restore := coagenthome.Override(t.TempDir())
-	t.Cleanup(restore)
+	t.Setenv("HOME", t.TempDir())
 
 	workDir := t.TempDir()
 	canonicalRoot, err := filepath.EvalSymlinks(workDir)
@@ -203,8 +201,7 @@ func entryWithPath(entries []sandboxpolicy.Entry, path string) (sandboxpolicy.En
 }
 
 func TestBashSandboxConfig_WorktreeTrustsMainGitDir(t *testing.T) {
-	restore := coagenthome.Override(t.TempDir())
-	t.Cleanup(restore)
+	t.Setenv("HOME", t.TempDir())
 
 	repoRoot := t.TempDir()
 	gitDir := filepath.Join(repoRoot, ".git")

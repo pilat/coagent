@@ -26,7 +26,11 @@ func TestSchemaEquivalenceLive(t *testing.T) {
 			`INSERT INTO goose_db_version(version_id, is_applied) VALUES (?, 1)`, version)
 		require.NoError(t, err)
 	}
-	require.NoError(t, Run(t.Context(), db, dbPath))
+
+	provider, err := NewProvider(db)
+	require.NoError(t, err)
+	_, err = provider.Up(t.Context())
+	require.NoError(t, err)
 	assertSchemaGolden(t, db, "schema_live.golden")
 }
 
@@ -38,7 +42,11 @@ func TestSchemaEquivalenceFresh(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
 	_, err = newProvider(t, db).UpTo(t.Context(), 46)
 	require.NoError(t, err)
-	require.NoError(t, Run(t.Context(), db, dbPath))
+
+	provider, err := NewProvider(db)
+	require.NoError(t, err)
+	_, err = provider.Up(t.Context())
+	require.NoError(t, err)
 	assertSchemaGolden(t, db, "schema_fresh.golden")
 }
 

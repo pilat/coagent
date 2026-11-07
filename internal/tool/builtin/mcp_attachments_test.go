@@ -20,7 +20,7 @@ import (
 )
 
 func TestMCPAttachmentSinkStoresAuthorizedImage(t *testing.T) {
-	t.Cleanup(coagenthome.Override(t.TempDir()))
+	t.Setenv("HOME", t.TempDir())
 	project := t.TempDir()
 	root, err := coagenthome.ProcessProjectDir(9)
 	require.NoError(t, err)
@@ -59,7 +59,7 @@ func TestMCPAttachmentSinkStoresAuthorizedImage(t *testing.T) {
 }
 
 func TestMCPAttachmentSinkRejectsUnsupportedAndOversizedImages(t *testing.T) {
-	t.Cleanup(coagenthome.Override(t.TempDir()))
+	t.Setenv("HOME", t.TempDir())
 	access, err := safefile.New(sandboxpolicy.Policy{}, t.TempDir())
 	require.NoError(t, err)
 	defer func() { require.NoError(t, access.Close()) }()

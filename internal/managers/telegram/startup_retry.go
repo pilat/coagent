@@ -27,22 +27,6 @@ func defaultStartupRetryPolicy() startupRetryPolicy {
 	}
 }
 
-func retryStartupCall(
-	ctx context.Context,
-	policy startupRetryPolicy,
-	call func(context.Context) error,
-) error {
-	timeout := policy.timeout
-	if timeout <= 0 {
-		timeout = startupRetryTimeout
-	}
-
-	retryCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-
-	return retryStartupCallWithContext(retryCtx, policy, call)
-}
-
 func retryStartupCallWithContext(
 	ctx context.Context,
 	policy startupRetryPolicy,

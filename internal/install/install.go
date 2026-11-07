@@ -64,17 +64,6 @@ type Info struct {
 	LogCommand string
 }
 
-// Plan is the install pre-flight: what gets created, where, and under which
-// account — the facts to show before asking for a password.
-type Plan struct {
-	Description string
-	UnitPath    string
-	BinaryPath  string
-	RunAsUser   string
-	Command     string
-	NeedsRoot   bool
-}
-
 // target is the account the service runs as. Under sudo that is the invoking
 // user, never root: the daemon owns ~/.coagent, and root's copy of it is not the
 // one anybody configured.
@@ -93,67 +82,6 @@ func New() (*Manager, error) {
 	}
 
 	return newSystemd()
-}
-
-// UpdateBinary replaces the installed binary with the running one. It needs no
-// privileges — that is the whole point of keeping the binary in the user's home.
-func UpdateBinary() error { return updateBinaryOn(runtime.GOOS) }
-
-// updateBinaryOn is the testable half of UpdateBinary: the platform refusal is
-// the first operation, so direct package callers cannot write a binary on an
-// unsupported host merely because the CLI guard was bypassed.
-func updateBinaryOn(goos string) error {
-	if !platformSupported(goos) {
-		return unsupportedPlatformError(goos)
-	}
-
-	t, err := resolveTarget()
-	if err != nil {
-		return err
-	}
-
-	return installBinary(binaryPathFor(t), t)
-}
-
-// UnitStale reports whether the installed unit differs from what this version
-// would write. A missing file counts as stale.
-func UnitStale() (bool, error) { return unitStaleOn(runtime.GOOS) }
-
-// unitStaleOn is the testable half of UnitStale: the platform refusal is the
-// first operation, so direct package callers cannot resolve a unit on an
-// unsupported host merely because the CLI guard was bypassed.
-func unitStaleOn(goos string) (bool, error) {
-	if !platformSupported(goos) {
-		return false, unsupportedPlatformError(goos)
-	}
-
-	t, err := resolveTarget()
-	if err != nil {
-		return false, err
-	}
-
-	path, want, err := expectedUnit(t)
-	if err != nil {
-		return false, err
-	}
-
-	return unitFileStale(path, want)
-}
-
-// unitFileStale is the filesystem-only half of UnitStale. Keeping target and
-// platform discovery outside makes the contract testable without consulting a
-// developer machine's real /etc/systemd state.
-func unitFileStale(path, want string) (bool, error) {
-	got, err := os.ReadFile(path)
-	if os.IsNotExist(err) {
-		return true, nil
-	}
-
-	if err != nil {
-		return false, fmt.Errorf("read %s: %w", path, err)
-	}
-
-	return string(got) != want, nil
 }
 
 // binaryPathFor is where the binary lives: in the target's home, so updating it

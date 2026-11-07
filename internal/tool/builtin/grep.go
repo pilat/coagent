@@ -69,10 +69,6 @@ type grepMatch struct {
 	context []string
 }
 
-func newGrepTool(workDir string) *grepTool {
-	return &grepTool{workDir: workDir}
-}
-
 func newGrepToolWithAccess(workDir string, access *safefile.Access) *grepTool {
 	return &grepTool{workDir: workDir, access: access}
 }

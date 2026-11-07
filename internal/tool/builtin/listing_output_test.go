@@ -72,7 +72,7 @@ func TestLsToolRejectsBadInput(t *testing.T) {
 	file := filepath.Join(dir, "file.txt")
 	require.NoError(t, os.WriteFile(file, []byte("x"), 0o644))
 
-	lsTool := NewLsTool(dir)
+	lsTool := newLsTool(dir, nil)
 
 	tests := []struct {
 		name    string
@@ -143,7 +143,7 @@ func TestGlobToolRejectsBadInput(t *testing.T) {
 	file := filepath.Join(dir, "file.txt")
 	require.NoError(t, os.WriteFile(file, []byte("x"), 0o644))
 
-	globTool := newGlobTool(dir)
+	globTool := newGlobToolWithAccess(dir, nil)
 
 	tests := []struct {
 		name    string
@@ -172,7 +172,7 @@ func runLs(t *testing.T, workDir, path string) *tool.Result {
 	raw, err := json.Marshal(LsParams{Path: path})
 	require.NoError(t, err)
 
-	result, err := NewLsTool(workDir).Execute(context.Background(), raw)
+	result, err := newLsTool(workDir, nil).Execute(context.Background(), raw)
 	require.NoError(t, err)
 
 	return result
@@ -184,7 +184,7 @@ func runGlob(t *testing.T, dir string, p globParams) *tool.Result {
 	raw, err := json.Marshal(p)
 	require.NoError(t, err)
 
-	result, err := newGlobTool(dir).Execute(context.Background(), raw)
+	result, err := newGlobToolWithAccess(dir, nil).Execute(context.Background(), raw)
 	require.NoError(t, err)
 
 	return result
@@ -239,7 +239,7 @@ func TestGlobToolTitle(t *testing.T) {
 			raw, err := json.Marshal(globParams{Pattern: "*", Path: tt.path})
 			require.NoError(t, err)
 
-			result, err := newGlobTool(tt.workDir).Execute(context.Background(), raw)
+			result, err := newGlobToolWithAccess(tt.workDir, nil).Execute(context.Background(), raw)
 			require.NoError(t, err)
 
 			assert.Equal(t, tt.want, result.Title)

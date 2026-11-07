@@ -17,7 +17,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/pilat/coagent/internal/config"
-	"github.com/pilat/coagent/internal/llm"
+	"github.com/pilat/coagent/internal/llm/llmtest"
 	"github.com/pilat/coagent/internal/llmwire"
 	"github.com/pilat/coagent/internal/mcp"
 	"github.com/pilat/coagent/internal/mcpstore"
@@ -76,7 +76,7 @@ func TestScenario_NextMCPStackReusesProcessAndRefreshesTools(t *testing.T) {
 	})
 	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(sessionID) })
 	msgs := h.messages(sessionID)
-	require.NoError(t, llm.ValidateToolPairing(msgs))
+	require.NoError(t, llmtest.ValidateToolPairing(msgs))
 	assert.Contains(t, toolResultForCallID(msgs, "ping2-new").Content, "pong from fake")
 	assert.Equal(t, firstSpawns, fake.count(t, "spawn"), "catalog refresh must reuse the session's live process")
 	assert.Equal(t, 2, fake.count(t, "call"))
@@ -168,10 +168,10 @@ func TestScenario_MCPDisableDoesNotBreakAnInFlightStack(t *testing.T) {
 		return lastAssistantTextDTO(h.messages(holder)) == "held run done"
 	})
 	held := h.messages(holder)
-	require.NoError(t, llm.ValidateToolPairing(held))
+	require.NoError(t, llmtest.ValidateToolPairing(held))
 	assert.Contains(t, toolResultForCallID(held, "ping-held").Content, "pong from held run",
 		"the in-flight call answers normally despite the registry change")
-	require.NoError(t, llm.ValidateToolPairing(h.messages(disabler)))
+	require.NoError(t, llmtest.ValidateToolPairing(h.messages(disabler)))
 	spawnsBeforeResume := fake.count(t, "spawn")
 	h.startInboxWake()
 	require.NoError(t, h.mgr.sendToSession(h.ctx, holder, "ENABLE_IT again"))
@@ -186,7 +186,7 @@ func TestScenario_MCPDisableDoesNotBreakAnInFlightStack(t *testing.T) {
 	})
 	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(holder) })
 	msgs := h.messages(holder)
-	require.NoError(t, llm.ValidateToolPairing(msgs))
+	require.NoError(t, llmtest.ValidateToolPairing(msgs))
 	assert.Contains(t, toolResultForCallID(msgs, "ping-again").Content, "pong from held run")
 	assert.Greater(t, fake.count(t, "spawn"), spawnsBeforeResume, "the next stack starts a newly enabled server")
 }
@@ -239,7 +239,7 @@ func TestScenario_MCPDisableRemovesTheToolFromTheNextRun(t *testing.T) {
 	})
 	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(sessionID) })
 	msgs := h.messages(sessionID)
-	require.NoError(t, llm.ValidateToolPairing(msgs))
+	require.NoError(t, llmtest.ValidateToolPairing(msgs))
 	assert.Contains(t, toolResultForCallID(msgs, "ping-after-disable").Content, "unknown tool",
 		"a disabled server is gone from the next run's tools")
 	assert.Equal(t, spawnsBefore, fake.count(t, "spawn"), "a disabled server is not spawned again")
@@ -302,7 +302,7 @@ func TestScenario_MCPAddReachesTheNextRunOnly(t *testing.T) {
 	})
 	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(sessionID) })
 	msgs := h.messages(sessionID)
-	require.NoError(t, llm.ValidateToolPairing(msgs))
+	require.NoError(t, llmtest.ValidateToolPairing(msgs))
 	toolOutput := ""
 	for _, v := range slices.Backward(msgs) {
 		if v.Role == llmwire.RoleTool && v.ToolName == tool.IDMCPAdd {
@@ -321,7 +321,7 @@ func TestScenario_MCPAddReachesTheNextRunOnly(t *testing.T) {
 	})
 	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(sessionID) })
 	msgs = h.messages(sessionID)
-	require.NoError(t, llm.ValidateToolPairing(msgs))
+	require.NoError(t, llmtest.ValidateToolPairing(msgs))
 	assert.Contains(t, toolResultForCallID(msgs, "ping-next-run").Content, "pong from fake",
 		"the next run offers mcp__fake__ping and it answers from the real server")
 	assert.GreaterOrEqual(t, fake.count(t, "spawn"), 1, "the next stack started the server")
@@ -361,7 +361,7 @@ func TestScenario_ProjectMCPServerOverridesTheGlobalOfTheSameName(t *testing.T) 
 	})
 	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(sessionID) })
 	msgs := h.messages(sessionID)
-	require.NoError(t, llm.ValidateToolPairing(msgs))
+	require.NoError(t, llmtest.ValidateToolPairing(msgs))
 	assert.Contains(t, toolResultForCallID(msgs, "ping-override").Content, "pong from project")
 	assert.GreaterOrEqual(t, project.count(t, "spawn"), 1, "the project row is the one that runs")
 	assert.Equal(t, 0, global.count(t, "spawn"), "the shadowed global is never spawned")
@@ -408,7 +408,7 @@ func TestScenario_MCPDisablePersistsAcrossDaemonRestart(t *testing.T) {
 	})
 	second.waitUntil("session idle", func() bool { return !second.mgr.HasActiveLoop(sessionID) })
 	messages := second.messages(sessionID)
-	require.NoError(t, llm.ValidateToolPairing(messages))
+	require.NoError(t, llmtest.ValidateToolPairing(messages))
 	assert.Contains(t, toolResultForCallID(messages, "ping-after-restart").Content, "unknown tool",
 		"a disabled registry row must not return in a fresh daemon activation")
 	assert.Equal(t, spawnsBeforeRestart, fake.count(t, "spawn"), "restart must not spawn stale MCP availability")
@@ -449,7 +449,7 @@ func TestScenario_MCPRemoveClosesStackProcessBeforeTheNextRun(t *testing.T) {
 	})
 	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(sessionID) })
 	messages := h.messages(sessionID)
-	require.NoError(t, llm.ValidateToolPairing(messages))
+	require.NoError(t, llmtest.ValidateToolPairing(messages))
 	assert.Contains(t, toolResultForCallID(messages, "ping-after-remove").Content, "unknown tool",
 		"a removed row must be absent from the next stack")
 	assert.Equal(t, spawnsAfterRemove, fake.count(t, "spawn"), "removal must not restart the deleted server")

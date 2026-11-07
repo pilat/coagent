@@ -1,15 +1,12 @@
 package coagenthome
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
-	"sync"
 )
 
 const (
@@ -30,33 +27,12 @@ const (
 	MarketplacesDirName   = "marketplaces"
 	ProcessesDirName      = "processes"
 	MCPAttachmentsDirName = "mcp-attachments"
-	SandboxDirName        = "sandbox"
 )
 
-var (
-	overrideMu  sync.RWMutex
-	overrideDir string
-	overrideSet bool
-
-	startupUserHome = resolveStartupUserHome()
-)
+var startupUserHome = resolveStartupUserHome()
 
 // UserHome returns the current user's home directory.
 func UserHome() (string, error) {
-	if dir, ok := overridden(); ok {
-		if dir == "" {
-			return "", errors.New("home directory override is empty")
-		}
-
-		if runningUnderGoTest() && insideDirectory(dir, startupUserHome) {
-			return "", errors.New(
-				"refusing to use the inherited user home or a path beneath it in a test: isolate HOME under t.TempDir()",
-			)
-		}
-
-		return dir, nil
-	}
-
 	userHome, err := os.UserHomeDir()
 	if err != nil {
 		return "", fmt.Errorf("resolve user home: %w", err)
@@ -108,61 +84,6 @@ func ProcessProjectDirName(projectID int64) (string, error) {
 	}
 
 	return "project-" + strconv.FormatInt(projectID, 10), nil
-}
-
-// SandboxTempDir returns the private temporary backing directory for one
-// project identity. It is visible to workloads as /tmp, never as this path.
-func SandboxTempDir(identity string) (string, error) {
-	if identity == "" {
-		return "", errors.New("sandbox project identity must not be empty")
-	}
-
-	return Join(SandboxDirName, identity, "tmp")
-}
-
-// SandboxProjectIdentity names a durable project.
-func SandboxProjectIdentity(projectID int64) (string, error) {
-	if projectID <= 0 {
-		return "", fmt.Errorf("invalid sandbox project id %d", projectID)
-	}
-
-	return "project-" + strconv.FormatInt(projectID, 10), nil
-}
-
-// SandboxPathIdentity names a project that has no durable id — a test or probe
-// fixture — from its canonical root. The digest keeps the mapping stable
-// across runs without exposing the path as a directory name.
-func SandboxPathIdentity(canonicalRoot string) string {
-	hash := sha256.Sum256([]byte(canonicalRoot))
-
-	return "path-" + hex.EncodeToString(hash[:16])
-}
-
-// Override forces UserHome to return dir — or to fail when dir is empty —
-// until the returned restore func runs. Test-only; not for parallel tests.
-func Override(dir string) func() {
-	prevDir, prevSet := swap(dir, true)
-
-	return func() {
-		swap(prevDir, prevSet)
-	}
-}
-
-func overridden() (string, bool) {
-	overrideMu.RLock()
-	defer overrideMu.RUnlock()
-
-	return overrideDir, overrideSet
-}
-
-func swap(dir string, set bool) (string, bool) {
-	overrideMu.Lock()
-	defer overrideMu.Unlock()
-
-	prevDir, prevSet := overrideDir, overrideSet
-	overrideDir, overrideSet = dir, set
-
-	return prevDir, prevSet
 }
 
 func resolveStartupUserHome() string {

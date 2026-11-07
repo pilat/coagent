@@ -35,7 +35,11 @@ func migratedDB(t *testing.T) *sql.DB {
 	db, err := migrate.OpenDB(context.Background(), dbPath)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
-	require.NoError(t, migrate.Run(context.Background(), db, dbPath))
+
+	provider, err := migrate.NewProvider(db)
+	require.NoError(t, err)
+	_, err = provider.Up(context.Background())
+	require.NoError(t, err)
 
 	return db
 }
@@ -84,7 +88,11 @@ func TestMigrationsApplyToAnExistingDatabase(t *testing.T) {
 	db, err := migrate.OpenDB(ctx, dbPath)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
-	require.NoError(t, migrate.RunUpTo(ctx, db, 15))
+
+	provider, err := migrate.NewProvider(db)
+	require.NoError(t, err)
+	_, err = provider.UpTo(ctx, 15)
+	require.NoError(t, err)
 
 	// Seed a row the migration must not disturb.
 	_, err = db.ExecContext(ctx, `INSERT INTO projects (work_dir, name) VALUES (?, ?)`, t.TempDir(), "kept")
@@ -92,7 +100,10 @@ func TestMigrationsApplyToAnExistingDatabase(t *testing.T) {
 
 	require.Equal(t, 0, countMCPServersTable(t, db), "the table must be absent before 00016 re-applies")
 
-	require.NoError(t, migrate.Run(ctx, db, dbPath))
+	provider, err = migrate.NewProvider(db)
+	require.NoError(t, err)
+	_, err = provider.Up(ctx)
+	require.NoError(t, err)
 	assert.Equal(t, 1, countMCPServersTable(t, db))
 
 	for _, index := range []string{"idx_mcp_servers_project_name", "idx_mcp_servers_global_name"} {

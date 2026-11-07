@@ -54,10 +54,6 @@ func newWriteToolWithAccess(
 	return &writeTool{workDir: workDir, access: access, lspMgr: lspMgr, mutator: mutator, tracker: tracker}
 }
 
-func newWriteTool(workDir string, lspMgr lsp.Manager, mutator fileMutator) *writeTool {
-	return &writeTool{workDir: workDir, lspMgr: lspMgr, mutator: mutator}
-}
-
 func (t *writeTool) ID() string          { return "write" }
 func (t *writeTool) ParallelSafe() bool  { return false }
 func (t *writeTool) Description() string { return writeDescription }

@@ -34,7 +34,7 @@ func TestReadImage_PopulatesDimensions(t *testing.T) {
 	dir := t.TempDir()
 	writePNG(t, dir, "shot.png", 32, 20)
 
-	read := newReadTool(dir)
+	read := newReadToolWithAccess(dir, nil, nil)
 	result, err := read.Execute(context.Background(), json.RawMessage(`{"file_path":"shot.png"}`))
 	require.NoError(t, err)
 
@@ -51,7 +51,7 @@ func TestReadImage_CorruptButSniffableLacksDimensions(t *testing.T) {
 	path := filepath.Join(dir, "broken.png")
 	require.NoError(t, os.WriteFile(path, body, 0o600))
 
-	read := newReadTool(dir)
+	read := newReadToolWithAccess(dir, nil, nil)
 	result, err := read.Execute(context.Background(), json.RawMessage(`{"file_path":"broken.png"}`))
 	require.NoError(t, err, "admission gates on the sniffer, not the decoder")
 
@@ -67,7 +67,7 @@ func TestReadImage_GateEnforcesBase64DerivedLimit(t *testing.T) {
 	require.NoError(t, os.WriteFile(
 		oversized, append([]byte{0x89, 'P', 'N', 'G'}, make([]byte, 4<<20)...), 0o600))
 
-	read := newReadTool(dir)
+	read := newReadToolWithAccess(dir, nil, nil)
 	_, err := read.Execute(
 		context.Background(), json.RawMessage(`{"file_path":"big.png"}`))
 	require.Error(t, err)

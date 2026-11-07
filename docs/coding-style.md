@@ -266,7 +266,7 @@ Use a real database in tests — open a fresh SQLite file under `t.TempDir()` an
   Run via `go test -tags=integration ./...`. Tests that require real subprocesses or external tooling on `PATH` go here. Canonical integration targets remain hermetic: use loopback fake servers and temporary local Git repositories, never mutable upstream content.
 - Guard environment-dependent integration tests with an explicit skip when prerequisites are missing: `if _, err := exec.LookPath("some-tool"); err != nil { t.Skip("some-tool not installed") }`.
 - Credentialed network smoke tests use the `live` build tag and are never part of `make all` or `make ci`. They may read only explicitly supplied environment variables; never load a developer's dotenv file or depend on a personal filesystem path.
-- Tests that resolve a coagent-home path must isolate `HOME` under `t.TempDir()` or use `coagenthome.Override` with a temporary directory. Direct `os.UserHomeDir()` is banned in tests as well as production packages.
+- Tests that resolve a coagent-home path must isolate `HOME` under `t.TempDir()`. Direct `os.UserHomeDir()` is banned in tests as well as production packages.
 
 ### Codegen, embedded assets, build tags
 

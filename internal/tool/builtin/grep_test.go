@@ -27,7 +27,7 @@ func TestGrepTool_Execute(t *testing.T) {
 	}
 	_ = os.WriteFile(filepath.Join(tmpDir, "subdir", "file3.txt"), []byte("hello from subdir"), 0o644)
 
-	tool := newGrepTool(tmpDir)
+	tool := newGrepToolWithAccess(tmpDir, nil)
 
 	t.Run("simple pattern", func(t *testing.T) {
 		params, _ := json.Marshal(grepParams{Pattern: "hello"})
@@ -171,7 +171,7 @@ func TestGrepTool_WithContext(t *testing.T) {
 	content := "line 1\nline 2\nMATCH\nline 4\nline 5"
 	_ = os.WriteFile(filepath.Join(tmpDir, "test.txt"), []byte(content), 0o644)
 
-	tool := newGrepTool(tmpDir)
+	tool := newGrepToolWithAccess(tmpDir, nil)
 
 	params, _ := json.Marshal(grepParams{
 		Pattern: "MATCH",
@@ -189,7 +189,7 @@ func TestGrepTool_WithContext(t *testing.T) {
 }
 
 func TestGrepTool_Metadata(t *testing.T) {
-	tool := newGrepTool("/tmp")
+	tool := newGrepToolWithAccess("/tmp", nil)
 
 	if tool.ID() != "grep" {
 		t.Errorf("ID should be 'grep', got %s", tool.ID())

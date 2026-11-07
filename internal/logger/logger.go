@@ -41,18 +41,6 @@ func WithConsoleOutput(w io.Writer) Option {
 	}
 }
 
-// WithJSONOutput adds a JSON encoder writing to w.
-func WithJSONOutput(w io.Writer) Option {
-	return func(c *initConfig) {
-		cfg := zap.NewProductionEncoderConfig()
-		cfg.TimeKey = "ts"
-		cfg.EncodeTime = zapcore.ISO8601TimeEncoder
-		enc := zapcore.NewJSONEncoder(cfg)
-		core := zapcore.NewCore(enc, zapcore.AddSync(w), atom)
-		c.cores = append(c.cores, core)
-	}
-}
-
 // WithSessionPrefix wraps all cores with the session prefix middleware.
 func WithSessionPrefix() Option {
 	return func(c *initConfig) {
@@ -82,15 +70,6 @@ func Init(opts ...Option) {
 	}
 
 	L = zap.New(newRedactingCore(core))
-}
-
-// SetDebug enables or disables debug logging.
-func SetDebug(enabled bool) {
-	if enabled {
-		atom.SetLevel(zapcore.DebugLevel)
-	} else {
-		atom.SetLevel(zapcore.InfoLevel)
-	}
 }
 
 // Named returns a new logger with the given name segment.

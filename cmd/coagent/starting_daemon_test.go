@@ -90,7 +90,7 @@ func socketPath(t *testing.T) string {
 }
 
 // waitServing blocks until the socket answers with a greeting: the listener is
-// bound before Serve runs, so connecting alone proves nothing.
+// bound before ServeStarting runs, so connecting alone proves nothing.
 func waitServing(t *testing.T, socket string) {
 	t.Helper()
 

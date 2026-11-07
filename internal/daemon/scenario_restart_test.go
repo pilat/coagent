@@ -22,7 +22,7 @@ import (
 	"github.com/pilat/coagent/internal/configapply"
 	"github.com/pilat/coagent/internal/configops"
 	"github.com/pilat/coagent/internal/controllerapi"
-	"github.com/pilat/coagent/internal/llm"
+	"github.com/pilat/coagent/internal/llm/llmtest"
 	"github.com/pilat/coagent/internal/llmwire"
 	"github.com/pilat/coagent/internal/migrate"
 	"github.com/pilat/coagent/internal/sessionevent"
@@ -399,7 +399,7 @@ func TestIntegration_SweepRedeliversIdempotently(t *testing.T) {
 	})
 	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(parent) })
 	msgs := h.messages(parent)
-	require.NoError(t, llm.ValidateToolPairing(msgs))
+	require.NoError(t, llmtest.ValidateToolPairing(msgs))
 	assert.Equal(t, 1, restartCountSubagentCompletions(msgs, childID), "exactly one record after first sweep")
 
 	// A delivered link is excluded from the restart sweep, so redelivery adds no second completion.
@@ -447,7 +447,7 @@ func TestHarnessModel_PendingExternalCallOwnershipAgreesAfterRestart(t *testing.
 		})
 		assertAgrees(t, second, sessionID)
 		msgs := second.messages(sessionID)
-		require.NoError(t, llm.ValidateToolPairing(msgs))
+		require.NoError(t, llmtest.ValidateToolPairing(msgs))
 		assert.Equal(t, 1, countToolResultsFor(msgs, tool.IDTask), "the orphaned task is closed exactly once")
 	})
 	t.Run("a task keeps its live child", func(t *testing.T) {
@@ -494,7 +494,7 @@ func TestHarnessModel_PendingExternalCallOwnershipAgreesAfterRestart(t *testing.
 		})
 		assertAgrees(t, second, sessionID)
 		msgs := second.messages(sessionID)
-		require.NoError(t, llm.ValidateToolPairing(msgs))
+		require.NoError(t, llmtest.ValidateToolPairing(msgs))
 		assert.Equal(t, 1, countToolResultsFor(msgs, tool.IDConfigEdit),
 			"a verdict nobody can produce must be closed, not left dangling")
 
@@ -538,7 +538,7 @@ func TestScenario_BlockingTaskOrphanedByARestartIsClosedOnce(t *testing.T) {
 			!second.mgr.HasActiveLoop(sessionID)
 	})
 	recovered := second.messages(sessionID)
-	require.NoError(t, llm.ValidateToolPairing(recovered), "boot must leave a transcript a provider accepts")
+	require.NoError(t, llmtest.ValidateToolPairing(recovered), "boot must leave a transcript a provider accepts")
 	require.Equal(t, 1, countToolResultsFor(recovered, tool.IDTask), "the abandoned task is closed exactly once")
 	assert.Contains(t, restartLastToolResultContent(recovered, tool.IDTask), "restarted")
 	second.startInboxWake()
@@ -553,7 +553,7 @@ func TestScenario_BlockingTaskOrphanedByARestartIsClosedOnce(t *testing.T) {
 		return loadErr == nil && record.Status == sessionstore.SessionStatusCompleted
 	})
 	final := second.messages(sessionID)
-	require.NoError(t, llm.ValidateToolPairing(final))
+	require.NoError(t, llmtest.ValidateToolPairing(final))
 	assert.Equal(t, 1, countAssistantToolCallsFor(final, tool.IDTask),
 		"the suspended call is answered, never re-executed")
 	assert.Equal(t, 1, countToolResultsFor(final, tool.IDTask))
@@ -584,7 +584,7 @@ func TestScenario_OrphanedCallsAreClosedBeforeStartReturns(t *testing.T) {
 		return countToolResultsFor(second.messages(sessionID), tool.IDTask) == 1
 	})
 	msgs := second.messages(sessionID)
-	require.NoError(t, llm.ValidateToolPairing(msgs), "a controller may open a runner the instant Start returns")
+	require.NoError(t, llmtest.ValidateToolPairing(msgs), "a controller may open a runner the instant Start returns")
 	assert.Equal(t, 1, countToolResultsFor(msgs, tool.IDTask), "the orphaned task is closed by the time Start returns")
 }
 
@@ -636,7 +636,7 @@ func TestScenario_MessageQueuedBehindAnOrphanedTaskRunsAfterRecovery(t *testing.
 	})
 	second.waitUntil("session idle", func() bool { return !second.mgr.HasActiveLoop(sessionID) })
 	final := second.messages(sessionID)
-	require.NoError(t, llm.ValidateToolPairing(final))
+	require.NoError(t, llmtest.ValidateToolPairing(final))
 	assert.Equal(t, 1, countAssistantToolCallsFor(final, tool.IDTask))
 	assert.Equal(t, 1, countToolResultsFor(final, tool.IDTask))
 	second.requireInboxDrained(sessionID)
@@ -859,7 +859,7 @@ func TestScenario_StopOrdinaryBashDoesNotReplayAfterNewInputOrRestart(t *testing
 				return getErr == nil && rec.Status == sessionstore.SessionStatusStopped
 			})
 			active := first.messages(firstID)
-			require.NoError(t, llm.ValidateToolPairing(active))
+			require.NoError(t, llmtest.ValidateToolPairing(active))
 			assert.Equal(t, 1, countToolResultsFor(active, "bash"))
 			d := first
 			if restart {
@@ -909,14 +909,14 @@ func TestScenario_StopThatDidNotSurviveItsRestartStillSettlesTheOrphan(t *testin
 	rec := second.session(sessionID)
 	require.Equal(t, sessionstore.SessionStatusStopped, rec.Status, "the recovery finished the park")
 	recovered := second.messages(sessionID)
-	require.NoError(t, llm.ValidateToolPairing(recovered),
+	require.NoError(t, llmtest.ValidateToolPairing(recovered),
 		"a resumable stopped session must carry a transcript a provider accepts")
 	require.Equal(t, 1, countToolResultsFor(recovered, tool.IDTask), "the abandoned task is settled exactly once")
 	second.startInboxWake()
 	require.NoError(t, second.mgr.sendToSession(second.ctx, sessionID, "any progress?"))
 	second.waitUntil("session idle", func() bool { return !second.mgr.HasActiveLoop(sessionID) })
 	final := second.messages(sessionID)
-	require.NoError(t, llm.ValidateToolPairing(final))
+	require.NoError(t, llmtest.ValidateToolPairing(final))
 	assert.Equal(t, 1, countAssistantToolCallsFor(final, tool.IDTask),
 		"the suspended call is answered, never re-executed")
 	assert.True(t, hasUserContaining(final, "any progress?"))
@@ -975,7 +975,7 @@ func TestScenario_CrashBetweenFinalizationAndDeliveryRedeliversExactlyOnce(t *te
 			})
 			second.waitUntil("session idle", func() bool { return !second.mgr.HasActiveLoop(parentID) })
 			msgs := second.messages(parentID)
-			require.NoError(t, llm.ValidateToolPairing(msgs), "the recovered transcript must stay provider-valid")
+			require.NoError(t, llmtest.ValidateToolPairing(msgs), "the recovered transcript must stay provider-valid")
 			assert.Equal(t, 1, tc.completions(msgs, link.ChildID), "the redelivery commits exactly one completion")
 			assert.Equal(t, "parent got the child result", lastAssistantTextDTO(msgs),
 				"the parent resumed and consumed the recovered completion")
@@ -1038,7 +1038,11 @@ func TestScenario_OwnedTaskCallSurvivesSchemaUpgradeAndRestarts(t *testing.T) {
 	// Stage the pre-upgrade state at version 30.
 	staged, err := migrate.OpenDB(ctx, dbPath)
 	require.NoError(t, err)
-	require.NoError(t, migrate.RunUpTo(ctx, staged, 30))
+
+	provider, err := migrate.NewProvider(staged)
+	require.NoError(t, err)
+	_, err = provider.UpTo(ctx, 30)
+	require.NoError(t, err)
 	_, err = staged.ExecContext(ctx, `INSERT INTO projects (id, work_dir, name) VALUES (1, ?, 'p')`, t.TempDir())
 	require.NoError(t, err)
 	stagedStore := sessionstore.NewStore(staged)
@@ -1111,7 +1115,7 @@ func TestScenario_OwnedTaskCallSurvivesSchemaUpgradeAndRestarts(t *testing.T) {
 	})
 	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(parent.ID) })
 	final := h.messages(parent.ID)
-	require.NoError(t, llm.ValidateToolPairing(final))
+	require.NoError(t, llmtest.ValidateToolPairing(final))
 	assert.Equal(t, 1, countAssistantToolCallsFor(final, tool.IDTask), "the task call is never re-issued")
 	assert.Equal(t, 1, countToolResultsFor(final, tool.IDTask), "exactly one completion fills the staged call")
 	require.Contains(t, restartLastToolResultContent(final, tool.IDTask), "staged child finished")
@@ -1183,7 +1187,7 @@ func runAcceptedInputRestartScenario(
 	collector.waitMessage(root, "accepted input recovered")
 	collector.waitIdleAfter(root, "accepted input recovered")
 	assert.Equal(t, "accepted input recovered", lastAssistantTextDTO(second.messages(root)))
-	require.NoError(t, llm.ValidateToolPairing(second.messages(root)))
+	require.NoError(t, llmtest.ValidateToolPairing(second.messages(root)))
 	assertHarnessTraceForScenario(t, second, sourceTest, traceName, collector.snapshot(), root)
 }
 
@@ -1298,7 +1302,12 @@ func (r *modelRequests) assertAllPaired(t *testing.T) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for i, req := range r.seen {
-		assert.NoErrorf(t, llm.ValidateToolPairing(req), "request %d reached the provider with a dangling tool_use", i)
+		assert.NoErrorf(
+			t,
+			llmtest.ValidateToolPairing(req),
+			"request %d reached the provider with a dangling tool_use",
+			i,
+		)
 	}
 }
 

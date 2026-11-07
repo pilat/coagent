@@ -73,7 +73,7 @@ func TestConcurrentEditsKeepEveryEdit(t *testing.T) {
 
 	require.NoError(t, os.WriteFile(testFile, []byte(before.String()), 0o644))
 
-	editTool := newEditTool(tmpDir, nil, delayedMutator{delay: 2 * time.Millisecond})
+	editTool := newEditToolWithAccess(tmpDir, nil, nil, delayedMutator{delay: 2 * time.Millisecond}, nil)
 
 	var wg sync.WaitGroup
 
@@ -123,7 +123,7 @@ func TestConcurrentEditsLeaveNoTornTail(t *testing.T) {
 
 	require.NoError(t, os.WriteFile(testFile, []byte(base), 0o644))
 
-	editTool := newEditTool(tmpDir, nil, streamingMutator{chunks: 4})
+	editTool := newEditToolWithAccess(tmpDir, nil, nil, streamingMutator{chunks: 4}, nil)
 
 	var wg sync.WaitGroup
 
@@ -166,8 +166,8 @@ func TestReadNeverObservesPartialWrite(t *testing.T) {
 	base := strings.Repeat("payload line\n", 100) + "MARKER\nEND\n"
 	require.NoError(t, os.WriteFile(testFile, []byte(base), 0o644))
 
-	editTool := newEditTool(tmpDir, nil, streamingMutator{chunks: 8})
-	readTool := newReadTool(tmpDir)
+	editTool := newEditToolWithAccess(tmpDir, nil, nil, streamingMutator{chunks: 8}, nil)
+	readTool := newReadToolWithAccess(tmpDir, nil, nil)
 
 	var wg sync.WaitGroup
 

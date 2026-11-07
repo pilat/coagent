@@ -154,7 +154,13 @@ func TestEditToolKeepsSuccessLineBeforePreview(t *testing.T) {
 			raw, err := json.Marshal(tt.params)
 			require.NoError(t, err)
 
-			result, err := newEditTool(dir, nil, directFileMutator{}).Execute(context.Background(), raw)
+			result, err := newEditToolWithAccess(
+				dir,
+				nil,
+				nil,
+				directFileMutator{},
+				nil,
+			).Execute(context.Background(), raw)
 			require.NoError(t, err)
 
 			assert.True(t, strings.HasPrefix(result.Output, "Edit applied successfully.\n"), "output %q", result.Output)

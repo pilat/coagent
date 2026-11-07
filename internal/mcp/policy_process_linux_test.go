@@ -12,7 +12,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/pilat/coagent/internal/bashsandbox"
-	"github.com/pilat/coagent/internal/coagenthome"
 	"github.com/pilat/coagent/internal/sandboxpolicy"
 )
 
@@ -20,8 +19,7 @@ func TestDeniedMCPProcessCannotReadOrWriteOutsideProject(t *testing.T) {
 	if _, err := exec.LookPath("bwrap"); err != nil {
 		t.Skip("bwrap is not installed")
 	}
-	restore := coagenthome.Override(t.TempDir())
-	t.Cleanup(restore)
+	t.Setenv("HOME", t.TempDir())
 	base := t.TempDir()
 	project := filepath.Join(base, "project")
 	outside := filepath.Join(base, "outside")

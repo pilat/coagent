@@ -108,7 +108,11 @@ func newTemplateTestStore(t *testing.T, migratedDB []byte) (*Store, *sql.DB, int
 	} else {
 		db, err := migrate.OpenDB(ctx, dbPath)
 		require.NoError(t, err)
-		require.NoError(t, migrate.Run(ctx, db, dbPath))
+
+		provider, err := migrate.NewProvider(db)
+		require.NoError(t, err)
+		_, err = provider.Up(ctx)
+		require.NoError(t, err)
 		require.NoError(t, db.Close())
 	}
 
@@ -139,7 +143,11 @@ func FuzzManagerOutputProtocol(f *testing.F) {
 	path := filepath.Join(f.TempDir(), "output-template.db")
 	db, err := migrate.OpenDB(f.Context(), path)
 	require.NoError(f, err)
-	require.NoError(f, migrate.Run(f.Context(), db, ""))
+
+	provider, err := migrate.NewProvider(db)
+	require.NoError(f, err)
+	_, err = provider.Up(f.Context())
+	require.NoError(f, err)
 	require.NoError(f, db.Close())
 	template, err := os.ReadFile(path)
 	require.NoError(f, err)

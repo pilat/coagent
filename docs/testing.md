@@ -215,15 +215,23 @@ Budget overrides are for CI/CD diagnostics only. A shortened fuzz duration,
 stress count, or E2E count must be reported as a smoke run, never as a passing
 canonical CI run. The final gate uses the Makefile defaults.
 
+## Test-only code
+
+Production code must be reachable from a binary (`make arch` runs deadcode over
+`cmd/coagent` and `cmd/releasebuilder`); test-only constructors and helpers live
+in `_test.go` files of their package.
+A test-only helper shared across packages lives in a `<pkg>test` package that no
+binary imports (for example `internal/llm/llmtest`); a single-package one stays in
+`_test.go`.
+
 ## Hermetic filesystem and network boundary
 
 Tests must never read or write the invoking user's coagent home. Any test that
-resolves a home-level coagent path must set `HOME` to `t.TempDir()` or call
-`coagenthome.Override` with a temporary directory before resolution. Test
-binaries fail closed when `coagenthome.UserHome` would return the inherited home,
-an alias of it, or a path beneath it. Direct `os.UserHomeDir()` calls are banned
-outside `internal/coagenthome`, including in tests, so this guard cannot be
-bypassed accidentally.
+resolves a home-level coagent path must set `HOME` to `t.TempDir()` before
+resolution. Test binaries fail closed when `coagenthome.UserHome` would return
+the inherited home, an alias of it, or a path beneath it. Direct
+`os.UserHomeDir()` calls are banned outside `internal/coagenthome`, including in
+tests, so this guard cannot be bypassed accidentally.
 
 Compiled-process tests must replace, not append, inherited `HOME`, `USERPROFILE`,
 and every `XDG_*_HOME` directory hint. Use the shared isolated subprocess

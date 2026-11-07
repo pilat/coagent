@@ -9,14 +9,6 @@ import (
 	"github.com/pilat/coagent/internal/logger"
 )
 
-// Serve accepts connections and answers ops from the first one. A daemon that
-// assembles its control plane after binding uses ServeStarting instead.
-func (s *Server) Serve(ctx context.Context) error {
-	s.MarkReady()
-
-	return s.ServeStarting(ctx)
-}
-
 // ServeStarting accepts before the daemon is ready — connect success is the liveness
 // test. Every op replies CodeStarting until MarkReady, so booting never reads as down.
 func (s *Server) ServeStarting(ctx context.Context) error {
@@ -34,7 +26,7 @@ func (s *Server) ServeStarting(ctx context.Context) error {
 	return s.accept(ctx)
 }
 
-// MarkReady opens the status op. Idempotent: the restart path and Serve both reach it.
+// MarkReady opens the status op. Idempotent: the restart path reaches it.
 func (s *Server) MarkReady() {
 	s.mu.Lock()
 	defer s.mu.Unlock()

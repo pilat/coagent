@@ -156,7 +156,11 @@ func newChatControl(t *testing.T) (controllerapi.ManagerControllerFactory, *sess
 	db, err := migrate.OpenDB(ctx, path)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
-	require.NoError(t, migrate.Run(ctx, db, path))
+
+	provider, err := migrate.NewProvider(db)
+	require.NoError(t, err)
+	_, err = provider.Up(ctx)
+	require.NoError(t, err)
 	store := sessionstore.NewStore(db)
 	project, err := store.GetOrCreateProject(ctx, t.TempDir())
 	require.NoError(t, err)

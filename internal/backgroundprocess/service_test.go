@@ -37,11 +37,15 @@ func newTestStore(t *testing.T) Store {
 	ctx := context.Background()
 	db := newTestDB(t)
 
-	if err := migrate.Run(ctx, db, ""); err != nil {
+	provider, err := migrate.NewProvider(db)
+	if err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	if _, err := provider.Up(ctx); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
 
-	_, err := db.ExecContext(ctx,
+	_, err = db.ExecContext(ctx,
 		`INSERT INTO projects (id, work_dir, name) VALUES (1, '/tmp/p', 'p')`)
 	require.NoError(t, err)
 
@@ -176,7 +180,11 @@ func TestStore_FinalizeNaturalExitWithoutIntent(t *testing.T) {
 func TestStore_FinalizeInsertsProcessInboxInput(t *testing.T) {
 	ctx := context.Background()
 	db := newTestDB(t)
-	require.NoError(t, migrate.Run(ctx, db, ""))
+
+	provider, err := migrate.NewProvider(db)
+	require.NoError(t, err)
+	_, err = provider.Up(ctx)
+	require.NoError(t, err)
 	require.NoError(t, seedProcessTestSessions(ctx, db))
 	store := NewStore(db, sessionstore.NewStore(db))
 	record := runningRecord(t, store, 2)
@@ -219,13 +227,17 @@ func TestStore_FinalizeRetainsFactsBySessionStatus(t *testing.T) {
 		t.Run(tt.status, func(t *testing.T) {
 			ctx := context.Background()
 			db := newTestDB(t)
-			require.NoError(t, migrate.Run(ctx, db, ""))
+
+			provider, err := migrate.NewProvider(db)
+			require.NoError(t, err)
+			_, err = provider.Up(ctx)
+			require.NoError(t, err)
 			require.NoError(t, seedProcessTestSessions(ctx, db))
 			var killedAt any
 			if tt.killed {
 				killedAt = time.Now().UTC()
 			}
-			_, err := db.ExecContext(ctx, `UPDATE sessions SET status = ?, killed_at = ? WHERE id = 2`,
+			_, err = db.ExecContext(ctx, `UPDATE sessions SET status = ?, killed_at = ? WHERE id = 2`,
 				tt.status, killedAt)
 			require.NoError(t, err)
 

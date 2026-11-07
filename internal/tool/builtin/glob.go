@@ -50,10 +50,6 @@ type fileMatch struct {
 	mtime int64
 }
 
-func newGlobTool(workDir string) *globTool {
-	return &globTool{workDir: workDir}
-}
-
 func newGlobToolWithAccess(workDir string, access *safefile.Access) *globTool {
 	return &globTool{workDir: workDir, access: access}
 }

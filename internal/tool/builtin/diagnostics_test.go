@@ -60,7 +60,13 @@ func TestWriteToolAppendsDiagnosticsOnlyWhenPresent(t *testing.T) {
 			raw, err := json.Marshal(writeParams{FilePath: path, Content: "package main\n"})
 			require.NoError(t, err)
 
-			result, err := newWriteTool(dir, mgr, directFileMutator{}).Execute(context.Background(), raw)
+			result, err := newWriteToolWithAccess(
+				dir,
+				nil,
+				mgr,
+				directFileMutator{},
+				nil,
+			).Execute(context.Background(), raw)
 			require.NoError(t, err)
 
 			assert.Equal(t, tt.wantDiags, containsDiagnosticsReport(result.Output))
@@ -89,7 +95,13 @@ func TestEditToolAppendsDiagnosticsOnlyWhenPresent(t *testing.T) {
 			raw, err := json.Marshal(editParams{FilePath: path, OldString: "main", NewString: "other"})
 			require.NoError(t, err)
 
-			result, err := newEditTool(dir, mgr, directFileMutator{}).Execute(context.Background(), raw)
+			result, err := newEditToolWithAccess(
+				dir,
+				nil,
+				mgr,
+				directFileMutator{},
+				nil,
+			).Execute(context.Background(), raw)
 			require.NoError(t, err)
 
 			assert.Equal(t, tt.wantDiags, containsDiagnosticsReport(result.Output))
@@ -104,7 +116,7 @@ func TestDiagnosticsScenario_WritePublishesFakeLSPDiagnostics(t *testing.T) {
 	raw, err := json.Marshal(writeParams{FilePath: path, Content: "package main\n"})
 	require.NoError(t, err)
 
-	result, err := newWriteTool(dir, mgr, directFileMutator{}).Execute(context.Background(), raw)
+	result, err := newWriteToolWithAccess(dir, nil, mgr, directFileMutator{}, nil).Execute(context.Background(), raw)
 	require.NoError(t, err)
 	assert.Contains(t, result.Output, "LSP errors detected")
 	assert.Equal(t, []string{dir + ":" + path}, mgr.observed)
@@ -117,7 +129,7 @@ func TestWriteToolTitleFallsBackToAbsolutePath(t *testing.T) {
 	raw, err := json.Marshal(writeParams{FilePath: path, Content: "body"})
 	require.NoError(t, err)
 
-	result, err := newWriteTool("", nil, directFileMutator{}).Execute(context.Background(), raw)
+	result, err := newWriteToolWithAccess("", nil, nil, directFileMutator{}, nil).Execute(context.Background(), raw)
 	require.NoError(t, err)
 
 	assert.Equal(t, path, result.Title)
@@ -133,7 +145,7 @@ func TestWriteToolReportsUpdateOnExistingFile(t *testing.T) {
 	raw, err := json.Marshal(writeParams{FilePath: path, Content: "new"})
 	require.NoError(t, err)
 
-	result, err := newWriteTool(dir, nil, directFileMutator{}).Execute(context.Background(), raw)
+	result, err := newWriteToolWithAccess(dir, nil, nil, directFileMutator{}, nil).Execute(context.Background(), raw)
 	require.NoError(t, err)
 
 	assert.Equal(t, "out.txt", result.Title)
@@ -148,7 +160,7 @@ func TestWriteToolRejectsDirectoryTarget(t *testing.T) {
 	raw, err := json.Marshal(writeParams{FilePath: dir, Content: "body"})
 	require.NoError(t, err)
 
-	_, err = newWriteTool(dir, nil, directFileMutator{}).Execute(context.Background(), raw)
+	_, err = newWriteToolWithAccess(dir, nil, nil, directFileMutator{}, nil).Execute(context.Background(), raw)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "directory")
 }
@@ -205,7 +217,13 @@ func TestEditToolTitleFallsBackToAbsolutePath(t *testing.T) {
 			raw, err := json.Marshal(editParams{FilePath: path, OldString: "alpha", NewString: "beta"})
 			require.NoError(t, err)
 
-			result, err := newEditTool(tt.workDir, nil, directFileMutator{}).Execute(context.Background(), raw)
+			result, err := newEditToolWithAccess(
+				tt.workDir,
+				nil,
+				nil,
+				directFileMutator{},
+				nil,
+			).Execute(context.Background(), raw)
 			require.NoError(t, err)
 
 			assert.Equal(t, tt.want, result.Title)
@@ -221,7 +239,13 @@ func TestWriteToolTitleIgnoresUnrelatableWorkDir(t *testing.T) {
 	raw, err := json.Marshal(writeParams{FilePath: path, Content: "body"})
 	require.NoError(t, err)
 
-	result, err := newWriteTool("relative", nil, directFileMutator{}).Execute(context.Background(), raw)
+	result, err := newWriteToolWithAccess(
+		"relative",
+		nil,
+		nil,
+		directFileMutator{},
+		nil,
+	).Execute(context.Background(), raw)
 	require.NoError(t, err)
 
 	assert.Equal(t, path, result.Title)
@@ -229,7 +253,7 @@ func TestWriteToolTitleIgnoresUnrelatableWorkDir(t *testing.T) {
 
 func TestEditToolRejectsBadInput(t *testing.T) {
 	dir := t.TempDir()
-	editTool := newEditTool(dir, nil, directFileMutator{})
+	editTool := newEditToolWithAccess(dir, nil, nil, directFileMutator{}, nil)
 
 	tests := []struct {
 		name    string

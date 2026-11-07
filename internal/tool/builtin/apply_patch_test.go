@@ -34,7 +34,7 @@ func (m redirectedFileMutator) WriteFile(_ context.Context, _ string, content []
 
 func TestApplyPatchTool_CreateRelativeFile(t *testing.T) {
 	workDir := t.TempDir()
-	tool := newApplyPatchTool(workDir, directFileMutator{})
+	tool := newApplyPatchToolWithAccess(workDir, nil, directFileMutator{}, nil)
 	params := marshalApplyPatchParams(t, `--- /dev/null
 +++ b/nested/new.txt
 @@ -0,0 +1,1 @@
@@ -53,7 +53,7 @@ func TestApplyPatchTool_UpdatesExistingFile(t *testing.T) {
 	workDir := t.TempDir()
 	path := filepath.Join(workDir, "file.txt")
 	require.NoError(t, os.WriteFile(path, []byte("before\n"), 0o644))
-	tool := newApplyPatchTool(workDir, directFileMutator{})
+	tool := newApplyPatchToolWithAccess(workDir, nil, directFileMutator{}, nil)
 	params := marshalApplyPatchParams(t, `--- a/file.txt
 +++ b/file.txt
 @@ -1,1 +1,1 @@
@@ -74,7 +74,7 @@ func TestApplyPatchTool_SandboxUpdatesTargetFile(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
 	require.NoError(t, os.WriteFile(path, []byte("alpha\nbeta"), 0o644))
 
-	tool := newApplyPatchTool(workDir, &sandboxFileMutator{runner: &bashRunnerStub{}})
+	tool := newApplyPatchToolWithAccess(workDir, nil, &sandboxFileMutator{runner: &bashRunnerStub{}}, nil)
 	params := marshalApplyPatchParams(t, `--- a/tmp/patch-bug-repro.txt
 +++ b/tmp/patch-bug-repro.txt
 @@ -1,2 +1,3 @@
@@ -95,7 +95,7 @@ func TestApplyPatchTool_RejectsSilentMutation(t *testing.T) {
 	workDir := t.TempDir()
 	path := filepath.Join(workDir, "file.txt")
 	require.NoError(t, os.WriteFile(path, []byte("before"), 0o644))
-	tool := newApplyPatchTool(workDir, silentFileMutator{})
+	tool := newApplyPatchToolWithAccess(workDir, nil, silentFileMutator{}, nil)
 	params := marshalApplyPatchParams(t, `--- a/file.txt
 +++ b/file.txt
 @@ -1,1 +1,1 @@
@@ -114,7 +114,7 @@ func TestApplyPatchTool_RejectsRedirectedMutation(t *testing.T) {
 	path := filepath.Join(workDir, "file.txt")
 	redirect := filepath.Join(workDir, "redirected.txt")
 	require.NoError(t, os.WriteFile(path, []byte("before"), 0o644))
-	tool := newApplyPatchTool(workDir, redirectedFileMutator{path: redirect})
+	tool := newApplyPatchToolWithAccess(workDir, nil, redirectedFileMutator{path: redirect}, nil)
 	params := marshalApplyPatchParams(t, `--- a/file.txt
 +++ b/file.txt
 @@ -1,1 +1,1 @@
@@ -132,7 +132,7 @@ func TestApplyPatchTool_RejectsRedirectedMutation(t *testing.T) {
 
 func TestApplyPatchTool_MultipleFilesRemainSequential(t *testing.T) {
 	workDir := t.TempDir()
-	tool := newApplyPatchTool(workDir, directFileMutator{})
+	tool := newApplyPatchToolWithAccess(workDir, nil, directFileMutator{}, nil)
 	params := marshalApplyPatchParams(t, `--- /dev/null
 +++ b/one.txt
 @@ -0,0 +1,1 @@
@@ -157,7 +157,7 @@ func TestApplyPatchTool_PlansAllFilesBeforeWriting(t *testing.T) {
 	workDir := t.TempDir()
 	first := filepath.Join(workDir, "first.txt")
 	require.NoError(t, os.WriteFile(first, []byte("before\n"), 0o644))
-	tool := newApplyPatchTool(workDir, directFileMutator{})
+	tool := newApplyPatchToolWithAccess(workDir, nil, directFileMutator{}, nil)
 	patch := "--- a/first.txt\n+++ b/first.txt\n@@ -1,1 +1,1 @@\n-before\n+after\n" +
 		"--- a/second.txt\n+++ b/second.txt\n@@ -1,1 +1,1 @@\n-missing\n+new"
 
@@ -171,7 +171,7 @@ func TestApplyPatchTool_PlansAllFilesBeforeWriting(t *testing.T) {
 }
 
 func TestApplyPatchTool_RejectsEmptyAndMalformedPatch(t *testing.T) {
-	tool := newApplyPatchTool(t.TempDir(), directFileMutator{})
+	tool := newApplyPatchToolWithAccess(t.TempDir(), nil, directFileMutator{}, nil)
 
 	for name, patch := range map[string]string{
 		"empty":     "",
@@ -193,7 +193,7 @@ func TestApplyPatchTool_DelegatesMutation(t *testing.T) {
 	workDir := t.TempDir()
 	path := filepath.Join(workDir, "file.txt")
 	require.NoError(t, os.WriteFile(path, []byte("before\n"), 0o644))
-	tool := newApplyPatchTool(workDir, mutator)
+	tool := newApplyPatchToolWithAccess(workDir, nil, mutator, nil)
 	params := marshalApplyPatchParams(t, `--- a/file.txt
 +++ b/file.txt
 @@ -1,1 +1,1 @@

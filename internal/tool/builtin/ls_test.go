@@ -23,7 +23,7 @@ func TestLsTool_Execute(t *testing.T) {
 	}
 	_ = os.WriteFile(filepath.Join(tmpDir, ".hidden"), []byte("hidden"), 0o644)
 
-	tool := NewLsTool(tmpDir)
+	tool := newLsTool(tmpDir, nil)
 
 	t.Run("list directory", func(t *testing.T) {
 		params, _ := json.Marshal(LsParams{Path: tmpDir})
@@ -106,7 +106,7 @@ func TestLsTool_Execute(t *testing.T) {
 }
 
 func TestLsTool_Metadata(t *testing.T) {
-	tool := NewLsTool("/tmp")
+	tool := newLsTool("/tmp", nil)
 
 	t.Run("ID", func(t *testing.T) {
 		if tool.ID() != "ls" {

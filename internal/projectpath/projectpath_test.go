@@ -40,8 +40,7 @@ func TestWorktreePath_StablePerRepo(t *testing.T) {
 }
 
 func TestResolveWorktreesRoot_Default(t *testing.T) {
-	restore := coagenthome.Override("/fake/home")
-	defer restore()
+	t.Setenv("HOME", "/fake/home")
 
 	assert.Equal(t,
 		filepath.Join("/fake/home", coagenthome.DirName, coagenthome.WorktreesDirName),

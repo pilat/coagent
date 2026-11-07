@@ -76,16 +76,6 @@ func newSystemd() (*Manager, error) {
 	}, nil
 }
 
-// expectedUnit renders what this version would install, for the drift check.
-func expectedUnit(t target) (string, string, error) {
-	unit, err := renderUnit(unitParams{User: t.name, BinaryPath: binaryPathFor(t)})
-	if err != nil {
-		return "", "", err
-	}
-
-	return filepath.Join(systemUnitDir, unitName), unit, nil
-}
-
 func (m *Manager) Info(ctx context.Context) Info {
 	info := Info{
 		Platform:   platformLinux,
@@ -104,17 +94,6 @@ func (m *Manager) Info(ctx context.Context) Info {
 	}
 
 	return info
-}
-
-func (m *Manager) Plan() Plan {
-	return Plan{
-		Description: "systemd system unit: " + unitName,
-		UnitPath:    m.unitPath,
-		BinaryPath:  m.binaryPath,
-		RunAsUser:   m.target.name,
-		Command:     "coagent install",
-		NeedsRoot:   true,
-	}
 }
 
 func (m *Manager) Install(ctx context.Context) error {

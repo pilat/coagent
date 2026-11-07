@@ -42,7 +42,11 @@ func TestImageTurns_ReadThroughDriverProjection(t *testing.T) {
 	db, err := migrate.OpenDB(ctx, dbPath)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
-	require.NoError(t, migrate.Run(ctx, db, dbPath))
+
+	provider, err := migrate.NewProvider(db)
+	require.NoError(t, err)
+	_, err = provider.Up(ctx)
+	require.NoError(t, err)
 
 	res, err := db.ExecContext(
 		ctx, `INSERT INTO projects (work_dir, name) VALUES (?, ?)`, t.TempDir(), "test",

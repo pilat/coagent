@@ -23,6 +23,7 @@ import (
 	"github.com/pilat/coagent/internal/configapply"
 	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/llm"
+	"github.com/pilat/coagent/internal/llm/llmtest"
 	"github.com/pilat/coagent/internal/llmwire"
 	agentregistry "github.com/pilat/coagent/internal/registry"
 	"github.com/pilat/coagent/internal/tool"
@@ -231,7 +232,7 @@ func TestHarnessScenario_UntrustedToolOutputCarriesWrapperAndGuidance(t *testing
 	})
 	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(parentID) })
 	msgs := h.messages(parentID)
-	require.NoError(t, llm.ValidateToolPairing(msgs), "transcript must stay provider-valid")
+	require.NoError(t, llmtest.ValidateToolPairing(msgs), "transcript must stay provider-valid")
 	content := promptLastToolResultContent(msgs, "webfetch")
 	markers := regexp.MustCompile(`<<<BEGIN_UNTRUSTED_EXTERNAL_DATA id="([0-9a-f]{16})">>>`).FindStringSubmatch(content)
 	require.Len(t, markers, 2)

@@ -157,21 +157,6 @@ func resolveRoot(root string) string {
 	return filepath.Clean(root)
 }
 
-func Same(left, right string) bool {
-	if left == "" || right == "" {
-		return false
-	}
-
-	leftAbs, leftErr := filepath.Abs(left)
-
-	rightAbs, rightErr := filepath.Abs(right)
-	if leftErr != nil || rightErr != nil {
-		return filepath.Clean(left) == filepath.Clean(right)
-	}
-
-	return filepath.Clean(leftAbs) == filepath.Clean(rightAbs)
-}
-
 func SanitizeName(raw string) (string, error) {
 	name := strings.TrimSpace(raw)
 

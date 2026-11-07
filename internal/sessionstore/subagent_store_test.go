@@ -26,7 +26,11 @@ func newTestStore(t *testing.T) (*sessionstore.Store, *sql.DB, int64) {
 	db, err := migrate.OpenDB(context.Background(), dbPath)
 	require.NoError(t, err)
 	t.Cleanup(func() { releaseFixtureDB(db); _ = db.Close() })
-	require.NoError(t, migrate.Run(context.Background(), db, dbPath))
+
+	provider, err := migrate.NewProvider(db)
+	require.NoError(t, err)
+	_, err = provider.Up(context.Background())
+	require.NoError(t, err)
 
 	res, err := db.ExecContext(
 		context.Background(),

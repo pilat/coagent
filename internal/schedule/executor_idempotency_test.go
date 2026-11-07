@@ -49,7 +49,11 @@ func TestExecutor_CronAckRetryKeepsCanonicalIdentityAndPayload(t *testing.T) {
 	db, err := migrate.OpenDB(ctx, path)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
-	require.NoError(t, migrate.Run(ctx, db, path))
+
+	provider, err := migrate.NewProvider(db)
+	require.NoError(t, err)
+	_, err = provider.Up(ctx)
+	require.NoError(t, err)
 	sessions := sessionstore.NewStore(db)
 	store := NewStore(db, sessions)
 	root := seedOneShotSession(ctx, t, db)

@@ -45,7 +45,11 @@ func TestMigrate_00050_PreventsScheduleClaimReplay(t *testing.T) {
 				for i, query := range queries {
 					before[i] = dumpRows(t, f.db, query)
 				}
-				require.NoError(t, RunUpTo(t.Context(), f.db, 50))
+
+				provider, err := NewProvider(f.db)
+				require.NoError(t, err)
+				_, err = provider.UpTo(t.Context(), 50)
+				require.NoError(t, err)
 				rows, err := f.store.ListSchedules(t.Context(), f.entry.SessionID())
 				require.NoError(t, err)
 				if kind == "cron" {
@@ -90,7 +94,11 @@ func TestMigrate_00050_CronKeepsLatestClaimAndPreservesFireCount(t *testing.T) {
 				"legacy",
 				fmt.Sprintf("schedule:cron:%d:%s", f.entry.ID(), f.minute.Add(-time.Minute).Format("20060102T1504Z")),
 			)
-			require.NoError(t, RunUpTo(t.Context(), f.db, 50))
+
+			provider, err := NewProvider(f.db)
+			require.NoError(t, err)
+			_, err = provider.UpTo(t.Context(), 50)
+			require.NoError(t, err)
 			rows, err := f.store.ListSchedules(t.Context(), f.entry.SessionID())
 			require.NoError(t, err)
 			require.Len(t, rows, 1)
@@ -118,7 +126,11 @@ func TestMigrate_00050_ClaimsDoNotAcknowledgeAnotherSession(t *testing.T) {
 			f.claim(t, "inbox", f.input.DeliveryKey)
 			f.claim(t, "legacy", f.input.DeliveryKey)
 			before := dumpRows(t, f.db, `SELECT * FROM schedules ORDER BY id`)
-			require.NoError(t, RunUpTo(t.Context(), f.db, 50))
+
+			provider, err := NewProvider(f.db)
+			require.NoError(t, err)
+			_, err = provider.UpTo(t.Context(), 50)
+			require.NoError(t, err)
 			assert.Equal(t, before, dumpRows(t, f.db, `SELECT * FROM schedules ORDER BY id`))
 		})
 	}
@@ -129,7 +141,11 @@ func newScheduleClaimUpgrade(t *testing.T, kind string) *scheduleClaimUpgrade {
 	db, err := OpenDB(t.Context(), filepath.Join(t.TempDir(), "claim-upgrade.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
-	require.NoError(t, RunUpTo(t.Context(), db, 49))
+
+	provider, err := NewProvider(db)
+	require.NoError(t, err)
+	_, err = provider.UpTo(t.Context(), 49)
+	require.NoError(t, err)
 	sessions := sessionstore.NewStore(db)
 	project, err := sessions.GetOrCreateProject(t.Context(), t.TempDir())
 	require.NoError(t, err)

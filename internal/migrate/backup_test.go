@@ -16,8 +16,7 @@ import (
 
 func TestOpenFreshDefaultDatabaseDoesNotCreateBackup(t *testing.T) {
 	home := t.TempDir()
-	restore := coagenthome.Override(home)
-	t.Cleanup(restore)
+	t.Setenv("HOME", home)
 
 	db, err := Open(t.Context())
 	require.NoError(t, err)
@@ -31,8 +30,7 @@ func TestOpenFreshDefaultDatabaseDoesNotCreateBackup(t *testing.T) {
 
 func TestOpenBacksUpWALDatabaseBeforeMigration(t *testing.T) {
 	home := t.TempDir()
-	restore := coagenthome.Override(home)
-	t.Cleanup(restore)
+	t.Setenv("HOME", home)
 
 	ctx := t.Context()
 	dbPath := filepath.Join(home, coagenthome.DirName, coagenthome.DBFileName)
@@ -76,8 +74,7 @@ func TestOpenBacksUpWALDatabaseBeforeMigration(t *testing.T) {
 
 func TestOpenRefusesMigrationWhenBackupPublicationCannotProceed(t *testing.T) {
 	home := t.TempDir()
-	restore := coagenthome.Override(home)
-	t.Cleanup(restore)
+	t.Setenv("HOME", home)
 
 	ctx := t.Context()
 	dbPath := filepath.Join(home, coagenthome.DirName, coagenthome.DBFileName)

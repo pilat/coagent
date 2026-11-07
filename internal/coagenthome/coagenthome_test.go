@@ -3,7 +3,6 @@ package coagenthome
 import (
 	"os"
 	"path/filepath"
-	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -11,8 +10,7 @@ import (
 )
 
 func TestDirUnderOverriddenHome(t *testing.T) {
-	restore := Override("/fake/home")
-	defer restore()
+	t.Setenv("HOME", "/fake/home")
 
 	dir, err := Dir()
 	require.NoError(t, err)
@@ -20,8 +18,7 @@ func TestDirUnderOverriddenHome(t *testing.T) {
 }
 
 func TestJoin(t *testing.T) {
-	restore := Override("/fake/home")
-	defer restore()
+	t.Setenv("HOME", "/fake/home")
 
 	got, err := Join(CacheDirName, CatalogDirName)
 	require.NoError(t, err)
@@ -33,8 +30,7 @@ func TestJoin(t *testing.T) {
 }
 
 func TestProcessProjectDir(t *testing.T) {
-	restore := Override("/fake/home")
-	defer restore()
+	t.Setenv("HOME", "/fake/home")
 
 	dir, err := ProcessProjectDir(42)
 	require.NoError(t, err)
@@ -44,26 +40,8 @@ func TestProcessProjectDir(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestUserHomeConcurrentWithOverride(t *testing.T) {
-	var wg sync.WaitGroup
-
-	wg.Go(func() {
-		restore := Override("/fake/home")
-		restore()
-	})
-
-	for range 20 {
-		wg.Go(func() {
-			_, _ = UserHome()
-		})
-	}
-
-	wg.Wait()
-}
-
 func TestOverrideEmptySimulatesUnresolvableHome(t *testing.T) {
-	restore := Override("")
-	defer restore()
+	t.Setenv("HOME", "")
 
 	_, err := UserHome()
 	require.Error(t, err)
@@ -73,20 +51,6 @@ func TestOverrideEmptySimulatesUnresolvableHome(t *testing.T) {
 
 	_, err = Join(CacheDirName)
 	require.Error(t, err)
-}
-
-func TestOverrideRestore(t *testing.T) {
-	t.Setenv("HOME", "/env/home")
-
-	restore := Override("/fake/home")
-	got, err := UserHome()
-	require.NoError(t, err)
-	assert.Equal(t, "/fake/home", got)
-
-	restore()
-	got, err = UserHome()
-	require.NoError(t, err)
-	assert.Equal(t, "/env/home", got)
 }
 
 func TestUserHomeRejectsInheritedHomeInTestBinary(t *testing.T) {
@@ -136,17 +100,4 @@ func TestUserHomeRejectsPathBeneathInheritedHome(t *testing.T) {
 	_, err := UserHome()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "path beneath it")
-}
-
-func TestUserHomeRejectsOverrideToInheritedHome(t *testing.T) {
-	if startupUserHome == "" {
-		t.Skip("process started without a resolvable home")
-	}
-
-	restore := Override(startupUserHome)
-	defer restore()
-
-	_, err := UserHome()
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "refusing to use the inherited user home")
 }

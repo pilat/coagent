@@ -21,7 +21,7 @@ func TestReadToolCountsTotalLinesBeyondLimit(t *testing.T) {
 	params, err := json.Marshal(readParams{FilePath: path, Limit: 3})
 	require.NoError(t, err)
 
-	result, err := newReadTool(dir).Execute(context.Background(), params)
+	result, err := newReadToolWithAccess(dir, nil, nil).Execute(context.Background(), params)
 	require.NoError(t, err)
 
 	assert.Equal(t, 3, result.Metadata["lines"])
@@ -37,7 +37,7 @@ func TestReadToolReportsLastReadLineWithOffset(t *testing.T) {
 	params, err := json.Marshal(readParams{FilePath: path, Offset: 2, Limit: 3})
 	require.NoError(t, err)
 
-	result, err := newReadTool(dir).Execute(context.Background(), params)
+	result, err := newReadToolWithAccess(dir, nil, nil).Execute(context.Background(), params)
 	require.NoError(t, err)
 
 	assert.Contains(t, result.Output, "3| line 3")
@@ -66,7 +66,7 @@ func TestReadToolTruncatesLinesExactlyAtMaxLineLength(t *testing.T) {
 			params, err := json.Marshal(readParams{FilePath: path})
 			require.NoError(t, err)
 
-			result, err := newReadTool(dir).Execute(context.Background(), params)
+			result, err := newReadToolWithAccess(dir, nil, nil).Execute(context.Background(), params)
 			require.NoError(t, err)
 
 			body := strings.TrimPrefix(strings.SplitN(result.Output, "\n", 2)[1], "1| ")
@@ -101,7 +101,7 @@ func TestReadToolStopsAtByteBudget(t *testing.T) {
 	params, err := json.Marshal(readParams{FilePath: path})
 	require.NoError(t, err)
 
-	result, err := newReadTool(dir).Execute(context.Background(), params)
+	result, err := newReadToolWithAccess(dir, nil, nil).Execute(context.Background(), params)
 	require.NoError(t, err)
 
 	assert.Equal(t, wantLines, result.Metadata["lines"])
@@ -154,7 +154,7 @@ func TestReadToolRejectsBinaryContentUnderTextExtension(t *testing.T) {
 	params, err := json.Marshal(readParams{FilePath: path})
 	require.NoError(t, err)
 
-	_, err = newReadTool(dir).Execute(context.Background(), params)
+	_, err = newReadToolWithAccess(dir, nil, nil).Execute(context.Background(), params)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "binary")
 }
@@ -191,7 +191,7 @@ func TestReadToolMarksFullReadAsComplete(t *testing.T) {
 	params, err := json.Marshal(readParams{FilePath: path, Limit: 10})
 	require.NoError(t, err)
 
-	result, err := newReadTool(dir).Execute(context.Background(), params)
+	result, err := newReadToolWithAccess(dir, nil, nil).Execute(context.Background(), params)
 	require.NoError(t, err)
 
 	assert.Equal(t, false, result.Metadata[metaKeyTruncated])
@@ -276,7 +276,7 @@ func TestReadToolStopsAtFirstOversizedLine(t *testing.T) {
 	params, err := json.Marshal(readParams{FilePath: path})
 	require.NoError(t, err)
 
-	result, err := newReadTool(dir).Execute(context.Background(), params)
+	result, err := newReadToolWithAccess(dir, nil, nil).Execute(context.Background(), params)
 	require.NoError(t, err)
 
 	assert.Equal(t, fillLines, result.Metadata["lines"])

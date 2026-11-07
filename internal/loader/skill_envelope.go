@@ -18,16 +18,6 @@ type RenderedSkill struct {
 	Envelope string
 }
 
-// ExtractRenderedSkill extracts a canonical skill envelope from transport-prefixed content.
-func ExtractRenderedSkill(content string) (string, string, bool) {
-	skills := ExtractRenderedSkills(content)
-	if len(skills) == 0 {
-		return "", "", false
-	}
-
-	return skills[0].Name, skills[0].Envelope, true
-}
-
 // ExtractRenderedSkills extracts every canonical skill envelope from conversation content.
 func ExtractRenderedSkills(content string) []RenderedSkill {
 	const (

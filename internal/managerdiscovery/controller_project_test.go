@@ -25,7 +25,11 @@ func newProjectTestManager(t *testing.T) (*sessionstore.Store, *sql.DB) {
 	db, err := migrate.OpenDB(t.Context(), dbPath)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
-	require.NoError(t, migrate.Run(t.Context(), db, dbPath))
+
+	provider, err := migrate.NewProvider(db)
+	require.NoError(t, err)
+	_, err = provider.Up(t.Context())
+	require.NoError(t, err)
 	return sessionstore.NewStore(db), db
 }
 
@@ -117,8 +121,7 @@ func TestCreateProject_RejectsBadName(t *testing.T) {
 
 func TestResolveProjectsRoot(t *testing.T) {
 	home := t.TempDir()
-	restore := coagenthome.Override(home)
-	defer restore()
+	t.Setenv("HOME", home)
 
 	defaultRoot := filepath.Join(home, coagenthome.DirName, coagenthome.ProjectsDirName)
 

@@ -71,14 +71,8 @@ func OpenDB(ctx context.Context, dbPath string) (*sql.DB, error) {
 	return db, nil
 }
 
-// Run applies all pending migrations (legacy Go no-ops + SQL files).
-func Run(ctx context.Context, db *sql.DB, dbPath string) error {
-	return run(ctx, db, dbPath, false)
-}
-
-// RunUpTo migrates to an exact version and stops there — boot-recovery scenarios
-// stage a pre-upgrade database, then hand it to a real daemon for the restart.
-func RunUpTo(ctx context.Context, db *sql.DB, version int64) error {
+// NewProvider builds a SQLite migration provider with the embedded SQL and legacy Go migrations.
+func NewProvider(db *sql.DB) (*goose.Provider, error) {
 	provider, err := goose.NewProvider(
 		goose.DialectSQLite3,
 		db,
@@ -87,26 +81,16 @@ func RunUpTo(ctx context.Context, db *sql.DB, version int64) error {
 		goose.WithLogger(goose.NopLogger()),
 	)
 	if err != nil {
-		return fmt.Errorf("create goose provider: %w", err)
+		return nil, fmt.Errorf("create goose provider: %w", err)
 	}
 
-	if _, err := provider.UpTo(ctx, version); err != nil {
-		return fmt.Errorf("goose up to %d: %w", version, err)
-	}
-
-	return nil
+	return provider, nil
 }
 
 func run(ctx context.Context, db *sql.DB, dbPath string, backup bool) error {
-	provider, err := goose.NewProvider(
-		goose.DialectSQLite3,
-		db,
-		migrations.FS,
-		goose.WithGoMigrations(legacyMigrations()...),
-		goose.WithLogger(goose.NopLogger()),
-	)
+	provider, err := NewProvider(db)
 	if err != nil {
-		return fmt.Errorf("create goose provider: %w", err)
+		return err
 	}
 
 	if backup {

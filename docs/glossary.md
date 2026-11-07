@@ -512,7 +512,7 @@ _Avoid_: "image message", inline base64, upload-attached media.
 ## Configuration & isolation
 
 **coagent home**:
-`~/.coagent` — the daemon's own state directory: config, secrets, control socket, DB, caches and `projects/`. Resolved exclusively by `internal/coagenthome`, which also names everything inside it. Tests isolate resolution under `t.TempDir()` through `HOME` or `coagenthome.Override`; test binaries reject the inherited user home and its descendants. Distinct from a task repo's project-level `.coagent/` context dir (`config.ProjectCoagentDir`) — same directory name, different scope.
+`~/.coagent` — the daemon's own state directory: config, secrets, control socket, DB, caches and `projects/`. Resolved exclusively by `internal/coagenthome`, which also names everything inside it. Tests isolate resolution under `t.TempDir()` through `HOME`; test binaries reject the inherited user home and its descendants. Distinct from a task repo's project-level `.coagent/` context dir (`config.ProjectCoagentDir`) — same directory name, different scope.
 _Avoid_: "config dir" for the whole directory; conflating it with the project-level `.coagent/`.
 
 **LSP server**:
@@ -565,9 +565,6 @@ _Avoid_: install scope, user install, `--user` (there is no second mode — "sco
 **escalation gate**:
 `runDaemonVerb` — the single place that decides a `coagent <verb>` (install/uninstall/start/stop/restart) needs root and re-execs itself under `sudo`. Everything below it is privilege-blind.
 _Avoid_: sudo wrapper, privilege helper (nothing here is a persistent helper process).
-
-**unit drift**:
-The installed systemd unit no longer matching what the running version would render. Binary updates never rewrite it, so the update path renders-and-compares and *warns*; it never escalates to fix drift on its own.
 
 ---
 
