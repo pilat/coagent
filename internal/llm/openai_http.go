@@ -106,6 +106,11 @@ func spanMs(from, to int64) int64 {
 		return -1
 	}
 
+	// Transport hooks run on different goroutines and may stamp out of order.
+	if to < from {
+		return 0
+	}
+
 	return (to - from) / int64(time.Millisecond)
 }
 
