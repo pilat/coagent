@@ -182,8 +182,9 @@ func TestRequestTraceHooksPopulate(t *testing.T) {
 	assert.Positive(t, trace.wroteRequest.Load())
 	assert.Positive(t, trace.firstByte.Load())
 	assert.Zero(t, trace.firstEvent.Load(), "non-streaming requests have no SSE event")
+	// WroteRequest and GotFirstResponseByte fire on different transport goroutines;
+	// only the write-loop pair is ordered.
 	assert.LessOrEqual(t, trace.wroteHeaders.Load(), trace.wroteRequest.Load())
-	assert.LessOrEqual(t, trace.wroteRequest.Load(), trace.firstByte.Load())
 }
 
 func TestLogRequestTraceEmitsUploadAndStallSplit(t *testing.T) {
@@ -213,6 +214,7 @@ func TestSpanMsMissingEndpoint(t *testing.T) {
 	assert.Equal(t, int64(-1), spanMs(0, 123))
 	assert.Equal(t, int64(-1), spanMs(123, 0))
 	assert.Equal(t, int64(50), spanMs(1000, 51_000_000))
+	assert.Equal(t, int64(0), spanMs(51_000_000, 1000))
 }
 
 func TestOneShotClassIdleSentinelOnly(t *testing.T) {
