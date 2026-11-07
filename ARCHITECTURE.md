@@ -749,8 +749,10 @@ excluding wholly superseded rules and preserving the remaining order. A `deny` b
 empty tmpfs or empty file; an `allow` becomes a read-only or read-write bind. A
 host mount point nested under a read-only root keeps its own write flag, so each
 one is re-bound read-only or the parent bind's read-only flag would not reach
-it. A fresh `/proc` and `/dev` are mounted last so no host bind placed above them
-can shadow them.
+it. Outside writable grants, a host mount that has vanished or that the daemon's
+uid cannot reach is not re-bound: there the sandbox reaches the host only
+through read-only binds, as that uid without capabilities. A fresh `/proc` and
+`/dev` are mounted last so no host bind placed above them can shadow them.
 Launcher validation checks effective write authority on the executable and every
 parent directory, so a read-only file cannot be replaced through a writable parent.
 
