@@ -38,7 +38,7 @@ func TestFilesystemTools_ProcessOutputOverridesDeny(t *testing.T) {
 		t.Skip("bwrap is not installed")
 	}
 	t.Setenv("SHELL", "/bin/false")
-	t.Cleanup(coagenthome.Override(t.TempDir()))
+	t.Setenv("HOME", t.TempDir())
 	home, err := coagenthome.Dir()
 	require.NoError(t, err)
 	outputRoot, err := coagenthome.ProcessProjectDir(1)

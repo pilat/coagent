@@ -145,19 +145,18 @@ Review changes.
 func TestExtractRenderedSkillIgnoresTransportPrefixes(t *testing.T) {
 	rendered := loader.RenderSkillInvocation(&loader.Skill{Name: "pilat:review", Content: "Review changes."}, "")
 
-	name, envelope, ok := loader.ExtractRenderedSkill("[title]\n[warning]\n" + rendered)
+	skills := loader.ExtractRenderedSkills("[title]\n[warning]\n" + rendered)
 
-	require.True(t, ok)
-	assert.Equal(t, "pilat:review", name)
-	assert.Equal(t, rendered, envelope)
+	require.Len(t, skills, 1)
+	assert.Equal(t, "pilat:review", skills[0].Name)
+	assert.Equal(t, rendered, skills[0].Envelope)
 
-	name, envelope, ok = loader.ExtractRenderedSkill("[timestamp] " + strings.TrimSuffix(rendered, "</skill>"))
-	require.True(t, ok)
-	assert.Equal(t, "pilat:review", name)
-	assert.Equal(t, strings.TrimSuffix(rendered, "</skill>"), envelope)
+	skills = loader.ExtractRenderedSkills("[timestamp] " + strings.TrimSuffix(rendered, "</skill>"))
+	require.Len(t, skills, 1)
+	assert.Equal(t, "pilat:review", skills[0].Name)
+	assert.Equal(t, strings.TrimSuffix(rendered, "</skill>"), skills[0].Envelope)
 
-	_, _, ok = loader.ExtractRenderedSkill("# Skill: pilat:review")
-	assert.False(t, ok)
+	assert.Empty(t, loader.ExtractRenderedSkills("# Skill: pilat:review"))
 }
 
 func TestExtractRenderedSkillsFromBatchOutput(t *testing.T) {

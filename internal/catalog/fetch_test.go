@@ -199,3 +199,13 @@ func TestFetchMemoizesTheFailureToo(t *testing.T) {
 	assert.Equal(t, errors.Is(first, second), errors.Is(second, first))
 	assert.Equal(t, int32(1), hits.Load(), "a dead catalog is not retried per driver")
 }
+
+// WithHTTPClient overrides the HTTP client.
+func WithHTTPClient(c *http.Client) Option {
+	return func(f *fetcher) { f.http = c }
+}
+
+// WithCacheDir overrides the disk cache location. Empty disables the cache.
+func WithCacheDir(dir string) Option {
+	return func(f *fetcher) { f.cacheDir = dir }
+}

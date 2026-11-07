@@ -16,7 +16,7 @@ import (
 
 func TestEditTool_StrReplace(t *testing.T) {
 	tmpDir := t.TempDir()
-	tool := newEditTool(tmpDir, nil, directFileMutator{})
+	tool := newEditToolWithAccess(tmpDir, nil, nil, directFileMutator{}, nil)
 
 	testFile := filepath.Join(tmpDir, "test.txt")
 	if err := os.WriteFile(testFile, []byte("line 1\nline 2\nline 3\n"), 0o644); err != nil {
@@ -42,7 +42,7 @@ func TestEditTool_StrReplace(t *testing.T) {
 
 func TestEditTool_StrReplaceMultiLine(t *testing.T) {
 	tmpDir := t.TempDir()
-	tool := newEditTool(tmpDir, nil, directFileMutator{})
+	tool := newEditToolWithAccess(tmpDir, nil, nil, directFileMutator{}, nil)
 
 	testFile := filepath.Join(tmpDir, "test.txt")
 	if err := os.WriteFile(testFile, []byte("aaa\nbbb\nccc\nddd\neee"), 0o644); err != nil {
@@ -68,7 +68,7 @@ func TestEditTool_StrReplaceMultiLine(t *testing.T) {
 
 func TestEditTool_StrReplaceInsert(t *testing.T) {
 	tmpDir := t.TempDir()
-	tool := newEditTool(tmpDir, nil, directFileMutator{})
+	tool := newEditToolWithAccess(tmpDir, nil, nil, directFileMutator{}, nil)
 
 	testFile := filepath.Join(tmpDir, "test.txt")
 	if err := os.WriteFile(testFile, []byte("line 1\nline 2\nline 3"), 0o644); err != nil {
@@ -95,7 +95,7 @@ func TestEditTool_StrReplaceInsert(t *testing.T) {
 
 func TestEditTool_StrReplaceDelete(t *testing.T) {
 	tmpDir := t.TempDir()
-	tool := newEditTool(tmpDir, nil, directFileMutator{})
+	tool := newEditToolWithAccess(tmpDir, nil, nil, directFileMutator{}, nil)
 
 	testFile := filepath.Join(tmpDir, "test.txt")
 	if err := os.WriteFile(testFile, []byte("line 1\nline 2\nline 3\nline 4"), 0o644); err != nil {
@@ -121,7 +121,7 @@ func TestEditTool_StrReplaceDelete(t *testing.T) {
 
 func TestEditTool_StrReplaceNotUnique(t *testing.T) {
 	tmpDir := t.TempDir()
-	tool := newEditTool(tmpDir, nil, directFileMutator{})
+	tool := newEditToolWithAccess(tmpDir, nil, nil, directFileMutator{}, nil)
 
 	testFile := filepath.Join(tmpDir, "test.txt")
 	if err := os.WriteFile(testFile, []byte("foo bar\nbaz foo\nfoo qux"), 0o644); err != nil {
@@ -145,7 +145,7 @@ func TestEditTool_StrReplaceNotUnique(t *testing.T) {
 
 func TestEditTool_StrReplaceNotFound(t *testing.T) {
 	tmpDir := t.TempDir()
-	tool := newEditTool(tmpDir, nil, directFileMutator{})
+	tool := newEditToolWithAccess(tmpDir, nil, nil, directFileMutator{}, nil)
 
 	testFile := filepath.Join(tmpDir, "test.txt")
 	if err := os.WriteFile(testFile, []byte("line 1\nline 2"), 0o644); err != nil {
@@ -169,7 +169,7 @@ func TestEditTool_StrReplaceNotFound(t *testing.T) {
 
 func TestEditTool_ReplaceAll(t *testing.T) {
 	tmpDir := t.TempDir()
-	tool := newEditTool(tmpDir, nil, directFileMutator{})
+	tool := newEditToolWithAccess(tmpDir, nil, nil, directFileMutator{}, nil)
 
 	testFile := filepath.Join(tmpDir, "test.txt")
 	if err := os.WriteFile(testFile, []byte("foo bar foo baz foo"), 0o644); err != nil {
@@ -196,7 +196,7 @@ func TestEditTool_ReplaceAll(t *testing.T) {
 
 func TestEditTool_FileNotFound(t *testing.T) {
 	tmpDir := t.TempDir()
-	tool := newEditTool(tmpDir, nil, directFileMutator{})
+	tool := newEditToolWithAccess(tmpDir, nil, nil, directFileMutator{}, nil)
 
 	params, _ := json.Marshal(editParams{
 		FilePath:  filepath.Join(tmpDir, "nonexistent.txt"),
@@ -215,7 +215,7 @@ func TestEditTool_FileNotFound(t *testing.T) {
 
 func TestEditTool_EmptyParams(t *testing.T) {
 	tmpDir := t.TempDir()
-	tool := newEditTool(tmpDir, nil, directFileMutator{})
+	tool := newEditToolWithAccess(tmpDir, nil, nil, directFileMutator{}, nil)
 
 	testFile := filepath.Join(tmpDir, "test.txt")
 	if err := os.WriteFile(testFile, []byte("content"), 0o644); err != nil {
@@ -234,7 +234,7 @@ func TestEditTool_EmptyParams(t *testing.T) {
 
 func TestEditTool_ReplaceAllWithOldNew(t *testing.T) {
 	tmpDir := t.TempDir()
-	tool := newEditTool(tmpDir, nil, directFileMutator{})
+	tool := newEditToolWithAccess(tmpDir, nil, nil, directFileMutator{}, nil)
 
 	testFile := filepath.Join(tmpDir, "test.txt")
 	if err := os.WriteFile(testFile, []byte("a x a x a"), 0o644); err != nil {
@@ -262,7 +262,7 @@ func TestEditTool_ReplaceAllWithOldNew(t *testing.T) {
 
 func TestEditTool_RelativePath(t *testing.T) {
 	tmpDir := t.TempDir()
-	tool := newEditTool(tmpDir, nil, directFileMutator{})
+	tool := newEditToolWithAccess(tmpDir, nil, nil, directFileMutator{}, nil)
 
 	testFile := filepath.Join(tmpDir, "rel.txt")
 	if err := os.WriteFile(testFile, []byte("hello world"), 0o644); err != nil {
@@ -302,7 +302,7 @@ func TestEditTool_ContextPreview(t *testing.T) {
 
 	t.Run("shows_context_around_edit", func(t *testing.T) {
 		tmpDir := t.TempDir()
-		tool := newEditTool(tmpDir, nil, directFileMutator{})
+		tool := newEditToolWithAccess(tmpDir, nil, nil, directFileMutator{}, nil)
 		makeFile(t, tmpDir, 20)
 
 		params, _ := json.Marshal(editParams{
@@ -338,7 +338,7 @@ func TestEditTool_ContextPreview(t *testing.T) {
 
 	t.Run("replaceAll_tiered", func(t *testing.T) {
 		tmpDir := t.TempDir()
-		tool := newEditTool(tmpDir, nil, directFileMutator{})
+		tool := newEditToolWithAccess(tmpDir, nil, nil, directFileMutator{}, nil)
 		testFile := filepath.Join(tmpDir, "test.txt")
 		var lines []string
 		for i := range 30 {
@@ -371,7 +371,7 @@ func TestEditTool_ContextPreview(t *testing.T) {
 }
 
 func TestEditTool_Metadata(t *testing.T) {
-	tool := newEditTool("/tmp", nil, directFileMutator{})
+	tool := newEditToolWithAccess("/tmp", nil, nil, directFileMutator{}, nil)
 
 	if tool.ID() != "edit" {
 		t.Errorf("ID should be 'edit', got %s", tool.ID())
@@ -393,7 +393,7 @@ func TestEditTool_DelegatesMutation(t *testing.T) {
 	want := errors.New("edit denied")
 	mutator := &recordingFileMutator{err: want}
 	workDir := t.TempDir()
-	tool := newEditTool(workDir, nil, mutator)
+	tool := newEditToolWithAccess(workDir, nil, nil, mutator, nil)
 	path := filepath.Join(workDir, "file.txt")
 	require.NoError(t, os.WriteFile(path, []byte("before"), 0o644))
 	params, err := json.Marshal(editParams{

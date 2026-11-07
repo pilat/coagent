@@ -80,7 +80,10 @@ func TestMigrate_FreshDB(t *testing.T) {
 	require.NoError(t, err)
 	defer db.Close()
 
-	require.NoError(t, Run(context.Background(), db, dbPath))
+	provider, err := NewProvider(db)
+	require.NoError(t, err)
+	_, err = provider.Up(context.Background())
+	require.NoError(t, err)
 
 	assert.True(t, columnExists(t, db, "sessions", "root_id"), "sessions.root_id must exist")
 	assert.True(t, columnExists(t, db, "subagent_links", "task_call_id"), "subagent_links must exist")
@@ -363,7 +366,10 @@ func TestMigrateDropsProjectsNodeColumn(t *testing.T) {
 	require.NoError(t, err)
 	defer db.Close()
 
-	require.NoError(t, Run(context.Background(), db, dbPath))
+	provider, err := NewProvider(db)
+	require.NoError(t, err)
+	_, err = provider.Up(context.Background())
+	require.NoError(t, err)
 
 	assert.False(t, columnExists(t, db, "projects", "node"), "projects.node dropped by 00014")
 

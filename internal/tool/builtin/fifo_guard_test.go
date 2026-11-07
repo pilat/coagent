@@ -27,7 +27,7 @@ func TestReadTool_FIFORejectedPromptly(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		_, err := newReadTool(dir).Execute(context.Background(), params)
+		_, err := newReadToolWithAccess(dir, nil, nil).Execute(context.Background(), params)
 		done <- err
 	}()
 
@@ -48,7 +48,7 @@ func TestGrepTool_FIFOPathRejectedPromptly(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		_, err := newGrepTool(dir).Execute(context.Background(), params)
+		_, err := newGrepToolWithAccess(dir, nil).Execute(context.Background(), params)
 		done <- err
 	}()
 
@@ -69,7 +69,7 @@ func TestEditTool_FIFORejectedPromptly(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		_, err := newEditTool(dir, nil, directFileMutator{}).Execute(context.Background(), params)
+		_, err := newEditToolWithAccess(dir, nil, nil, directFileMutator{}, nil).Execute(context.Background(), params)
 		done <- err
 	}()
 
@@ -90,7 +90,7 @@ func TestWriteTool_FIFORejectedPromptly(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		_, err := newWriteTool(dir, nil, directFileMutator{}).Execute(context.Background(), params)
+		_, err := newWriteToolWithAccess(dir, nil, nil, directFileMutator{}, nil).Execute(context.Background(), params)
 		done <- err
 	}()
 
@@ -107,14 +107,20 @@ func TestApplyFilePatches_FIFORejectedPromptly(t *testing.T) {
 	fifo := filepath.Join(dir, "pipe")
 	require.NoError(t, syscall.Mkfifo(fifo, 0o600))
 
+	params, err := json.Marshal(applyPatchParams{
+		Patch: "--- a/pipe\n+++ b/pipe\n@@ -1 +1 @@\n-old\n+new\n",
+	})
+	require.NoError(t, err)
+
 	done := make(chan error, 1)
 	go func() {
-		done <- applyFilePatches(context.Background(), nil, directFileMutator{}, fifo, nil)
+		_, err := newApplyPatchToolWithAccess(dir, nil, directFileMutator{}, nil).Execute(context.Background(), params)
+		done <- err
 	}()
 
 	select {
 	case err := <-done:
-		require.Error(t, err, "apply_patch on a FIFO must return an error")
+		require.ErrorContains(t, err, "not a regular file")
 	case <-time.After(5 * time.Second):
 		t.Fatal("apply_patch hung opening a writer-less FIFO")
 	}
@@ -129,7 +135,7 @@ func TestGrepTool_FIFOInDirSkipped(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		_, _ = newGrepTool(dir).Execute(context.Background(), params)
+		_, _ = newGrepToolWithAccess(dir, nil).Execute(context.Background(), params)
 		close(done)
 	}()
 

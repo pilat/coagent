@@ -20,7 +20,10 @@ func TestMigrate_SessionsAgentTypeHasNoDefaultOnFreshDB(t *testing.T) {
 	require.NoError(t, err)
 	defer db.Close()
 
-	require.NoError(t, Run(ctx, db, dbPath))
+	provider, err := NewProvider(db)
+	require.NoError(t, err)
+	_, err = provider.Up(ctx)
+	require.NoError(t, err)
 
 	notNull, dflt, found := columnConstraint(t, db, "sessions", "agent_type")
 	require.True(t, found, "sessions.agent_type must exist")

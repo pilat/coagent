@@ -25,7 +25,7 @@ func TestDiagnosticsScenario_WriteUsesProductionManagerAndFakeRubyLSP(t *testing
 	t.Setenv("COAGENT_BUILTIN_FAKE_LSP", "1")
 	require.NoError(t, os.Symlink(os.Args[0], filepath.Join(binDir, "ruby-lsp")))
 
-	manager := lsp.NewManager(nil, nil)
+	manager := lsp.NewManagerWithAccess(nil, nil, nil)
 	t.Cleanup(manager.Close)
 	file := filepath.Join(workDir, "main.rb")
 	params, err := json.Marshal(writeParams{FilePath: file, Content: "puts 'ok'\n"})
@@ -33,7 +33,7 @@ func TestDiagnosticsScenario_WriteUsesProductionManagerAndFakeRubyLSP(t *testing
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	result, err := newWriteTool(workDir, manager, directFileMutator{}).Execute(ctx, params)
+	result, err := newWriteToolWithAccess(workDir, nil, manager, directFileMutator{}, nil).Execute(ctx, params)
 	require.NoError(t, err)
 	assert.Contains(t, result.Output, "File created successfully")
 	assert.NotContains(t, result.Output, "LSP errors detected")

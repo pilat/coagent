@@ -187,7 +187,10 @@ func TestMigrate_40_FreshDBAddsHiddenColumn(t *testing.T) {
 	require.NoError(t, err)
 	defer db.Close()
 
-	require.NoError(t, Run(ctx, db, dbPath))
+	provider, err := NewProvider(db)
+	require.NoError(t, err)
+	_, err = provider.Up(ctx)
+	require.NoError(t, err)
 
 	require.True(t, columnExists(t, db, "projects", "hidden"))
 	assert.Equal(t, 0, countRows(t, db, "projects", "hidden = TRUE"), "fresh DB creates no legacy project")
@@ -202,8 +205,7 @@ func TestMigrate_40_FreshDBAddsHiddenColumn(t *testing.T) {
 func TestMigrate_40_RemovesExactProcessArtifactDirs(t *testing.T) {
 	ctx := context.Background()
 	home := t.TempDir()
-	restore := coagenthome.Override(home)
-	defer restore()
+	t.Setenv("HOME", home)
 	require.NoError(t, os.MkdirAll(filepath.Join(home, coagenthome.DirName), 0o700))
 
 	dbPath := filepath.Join(t.TempDir(), "artifacts.db")

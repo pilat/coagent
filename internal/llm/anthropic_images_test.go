@@ -91,7 +91,7 @@ func TestAnthropic_ImageBearingToolResult(t *testing.T) {
 		},
 	}
 
-	body := messageParamBody(t, c.buildToolResultMessage(msg))
+	body := messageParamBody(t, anthropic.NewUserMessage(c.toolResultBlock(msg)))
 	outer := blockMap(t, body["content"], 0)
 	assert.Equal(t, "call-img", outer["tool_use_id"])
 	assert.Equal(t, false, outer["is_error"])
@@ -124,7 +124,7 @@ func TestAnthropic_UnreadableImageDegradesToPlaceholder(t *testing.T) {
 		Images:     []llmwire.ImageRef{{Path: "/nonexistent/deleted.png", Mime: llmwire.MimeImagePng, Size: 12}},
 	}
 
-	body := messageParamBody(t, c.buildToolResultMessage(msg))
+	body := messageParamBody(t, anthropic.NewUserMessage(c.toolResultBlock(msg)))
 	blocks := innerBlocks(t, blockMap(t, body["content"], 0))
 	require.Len(t, blocks, 2, "placeholder must occupy the degraded slot")
 
@@ -147,7 +147,7 @@ func TestAnthropic_NonVisionModelNeverSendsPixels(t *testing.T) {
 		},
 	}
 
-	body := messageParamBody(t, c.buildToolResultMessage(msg))
+	body := messageParamBody(t, anthropic.NewUserMessage(c.toolResultBlock(msg)))
 	blocks := innerBlocks(t, blockMap(t, body["content"], 0))
 	require.Len(t, blocks, 3, "text + one degraded slot per ref")
 
@@ -172,7 +172,7 @@ func TestAnthropic_UnsupportedMimeDegradesToPlaceholder(t *testing.T) {
 		Images:     []llmwire.ImageRef{{Path: "/tmp/x.pdf", Mime: "application/pdf", Size: 5}},
 	}
 
-	body := messageParamBody(t, c.buildToolResultMessage(msg))
+	body := messageParamBody(t, anthropic.NewUserMessage(c.toolResultBlock(msg)))
 	blocks := innerBlocks(t, blockMap(t, body["content"], 0))
 	require.Len(t, blocks, 2)
 

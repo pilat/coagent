@@ -79,10 +79,6 @@ type patchLine struct {
 	Content string
 }
 
-func newApplyPatchTool(workDir string, mutator fileMutator) *applyPatchTool {
-	return &applyPatchTool{workDir: workDir, mutator: mutator}
-}
-
 func (t *applyPatchTool) ID() string          { return "apply_patch" }
 func (t *applyPatchTool) ParallelSafe() bool  { return false }
 func (t *applyPatchTool) Description() string { return applyPatchDescription }
@@ -333,24 +329,6 @@ type filePatchPlan struct {
 	exists   bool
 }
 
-func applyFilePatches(
-	ctx context.Context,
-	access *safefile.Access,
-	mutator fileMutator,
-	filePath string,
-	hunks []patchHunk,
-) error {
-	unlock := lockFileWrite(filePath)
-	defer unlock()
-
-	plan, err := planFilePatches(access, filePath, hunks)
-	if err != nil {
-		return err
-	}
-
-	return writeFilePatch(ctx, access, mutator, filePath, plan.content)
-}
-
 func lockFileWrites(paths []string) func() {
 	keys := append([]string(nil), paths...)
 	sort.Strings(keys)
@@ -439,15 +417,6 @@ func writeFilePatch(
 	}
 
 	return nil
-}
-
-func applyHunk(lines []string, hunk patchHunk) []string {
-	updated, _, err := applyHunkAt(lines, hunk, hunk.OldStart-1, false)
-	if err != nil {
-		return lines
-	}
-
-	return updated
 }
 
 func applyHunkAt(lines []string, hunk patchHunk, hint int, missingFile bool) ([]string, int, error) {

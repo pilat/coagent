@@ -86,7 +86,7 @@ func TestRenderToolTrail_BatchOrderAndFallback(t *testing.T) {
 
 func TestRenderToolTrail_ClipsRunesAfterRedaction(t *testing.T) {
 	secret := "trail-test-registered-secret"
-	logger.AddRedactedValues(secret)
+	logger.SetRedactedValues([]string{secret})
 	t.Cleanup(func() { logger.SetRedactedValues(nil) })
 	for _, value := range []string{strings.Repeat("界", 80), strings.Repeat("界", 81), strings.Repeat("界", 74) + secret} {
 		args, err := json.Marshal(map[string]string{"command": value})

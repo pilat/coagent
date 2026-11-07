@@ -1,4 +1,4 @@
-package llm
+package llmtest
 
 import (
 	"fmt"
@@ -9,8 +9,7 @@ import (
 // ValidateToolPairing enforces the tool_use/tool_result pairing invariant that
 // convertMessages relies on when building provider requests. A transcript that
 // fails this would produce a provider 400 (unmatched tool_use / orphaned
-// tool_result). It is the test oracle for transcript validity and may be used
-// as a defensive assert before a Chat call.
+// tool_result). It is the test oracle for transcript validity.
 //
 // Rules:
 //   - every assistant tool_call has a non-empty id;

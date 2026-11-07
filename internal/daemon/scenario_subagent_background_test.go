@@ -14,7 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/pilat/coagent/internal/backgroundprocess"
-	"github.com/pilat/coagent/internal/llm"
+	"github.com/pilat/coagent/internal/llm/llmtest"
 	"github.com/pilat/coagent/internal/llmwire"
 	"github.com/pilat/coagent/internal/subagent"
 	"github.com/pilat/coagent/internal/tool"
@@ -141,7 +141,7 @@ func assertOneChildResult(t *testing.T, h *harness, parentID int64, link *subage
 	assert.Equal(t, want, final.Result)
 	assert.Equal(t, 1, h.parentDeliveries(parentID, link.ChildID), "one assignment produces one parent result")
 	parent := h.messages(parentID)
-	require.NoError(t, llm.ValidateToolPairing(parent))
+	require.NoError(t, llmtest.ValidateToolPairing(parent))
 	for _, message := range parent {
 		assert.NotContains(t, message.Content, "interim report", "a yield is never delivered as a result")
 	}

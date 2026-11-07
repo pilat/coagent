@@ -107,7 +107,7 @@ func TestRetryStartupCall_HonorsRetryAfter(t *testing.T) {
 		},
 	}
 
-	err := retryStartupCall(context.Background(), policy, func(context.Context) error {
+	err := retryStartupCallWithContext(context.Background(), policy, func(context.Context) error {
 		calls++
 		if calls == 1 {
 			return &tgAPIError{Method: "getMe", ErrorCode: http.StatusTooManyRequests, RetryAfter: 7}
@@ -124,7 +124,7 @@ func TestRetryStartupCall_HonorsRetryAfter(t *testing.T) {
 func TestRetryStartupCall_RetriesServerError(t *testing.T) {
 	calls := 0
 	waits := 0
-	err := retryStartupCall(context.Background(), startupRetryPolicy{
+	err := retryStartupCallWithContext(context.Background(), startupRetryPolicy{
 		base: time.Second,
 		max:  time.Second,
 		wait: func(context.Context, time.Duration) error {
@@ -167,7 +167,7 @@ func TestRetryStartupCall_DoesNotRetryPermanentFailures(t *testing.T) {
 				},
 			}
 
-			err := retryStartupCall(context.Background(), policy, func(context.Context) error {
+			err := retryStartupCallWithContext(context.Background(), policy, func(context.Context) error {
 				calls++
 				return tt.err
 			})
@@ -182,7 +182,7 @@ func TestRetryStartupCall_DoesNotRetryPermanentFailures(t *testing.T) {
 func TestRetryStartupCall_DoesNotRetryPermanentNetworkErrors(t *testing.T) {
 	calls := 0
 	waits := 0
-	err := retryStartupCall(context.Background(), startupRetryPolicy{
+	err := retryStartupCallWithContext(context.Background(), startupRetryPolicy{
 		base: time.Millisecond,
 		max:  time.Millisecond,
 		wait: func(context.Context, time.Duration) error {
@@ -211,7 +211,7 @@ func TestRetryStartupCall_BoundsPersistentTransportFailure(t *testing.T) {
 
 	calls := 0
 	started := time.Now()
-	err := retryStartupCall(ctx, startupRetryPolicy{
+	err := retryStartupCallWithContext(ctx, startupRetryPolicy{
 		base: time.Millisecond,
 		max:  2 * time.Millisecond,
 	}, func(context.Context) error {

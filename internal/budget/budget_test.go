@@ -36,7 +36,11 @@ func newBudgetFixture(ctx context.Context, t *testing.T) *budgetFixture {
 
 	db, err := migrate.OpenDB(ctx, filepath.Join(t.TempDir(), "budget.db"))
 	require.NoError(t, err)
-	require.NoError(t, migrate.Run(ctx, db, filepath.Join(t.TempDir(), "unused.db")))
+
+	provider, err := migrate.NewProvider(db)
+	require.NoError(t, err)
+	_, err = provider.Up(ctx)
+	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 
 	res, err := db.ExecContext(ctx, `INSERT INTO projects (work_dir, name) VALUES (?, ?)`,

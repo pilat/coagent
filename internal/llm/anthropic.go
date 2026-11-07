@@ -358,11 +358,6 @@ func (c *anthropicClient) buildAssistantBlocks(msg llmwire.Message) []anthropic.
 	return blocks
 }
 
-// buildToolResultMessage renders a lone tool result as its own user message.
-func (c *anthropicClient) buildToolResultMessage(msg llmwire.Message) anthropic.MessageParam {
-	return anthropic.NewUserMessage(c.toolResultBlock(msg))
-}
-
 // toolResultBlock renders one tool_result; the durable error bit maps onto the
 // provider's is_error flag.
 func (c *anthropicClient) toolResultBlock(msg llmwire.Message) anthropic.ContentBlockParamUnion {

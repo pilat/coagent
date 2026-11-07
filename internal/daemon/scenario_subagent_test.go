@@ -19,7 +19,7 @@ import (
 	"go.uber.org/zap/zaptest/observer"
 
 	"github.com/pilat/coagent/internal/controllerapi"
-	"github.com/pilat/coagent/internal/llm"
+	"github.com/pilat/coagent/internal/llm/llmtest"
 	"github.com/pilat/coagent/internal/llmwire"
 	"github.com/pilat/coagent/internal/logger"
 	"github.com/pilat/coagent/internal/sessionevent"
@@ -77,7 +77,7 @@ func TestIntegration_BlockingTaskSuspendsAndResumes(t *testing.T) {
 	})
 	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(parentID) })
 	msgs := h.messages(parentID)
-	require.NoError(t, llm.ValidateToolPairing(msgs))
+	require.NoError(t, llmtest.ValidateToolPairing(msgs))
 	assert.Equal(t, 1, countToolResultsFor(msgs, "task"), "the task tool_use is filled by the child result")
 
 	// A fresh parent Chat must consume the delivered result instead of silently suspending on the old task again.
@@ -261,7 +261,7 @@ func TestIntegration_ScatterGatherBlockingTasks(t *testing.T) {
 
 	// Every task call needs its own child result before the parent resumes the model.
 	msgs := h.messages(parentID)
-	require.NoError(t, llm.ValidateToolPairing(msgs))
+	require.NoError(t, llmtest.ValidateToolPairing(msgs))
 	assert.Equal(t, 3, countToolResultsFor(msgs, "task"), "each of the 3 task calls gets its own result")
 }
 
@@ -420,7 +420,7 @@ func TestIntegration_ChildPanicMarksError(t *testing.T) {
 	assert.Equal(t, subagent.StateError, res.State)
 	assert.Equal(t, subagent.OutcomeError, res.Outcome, "a panicked child reports the error outcome")
 	msgs := h.messages(parentID)
-	require.NoError(t, llm.ValidateToolPairing(msgs))
+	require.NoError(t, llmtest.ValidateToolPairing(msgs))
 	assert.Equal(t, 1, countToolResultsFor(msgs, "task"), "parent's task call is resolved with the error")
 }
 
@@ -453,7 +453,7 @@ func TestIntegration_StressBlockingNoDeadlock(t *testing.T) {
 		})
 		h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(pid) })
 		msgs := h.messages(pid)
-		require.NoError(t, llm.ValidateToolPairing(msgs))
+		require.NoError(t, llmtest.ValidateToolPairing(msgs))
 		assert.Equal(t, "parent done", lastAssistantTextDTO(msgs), "parent %d resumed to completion", pid)
 	}
 
@@ -553,7 +553,7 @@ func TestIntegration_ExploreChildIsDeniedControlPlaneTools(t *testing.T) {
 		assert.Contains(t, parentOffered, id, "root session must keep %q", id)
 	}
 	assertNotOffered(t, parentOffered, configPlaneTools)
-	require.NoError(t, llm.ValidateToolPairing(h.messages(parentID)))
+	require.NoError(t, llmtest.ValidateToolPairing(h.messages(parentID)))
 }
 
 func TestIntegration_ConfigToolsReachOnlyManagerOwnedRoots(t *testing.T) {
@@ -741,7 +741,7 @@ func TestHarnessScenario_BatchCannotEscapeSubagentAllowlist(t *testing.T) {
 	)
 	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(parentID) })
 	msgs := h.messages(link.ChildID)
-	require.NoError(t, llm.ValidateToolPairing(msgs), "child transcript must stay provider-valid")
+	require.NoError(t, llmtest.ValidateToolPairing(msgs), "child transcript must stay provider-valid")
 	assert.Equal(t, 1, countToolResultsFor(msgs, tool.IDBatch))
 	batchResult := subagentLastToolResultContent(msgs, tool.IDBatch)
 	assert.Contains(t, batchResult, `unknown tool "bash"`)
@@ -823,11 +823,11 @@ func TestHarnessScenario_ForegroundChildHasNoLifetimeLimit(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotContains(t, status, "Active subagents:")
 	child := h.messages(link.ChildID)
-	require.NoError(t, llm.ValidateToolPairing(child))
+	require.NoError(t, llmtest.ValidateToolPairing(child))
 	assert.Greater(t, countToolResultsFor(child, "ls"), 10,
 		"the explore child crossed the former tenth-iteration cap on its own work")
 	final := h.messages(parentID)
-	require.NoError(t, llm.ValidateToolPairing(final))
+	require.NoError(t, llmtest.ValidateToolPairing(final))
 	assert.Equal(t, 1, countToolResultsFor(final, tool.IDTask), "exactly one parent result resolves the task call")
 	assertHarnessTrace(t, h, "foreground_child_no_lifetime.json", collector.snapshot(), parentID)
 }
@@ -1237,7 +1237,7 @@ func TestIntegration_BackgroundSubagentCompletes(t *testing.T) {
 
 	// Parent transcript is a valid tool_use/tool_result pairing.
 	msgs := h.messages(parentID)
-	require.NoError(t, llm.ValidateToolPairing(msgs), "parent transcript must be transcript-valid")
+	require.NoError(t, llmtest.ValidateToolPairing(msgs), "parent transcript must be transcript-valid")
 
 	// Exactly one completion record for the child.
 	assert.Equal(t, 1, countSubagentCompletions(msgs, link.ChildID), "exactly one completion record")
@@ -1314,7 +1314,7 @@ func TestIntegration_BackgroundTaskRejectsCompetingSleepProtocol(t *testing.T) {
 	)
 	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(parentID) })
 	msgs := h.messages(parentID)
-	require.NoError(t, llm.ValidateToolPairing(msgs), "the whole transcript must remain provider-valid")
+	require.NoError(t, llmtest.ValidateToolPairing(msgs), "the whole transcript must remain provider-valid")
 	assert.Equal(t, 1, countAssistantToolCallsFor(msgs, tool.IDSleep))
 	assert.Equal(t, 1, countToolResultsFor(msgs, tool.IDSleep), "the rejected call gets one error result")
 	assert.Equal(t, 1, countSubagentCompletions(msgs, link.ChildID), "the child completion is delivered exactly once")
@@ -1362,7 +1362,7 @@ func TestIntegration_SendToSubagentReNotifies(t *testing.T) {
 		func() bool { return countSubagentCompletions(h.messages(parentID), link.ChildID) >= 2 },
 	)
 	msgs := h.messages(parentID)
-	require.NoError(t, llm.ValidateToolPairing(msgs))
+	require.NoError(t, llmtest.ValidateToolPairing(msgs))
 	assert.GreaterOrEqual(
 		t, countSubagentCompletions(msgs, link.ChildID), 2, "follow-up produces a second completion record",
 	)
@@ -2003,7 +2003,7 @@ func seedChildCandidateConfirm(t *testing.T, h *harness, childID int64) int64 {
 func (h *gatingHarness) assertUnknownTools(sessionID int64, ids []string) {
 	h.t.Helper()
 	msgs := h.messages(sessionID)
-	require.NoError(h.t, llm.ValidateToolPairing(msgs), "child transcript must stay provider-valid")
+	require.NoError(h.t, llmtest.ValidateToolPairing(msgs), "child transcript must stay provider-valid")
 	for _, id := range ids {
 		assert.Equal(h.t, 1, countToolResultsFor(msgs, id), "one result for the %q probe", id)
 		toolOutput := ""

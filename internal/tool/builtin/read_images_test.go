@@ -27,7 +27,7 @@ func TestReadImage_ReturnsRefInsteadOfRejecting(t *testing.T) {
 	dir := t.TempDir()
 	path := pngFile(t, dir, "shot.png", nil)
 
-	read := newReadTool(dir)
+	read := newReadToolWithAccess(dir, nil, nil)
 	result, err := read.Execute(context.Background(), json.RawMessage(`{"file_path":"shot.png"}`))
 	require.NoError(t, err)
 
@@ -50,7 +50,7 @@ func TestReadImage_OversizedFailsNamed(t *testing.T) {
 	path := pngFile(t, dir, "big.png", big[8:])
 	_ = path
 
-	read := newReadTool(dir)
+	read := newReadToolWithAccess(dir, nil, nil)
 	_, err := read.Execute(context.Background(), json.RawMessage(`{"file_path":"big.png"}`))
 
 	require.Error(t, err)
@@ -62,7 +62,7 @@ func TestReadImage_IgnoresOffsetLimit(t *testing.T) {
 	dir := t.TempDir()
 	pngFile(t, dir, "shot.png", nil)
 
-	read := newReadTool(dir)
+	read := newReadToolWithAccess(dir, nil, nil)
 	result, err := read.Execute(context.Background(),
 		json.RawMessage(`{"file_path":"shot.png","offset":100,"limit":10}`))
 	require.NoError(t, err)
@@ -76,7 +76,7 @@ func TestReadBlob_WithoutImageMagicStillRejected(t *testing.T) {
 	datPath := filepath.Join(dir, "blob.dat")
 	require.NoError(t, os.WriteFile(datPath, []byte{0x00, 0x01, 0x02, 0xFF, 0xFE}, 0o600))
 
-	read := newReadTool(dir)
+	read := newReadToolWithAccess(dir, nil, nil)
 	_, err := read.Execute(context.Background(), json.RawMessage(`{"file_path":"blob.dat"}`))
 
 	require.Error(t, err)
@@ -91,7 +91,7 @@ func TestReadPdf_StaysRejected(t *testing.T) {
 	body := []byte("%PDF-1.4 ... \x00\x01\x02")
 	require.NoError(t, os.WriteFile(pdf, body, 0o600))
 
-	read := newReadTool(dir)
+	read := newReadToolWithAccess(dir, nil, nil)
 	_, err := read.Execute(context.Background(), json.RawMessage(`{"file_path":"doc.pdf"}`))
 
 	require.Error(t, err, "PDFs are deliberately out of scope")

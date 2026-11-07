@@ -112,7 +112,11 @@ func newOneShotHarness(t *testing.T) *oneShotHarness {
 	db, err := migrate.OpenDB(ctx, dbPath)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
-	require.NoError(t, migrate.Run(ctx, db, dbPath))
+
+	provider, err := migrate.NewProvider(db)
+	require.NoError(t, err)
+	_, err = provider.Up(ctx)
+	require.NoError(t, err)
 
 	sessionID := seedOneShotSession(ctx, t, db)
 	store := NewStore(db, sessionstore.NewStore(db))

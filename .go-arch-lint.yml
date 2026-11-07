@@ -69,6 +69,7 @@ components:
   builtin:    { in: internal/tool/builtin }
   catalog:    { in: internal/catalog }
   llm:        { in: internal/llm }
+  llmtest:    { in: internal/llm/llmtest }
   mcp:        { in: internal/mcp }
   shellenv:   { in: internal/shellenv }
 
@@ -159,6 +160,8 @@ deps:
     mayDependOn: [coagenthome, config, logger]
   llm:
     mayDependOn: [catalog, config, llmwire, logger, safefile]
+  llmtest:
+    mayDependOn: [llmwire]
 
   progress:
     mayDependOn: [logger]

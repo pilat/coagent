@@ -40,7 +40,15 @@ func TestBashTool_RetainsForegroundOutputAfterLifecycleCancellation(t *testing.T
 		t.Run(tt.name, func(t *testing.T) {
 			ctx := tool.WithCallID(context.Background(), "call_test")
 			service, sessionID := newTestProcessService(t)
-			bash := newBashTool(t.TempDir(), &bashRunnerStub{}, service, "project-1", sessionID, sessionID)
+			bash := newBashToolWithAccess(
+				t.TempDir(),
+				&bashRunnerStub{},
+				service,
+				"project-1",
+				sessionID,
+				sessionID,
+				nil,
+			)
 			result := make(chan *tool.Result, 1)
 			errs := make(chan error, 1)
 
@@ -88,8 +96,14 @@ func (removeFailProcess) RemoveOutput(context.Context, string) error {
 func TestBashTool_ReportsRetainedCandidateWhenCleanupFails(t *testing.T) {
 	ctx := tool.WithCallID(context.Background(), "call_test")
 	service, sessionID := newTestProcessService(t)
-	bash := newBashTool(
-		t.TempDir(), &bashRunnerStub{}, removeFailProcess{Service: service}, "project-1", sessionID, sessionID,
+	bash := newBashToolWithAccess(
+		t.TempDir(),
+		&bashRunnerStub{},
+		removeFailProcess{Service: service},
+		"project-1",
+		sessionID,
+		sessionID,
+		nil,
 	)
 
 	params, _ := json.Marshal(bashParams{Command: "printf retained"})

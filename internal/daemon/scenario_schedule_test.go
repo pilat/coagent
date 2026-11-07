@@ -16,7 +16,7 @@ import (
 
 	"github.com/pilat/coagent/internal/config"
 	"github.com/pilat/coagent/internal/controllerapi"
-	"github.com/pilat/coagent/internal/llm"
+	"github.com/pilat/coagent/internal/llm/llmtest"
 	"github.com/pilat/coagent/internal/llmwire"
 	"github.com/pilat/coagent/internal/schedule"
 	"github.com/pilat/coagent/internal/sessionbus"
@@ -129,7 +129,7 @@ func TestHarnessScenario_SleepProjectsWakeAtAndUserInputInterruptsIt(t *testing.
 	collector.waitMessage(parentID, "sleep interruption handled")
 	collector.waitIdleAfter(parentID, "sleep interruption handled")
 	messages := h.messages(parentID)
-	require.NoError(t, llm.ValidateToolPairing(messages))
+	require.NoError(t, llmtest.ValidateToolPairing(messages))
 	assert.Equal(t, 1, countToolResultsFor(messages, tool.IDSleep))
 	assert.Contains(t, scheduleLastToolResultContent(messages, tool.IDSleep), "Sleep interrupted")
 	schedules, err := h.schedules.ListSchedules(h.ctx, parentID)
@@ -171,7 +171,7 @@ func TestIntegration_SchedulerWakesExactSleepThroughDaemonQueue(t *testing.T) {
 		return false
 	})
 	msgs := h.messages(parentID)
-	require.NoError(t, llm.ValidateToolPairing(msgs))
+	require.NoError(t, llmtest.ValidateToolPairing(msgs))
 	assert.Equal(t, 1, countAssistantToolCallsFor(msgs, tool.IDSleep))
 	assert.Equal(t, 1, countToolResultsFor(msgs, tool.IDSleep))
 	var result *llmwire.Message
@@ -220,7 +220,7 @@ func TestIntegration_UserInterruptCancelsSleepWithoutDeletingStandaloneOneShot(t
 	require.NoError(t, h.mgr.sendToSession(h.ctx, parentID, "interrupt now"))
 	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(parentID) })
 	messages := h.messages(parentID)
-	require.NoError(t, llm.ValidateToolPairing(messages))
+	require.NoError(t, llmtest.ValidateToolPairing(messages))
 	assert.Equal(t, 1, countToolResultsFor(messages, tool.IDSleep))
 	assert.Contains(t, scheduleLastToolResultContent(messages, tool.IDSleep), "Sleep interrupted")
 	assert.Equal(t, "interrupt handled", lastAssistantTextDTO(messages))
@@ -264,7 +264,7 @@ func TestIntegration_StandaloneOneShotFlowsThroughExecutorAndDaemonQueue(t *test
 		return lastAssistantTextDTO(h.messages(parentID)) == "one-shot handled"
 	})
 	messages := h.messages(parentID)
-	require.NoError(t, llm.ValidateToolPairing(messages))
+	require.NoError(t, llmtest.ValidateToolPairing(messages))
 	assert.Equal(t, 1, countToolResultsFor(messages, tool.IDSchedule))
 	assert.Contains(t, scheduleLastToolResultContent(messages, tool.IDSchedule), "one-time scheduled work")
 }
@@ -317,7 +317,7 @@ func TestIntegration_OneShotAckFailureRedeliversWithoutDuplicateTranscriptOrPubl
 	})
 	second.Stop()
 	messages := h.messages(parentID)
-	require.NoError(t, llm.ValidateToolPairing(messages))
+	require.NoError(t, llmtest.ValidateToolPairing(messages))
 	assert.Equal(t, 1, countToolResultsFor(messages, tool.IDSchedule))
 	assert.Equal(t, "one-shot handled once", lastAssistantTextDTO(messages))
 	scheduledPublications := 0
@@ -383,7 +383,7 @@ func TestIntegration_FreshScheduleDuplicateDoesNotResetOrRunTwice(t *testing.T) 
 	assert.False(t, applied)
 	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(parentID) })
 	messages := h.messages(parentID)
-	require.NoError(t, llm.ValidateToolPairing(messages))
+	require.NoError(t, llmtest.ValidateToolPairing(messages))
 	assert.Equal(t, 1, countMessageContentContaining(messages, "fresh scheduled work"))
 	// The confirmed stop publishes one answer; its hidden candidate row stays in the transcript with the same text.
 	assert.Equal(t, 2, countMessageContentContaining(messages, "fresh handled once"))

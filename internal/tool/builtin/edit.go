@@ -62,10 +62,6 @@ func newEditToolWithAccess(
 	return &editTool{workDir: workDir, access: access, lspMgr: lspMgr, mutator: mutator, tracker: tracker}
 }
 
-func newEditTool(workDir string, lspMgr lsp.Manager, mutator fileMutator) *editTool {
-	return &editTool{workDir: workDir, lspMgr: lspMgr, mutator: mutator}
-}
-
 func (t *editTool) ID() string          { return "edit" }
 func (t *editTool) ParallelSafe() bool  { return false }
 func (t *editTool) Description() string { return editDescription }

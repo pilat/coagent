@@ -15,7 +15,11 @@ func TestOpenDB_ExplicitTransactionsReserveWriterAtBegin(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 	db.SetMaxOpenConns(2)
-	require.NoError(t, Run(t.Context(), db, ""))
+
+	provider, err := NewProvider(db)
+	require.NoError(t, err)
+	_, err = provider.Up(t.Context())
+	require.NoError(t, err)
 
 	first, err := db.BeginTx(t.Context(), nil)
 	require.NoError(t, err)

@@ -35,16 +35,6 @@ func SetRedactedValues(values []string) {
 	store(values)
 }
 
-// AddRedactedValues registers more secrets without dropping the ones already
-// registered: a credential written while the daemon runs must be scrubbed from
-// that moment on, and the boot-time set is still live.
-func AddRedactedValues(values ...string) {
-	redactMu.Lock()
-	defer redactMu.Unlock()
-
-	store(append(loadRedactedValues(), values...))
-}
-
 func newRedactingCore(inner zapcore.Core) zapcore.Core {
 	return &redactingCore{inner: inner}
 }

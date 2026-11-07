@@ -33,8 +33,7 @@ func TestAppShutdown_StopsInReverseOrderAndContinuesAfterError(t *testing.T) {
 
 func TestStartCore_RegistersDatabaseAndDaemonLifecycle(t *testing.T) {
 	home := t.TempDir()
-	restore := coagenthome.Override(home)
-	t.Cleanup(restore)
+	t.Setenv("HOME", home)
 
 	a := &app{}
 	core, err := startCore(
@@ -70,8 +69,7 @@ func TestStartCore_RegistersDatabaseAndDaemonLifecycle(t *testing.T) {
 }
 
 func TestStartCore_PartialStartLeavesOnlyCreatedComponentsForCleanup(t *testing.T) {
-	restore := coagenthome.Override("")
-	t.Cleanup(restore)
+	t.Setenv("HOME", "")
 
 	a := &app{}
 	core, err := startCore(
@@ -97,8 +95,7 @@ func TestRunDaemon_ReadinessPrecedesStatusAndDeferredShutdownClosesSocket(t *tes
 	home, err := os.MkdirTemp("/tmp", "coa-life")
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = os.RemoveAll(home) })
-	restore := coagenthome.Override(home)
-	t.Cleanup(restore)
+	t.Setenv("HOME", home)
 
 	ops := configops.New(
 		filepath.Join(home, coagenthome.DirName, coagenthome.ConfigFileName),

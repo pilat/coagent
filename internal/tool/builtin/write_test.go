@@ -20,7 +20,7 @@ func TestWriteTool_Execute(t *testing.T) {
 	}
 	defer func() { _ = os.RemoveAll(tmpDir) }()
 
-	tool := newWriteTool(tmpDir, nil, directFileMutator{})
+	tool := newWriteToolWithAccess(tmpDir, nil, nil, directFileMutator{}, nil)
 
 	t.Run("create new file", func(t *testing.T) {
 		testFile := filepath.Join(tmpDir, "new.txt")
@@ -140,7 +140,7 @@ func TestWriteTool_Execute(t *testing.T) {
 }
 
 func TestWriteTool_Metadata(t *testing.T) {
-	tool := newWriteTool("/tmp", nil, directFileMutator{})
+	tool := newWriteToolWithAccess("/tmp", nil, nil, directFileMutator{}, nil)
 
 	t.Run("ID", func(t *testing.T) {
 		if tool.ID() != "write" {
@@ -174,7 +174,7 @@ func TestWriteTool_EmptyContent(t *testing.T) {
 	}
 	defer func() { _ = os.RemoveAll(tmpDir) }()
 
-	tool := newWriteTool(tmpDir, nil, directFileMutator{})
+	tool := newWriteToolWithAccess(tmpDir, nil, nil, directFileMutator{}, nil)
 	testFile := filepath.Join(tmpDir, "empty.txt")
 
 	params, _ := json.Marshal(writeParams{FilePath: testFile, Content: ""})
@@ -201,7 +201,7 @@ func TestWriteTool_DelegatesMutation(t *testing.T) {
 	want := errors.New("write denied")
 	mutator := &recordingFileMutator{err: want}
 	workDir := t.TempDir()
-	tool := newWriteTool(workDir, nil, mutator)
+	tool := newWriteToolWithAccess(workDir, nil, nil, mutator, nil)
 	path := filepath.Join(workDir, "nested", "file.txt")
 	params, err := json.Marshal(writeParams{FilePath: path, Content: "content"})
 	require.NoError(t, err)

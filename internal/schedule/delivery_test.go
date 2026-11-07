@@ -19,7 +19,11 @@ func newDeliveryStore(t *testing.T) (Store, *sessionstore.Store, int64) {
 	db, err := migrate.OpenDB(t.Context(), path)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
-	require.NoError(t, migrate.Run(t.Context(), db, path))
+
+	provider, err := migrate.NewProvider(db)
+	require.NoError(t, err)
+	_, err = provider.Up(t.Context())
+	require.NoError(t, err)
 	sessions := sessionstore.NewStore(db)
 	return NewStore(db, sessions), sessions, seedOneShotSession(t.Context(), t, db)
 }

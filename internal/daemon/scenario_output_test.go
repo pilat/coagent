@@ -20,7 +20,7 @@ import (
 	"github.com/pilat/coagent/internal/backgroundprocess"
 	"github.com/pilat/coagent/internal/config"
 	"github.com/pilat/coagent/internal/controllerapi"
-	"github.com/pilat/coagent/internal/llm"
+	"github.com/pilat/coagent/internal/llm/llmtest"
 	"github.com/pilat/coagent/internal/llmwire"
 	"github.com/pilat/coagent/internal/progressruntime"
 	"github.com/pilat/coagent/internal/sessionevent"
@@ -1194,7 +1194,7 @@ func TestHarnessScenario_StatusMidActivationDoesNotStrandJustExecutedToolResults
 	assert.Len(t, statusReports(events, sessionID), 1, "exactly one status report")
 	assert.Equal(t, 1, countPublishedMessage(events, sessionID, "work done"), "the answer reaches the human once")
 	msgs := h.messages(sessionID)
-	require.NoError(t, llm.ValidateToolPairing(msgs))
+	require.NoError(t, llmtest.ValidateToolPairing(msgs))
 	assert.Equal(t, 1, countToolResultsFor(msgs, "ls"))
 	assert.Equal(t, "work done", lastAssistantTextDTO(msgs))
 	assert.False(t, hasUserContaining(msgs, "/status"), "a control command never enters the transcript")
@@ -1262,7 +1262,7 @@ func TestHarnessScenario_StatusIsAnsweredWhileABlockingChildIsOut(t *testing.T) 
 		return countPublishedMessage(e, parentID, "parent got the child result") == 1
 	})
 	msgs := h.messages(parentID)
-	require.NoError(t, llm.ValidateToolPairing(msgs))
+	require.NoError(t, llmtest.ValidateToolPairing(msgs))
 	assert.Equal(t, 1, countToolResultsFor(msgs, "task"))
 	assert.Len(t, statusReports(collector.snapshot(), parentID), 1, "still exactly one status report")
 }

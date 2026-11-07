@@ -49,10 +49,6 @@ type readTool struct {
 	tracker FileReadTracker
 }
 
-func newReadTool(workDir string) *readTool {
-	return &readTool{workDir: workDir}
-}
-
 func newReadToolWithAccess(workDir string, access *safefile.Access, tracker FileReadTracker) *readTool {
 	return &readTool{workDir: workDir, access: access, tracker: tracker}
 }

@@ -297,7 +297,7 @@ func rawCutLegal(rawTail []llmwire.Message) bool {
 	return validateRawGrouping(rawTail) == nil
 }
 
-// validateRawGrouping adds the session-scope checks beyond llm.ValidateToolPairing:
+// validateRawGrouping adds the session-scope checks beyond llmtest.ValidateToolPairing:
 // unique non-empty assistant call ids, non-empty names and result ownership.
 func validateRawGrouping(messages []llmwire.Message) error {
 	callNames := make(map[string]string)

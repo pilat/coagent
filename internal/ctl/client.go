@@ -87,9 +87,6 @@ func Dial(ctx context.Context, path string) (*Client, error) {
 // protocol version it speaks. Skew is a warning for UIs, never a refusal.
 func (c *Client) Greeting() Greeting { return c.greeting }
 
-// SkewsFrom reports whether the daemon's protocol differs from this binary's.
-func (c *Client) SkewsFrom() bool { return c.greeting.ProtocolVersion != ProtocolVersion }
-
 // Close ends the connection and fails every call still waiting on it.
 // Idempotent: the read loop and the server both close independently.
 func (c *Client) Close() error {

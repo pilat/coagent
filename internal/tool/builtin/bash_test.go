@@ -145,7 +145,10 @@ func newTestProcessServiceAt(t *testing.T, outputDir string) (backgroundprocess.
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 
-	require.NoError(t, migrate.Run(ctx, db, ""))
+	provider, err := migrate.NewProvider(db)
+	require.NoError(t, err)
+	_, err = provider.Up(ctx)
+	require.NoError(t, err)
 
 	_, err = db.ExecContext(ctx,
 		`INSERT INTO projects (id, work_dir, name) VALUES (1, '/tmp/p', 'p')`)
@@ -172,7 +175,15 @@ func newTestBashTool(t *testing.T) (*bashTool, backgroundprocess.Service) {
 
 	service, sessionID := newTestProcessService(t)
 
-	return newBashTool(t.TempDir(), &bashRunnerStub{}, service, "project-1", sessionID, sessionID), service
+	return newBashToolWithAccess(
+		t.TempDir(),
+		&bashRunnerStub{},
+		service,
+		"project-1",
+		sessionID,
+		sessionID,
+		nil,
+	), service
 }
 
 // newTestBashToolRunner builds a bash tool over a caller-supplied sandbox
@@ -182,7 +193,7 @@ func newTestBashToolRunner(t *testing.T, workDir string, runner bashsandbox.Runn
 
 	service, sessionID := newTestProcessService(t)
 
-	return newBashTool(workDir, runner, service, "project-1", sessionID, sessionID)
+	return newBashToolWithAccess(workDir, runner, service, "project-1", sessionID, sessionID, nil)
 }
 
 func TestBashTool_Execute(t *testing.T) {
@@ -407,7 +418,7 @@ func TestBashTool_DelegatesCommandConstruction(t *testing.T) {
 	service, sessionID := newTestProcessService(t)
 	runner := &bashRunnerStub{}
 	workDir := t.TempDir()
-	bash := newBashTool(workDir, runner, service, "project-1", sessionID, sessionID)
+	bash := newBashToolWithAccess(workDir, runner, service, "project-1", sessionID, sessionID, nil)
 
 	params, err := json.Marshal(bashParams{Command: "printf delegated"})
 	require.NoError(t, err)
@@ -421,7 +432,15 @@ func TestBashTool_DelegatesCommandConstruction(t *testing.T) {
 func TestBashTool_CommandConstructionError(t *testing.T) {
 	service, sessionID := newTestProcessService(t)
 	runnerErr := errors.New("sandbox unavailable")
-	bash := newBashTool(t.TempDir(), &bashRunnerStub{err: runnerErr}, service, "project-1", sessionID, sessionID)
+	bash := newBashToolWithAccess(
+		t.TempDir(),
+		&bashRunnerStub{err: runnerErr},
+		service,
+		"project-1",
+		sessionID,
+		sessionID,
+		nil,
+	)
 
 	params, err := json.Marshal(bashParams{Command: "true"})
 	require.NoError(t, err)

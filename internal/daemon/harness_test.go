@@ -18,7 +18,6 @@ import (
 
 	"github.com/pilat/coagent/internal/backgroundprocess"
 	"github.com/pilat/coagent/internal/budget"
-	"github.com/pilat/coagent/internal/coagenthome"
 	"github.com/pilat/coagent/internal/config"
 	"github.com/pilat/coagent/internal/configapply"
 	"github.com/pilat/coagent/internal/configops"
@@ -484,9 +483,6 @@ type harnessOptions struct {
 
 func newHarness(t *testing.T, o harnessOptions) *harness {
 	t.Helper()
-	if _, err := coagenthome.UserHome(); err != nil {
-		t.Cleanup(coagenthome.Override(t.TempDir()))
-	}
 	if o.dbPath == "" {
 		o.dbPath = filepath.Join(t.TempDir(), "test.db")
 	}
@@ -494,7 +490,11 @@ func newHarness(t *testing.T, o harnessOptions) *harness {
 	db, err := migrate.OpenDB(ctx, o.dbPath)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
-	require.NoError(t, migrate.Run(ctx, db, o.dbPath))
+
+	provider, err := migrate.NewProvider(db)
+	require.NoError(t, err)
+	_, err = provider.Up(ctx)
+	require.NoError(t, err)
 	store := sessionstore.NewStore(db)
 	links := subagent.NewStore(db, store)
 	if o.links != nil {

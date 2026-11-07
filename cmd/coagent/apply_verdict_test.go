@@ -60,7 +60,11 @@ func verdictStore(t *testing.T) *sessionstore.Store {
 	db, err := migrate.OpenDB(t.Context(), path)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
-	require.NoError(t, migrate.Run(t.Context(), db, path))
+
+	provider, err := migrate.NewProvider(db)
+	require.NoError(t, err)
+	_, err = provider.Up(t.Context())
+	require.NoError(t, err)
 	_, err = db.ExecContext(t.Context(), "INSERT INTO projects (id, work_dir, name) VALUES (1, ?, 'p')", t.TempDir())
 	require.NoError(t, err)
 	_, err = db.ExecContext(

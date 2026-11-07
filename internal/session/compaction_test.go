@@ -12,7 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	llmclient "github.com/pilat/coagent/internal/llm"
+	"github.com/pilat/coagent/internal/llm/llmtest"
 	"github.com/pilat/coagent/internal/llmwire"
 	"github.com/pilat/coagent/internal/sessionprompt"
 	"github.com/pilat/coagent/internal/tool"
@@ -1155,7 +1155,7 @@ func TestMixedAssistantResponseKeepsSiblingCallsValid(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, ok)
 
-	require.NoError(t, llmclient.ValidateToolPairing(s.ms.getMessages()), "remaining calls stay valid pairs")
+	require.NoError(t, llmtest.ValidateToolPairing(s.ms.getMessages()), "remaining calls stay valid pairs")
 	skills := renderedSkills(s.ms.getMessages())
 	require.Len(t, skills, 1, "exactly one envelope survives")
 }

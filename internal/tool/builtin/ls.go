@@ -40,10 +40,6 @@ type entryInfo struct {
 	size  int64
 }
 
-func NewLsTool(workDir string) *LsTool {
-	return &LsTool{workDir: workDir}
-}
-
 func newLsTool(workDir string, access *safefile.Access) *LsTool {
 	return &LsTool{workDir: workDir, access: access}
 }

@@ -84,19 +84,6 @@ func LoadUnifiedConfig(configPath string, secrets Secrets) (*UnifiedConfig, erro
 	return ParseAndResolve(data, secrets)
 }
 
-// LoadRawUnifiedConfig reads the YAML config *without* resolving secrets, so the
-// draft keeps its ${VAR} references. Every mutation starts from this form:
-// rendering a resolved config back would write credentials into config.yaml in
-// plaintext.
-func LoadRawUnifiedConfig(configPath string) (*UnifiedConfig, error) {
-	data, err := readConfigFile(configPath)
-	if err != nil {
-		return nil, err
-	}
-
-	return ParseUnifiedConfig(data)
-}
-
 // ParseUnifiedConfig decodes config bytes without touching secrets. Unknown
 // fields are fatal: a typo that silently disables a section is worse than a
 // refusal.
@@ -150,17 +137,6 @@ func ParseAndResolve(data []byte, secrets Secrets) (*UnifiedConfig, error) {
 	}
 
 	return cfg, nil
-}
-
-// MarshalUnifiedConfig renders a config back to YAML. The input must be the raw
-// form: marshalling a secret-resolved config writes credentials in plaintext.
-func MarshalUnifiedConfig(cfg *UnifiedConfig) ([]byte, error) {
-	data, err := yaml.Marshal(cfg)
-	if err != nil {
-		return nil, fmt.Errorf("marshal config: %w", err)
-	}
-
-	return data, nil
 }
 
 func readConfigFile(configPath string) ([]byte, error) {

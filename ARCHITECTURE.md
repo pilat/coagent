@@ -73,6 +73,7 @@ does not imply a tier except where it expresses an implementation variant.
 - `internal/id` — local identity generation utilities.
 - `internal/install` — Linux systemd service installation and lifecycle integration. Refuses non-Linux hosts before target resolution.
 - `internal/llm` — provider protocol drivers, client creation, retries and cost handling.
+- `internal/llm/llmtest` — test-support oracle for provider transcript validity; imported only by tests, never by a binary.
 - `internal/llmwire` — provider-neutral message, response and tool wire vocabulary.
 - `internal/loader` — project context, skills, subagent definitions and marketplace loading.
 - `internal/logger` — structured logging and registered-secret redaction.

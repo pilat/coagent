@@ -11,7 +11,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/pilat/coagent/internal/coagenthome"
 	"github.com/pilat/coagent/internal/procexec"
 	"github.com/pilat/coagent/internal/sandboxpolicy"
 	"github.com/pilat/coagent/internal/shellenv"
@@ -62,7 +61,6 @@ func testSandboxHome(t *testing.T) string {
 	t.Helper()
 
 	home := t.TempDir()
-	t.Cleanup(coagenthome.Override(home))
 	t.Setenv("HOME", home)
 
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))

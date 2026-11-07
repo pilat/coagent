@@ -26,10 +26,6 @@ func (m *Manager) effectiveChatID() int64 {
 	return id
 }
 
-func (m *Manager) preflight(ctx context.Context) error {
-	return m.preflightWithRetry(ctx, defaultStartupRetryPolicy())
-}
-
 func (m *Manager) preflightWithRetry(ctx context.Context, policy startupRetryPolicy) error {
 	timeout := policy.timeout
 	if timeout <= 0 {

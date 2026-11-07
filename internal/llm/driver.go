@@ -179,29 +179,6 @@ func (d *openRouterDriver) ListModels(
 	return models, nil
 }
 
-// CatalogSection names the catalog a provider's models resolve against: the
-// entry's explicit choice, or the driver's own default.
-//
-// A bare `openai` provider has none, and reports false. The driver name says
-// nothing about the vendor behind the endpoint, so callers must supply a model
-// id rather than guess one.
-func CatalogSection(entry config.ProviderEntry) (string, bool) {
-	if entry.Catalog != "" {
-		return entry.Catalog, true
-	}
-
-	switch entry.Driver {
-	case driverAnthropic:
-		return sectionAnthropic, true
-	case driverGoogleSA:
-		return sectionGoogleVertex, true
-	case driverOpenRouter:
-		return driverOpenRouter, true
-	default:
-		return "", false
-	}
-}
-
 // fetchModelsDev retrieves and parses the shared community catalog. The fetcher
 // memoizes by URL, so the three drivers reading it pay for one request.
 func fetchModelsDev(ctx context.Context, f catalog.Fetcher) (map[string]map[string]catalog.ModelSpec, error) {

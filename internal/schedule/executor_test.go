@@ -42,7 +42,11 @@ func newTestDB(t *testing.T) (schedule.Store, *sessionstore.Store, *sessionstore
 	db, err := migrate.OpenDB(context.Background(), dbPath)
 	require.NoError(t, err)
 	t.Cleanup(func() { db.Close() })
-	require.NoError(t, migrate.Run(context.Background(), db, dbPath))
+
+	provider, err := migrate.NewProvider(db)
+	require.NoError(t, err)
+	_, err = provider.Up(context.Background())
+	require.NoError(t, err)
 	sessions := sessionstore.NewStore(db)
 	return schedule.NewStore(db, sessions), sessions, sessions
 }

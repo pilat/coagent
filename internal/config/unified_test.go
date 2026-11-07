@@ -1,12 +1,14 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gopkg.in/yaml.v3"
 )
 
 func writeConfig(t *testing.T, content string) string {
@@ -183,7 +185,7 @@ models:
   - id: same
     provider: other
 `)
-	_, err := LoadRawUnifiedConfig(path)
+	_, err := LoadUnifiedConfig(path, nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), `duplicate model id "same"`)
 }
@@ -816,4 +818,15 @@ managers:
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), `manager "telegram-main" bot_token`)
 	assert.Contains(t, err.Error(), "undefined TG_MAIN_BOT_TOKEN")
+}
+
+// MarshalUnifiedConfig renders a config back to YAML. The input must be the raw
+// form: marshalling a secret-resolved config writes credentials in plaintext.
+func MarshalUnifiedConfig(cfg *UnifiedConfig) ([]byte, error) {
+	data, err := yaml.Marshal(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("marshal config: %w", err)
+	}
+
+	return data, nil
 }

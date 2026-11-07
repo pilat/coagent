@@ -31,7 +31,7 @@ func TestPreflight_UsesOnlyIdentityAndChat(t *testing.T) {
 				return telegramResponse(req, `{"ok":true,"result":{"id":7,"type":"private"}}`), nil
 			})},
 		}
-		require.NoError(t, m.preflight(t.Context()))
+		require.NoError(t, m.preflightWithRetry(t.Context(), defaultStartupRetryPolicy()))
 		assert.Equal(t, []string{"getMe", "getChat"}, methods)
 	})
 }
@@ -66,7 +66,7 @@ func TestPreflight_RejectsMissingBotID(t *testing.T) {
 			return telegramResponse(req, `{"ok":true,"result":{}}`), nil
 		})},
 	}
-	require.ErrorContains(t, m.preflight(t.Context()), "invalid bot user id")
+	require.ErrorContains(t, m.preflightWithRetry(t.Context(), defaultStartupRetryPolicy()), "invalid bot user id")
 }
 
 func TestPreflight_PrivateChatNotFoundExplainsStart(t *testing.T) {
@@ -82,5 +82,9 @@ func TestPreflight_PrivateChatNotFoundExplainsStart(t *testing.T) {
 			), nil
 		})},
 	}
-	require.EqualError(t, m.preflight(t.Context()), "private chat not found; open the bot and send /start first")
+	require.EqualError(
+		t,
+		m.preflightWithRetry(t.Context(), defaultStartupRetryPolicy()),
+		"private chat not found; open the bot and send /start first",
+	)
 }

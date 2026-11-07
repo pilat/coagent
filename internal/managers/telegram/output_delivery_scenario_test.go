@@ -83,15 +83,18 @@ func newDelayedTelegramHarnessWithClient(
 ) *delayedTelegramHarness {
 	t.Helper()
 	home := t.TempDir()
-	restoreHome := coagenthome.Override(home)
-	t.Cleanup(restoreHome)
+	t.Setenv("HOME", home)
 	require.NoError(t, os.Mkdir(filepath.Join(home, coagenthome.DirName), 0o700))
 
 	dbPath := filepath.Join(home, "coagent.db")
 	db, err := migrate.OpenDB(t.Context(), dbPath)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
-	require.NoError(t, migrate.Run(t.Context(), db, dbPath))
+
+	provider, err := migrate.NewProvider(db)
+	require.NoError(t, err)
+	_, err = provider.Up(t.Context())
+	require.NoError(t, err)
 
 	sessions := sessionstore.NewStore(db)
 	workDir := filepath.Join(home, "project")

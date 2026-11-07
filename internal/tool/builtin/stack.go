@@ -186,16 +186,6 @@ func stackProvider(cfg StackConfig) (shellenv.Provider, bool) {
 	return shellenv.New(), true
 }
 
-// Runner returns the stack's confinement runner, or nil when the stack has
-// none. Callers route work through it instead of the host.
-func (s *Stack) Runner() bashsandbox.Runner {
-	if s == nil {
-		return nil
-	}
-
-	return s.runner
-}
-
 // SandboxedGit returns a Git client that runs inside this stack's confinement,
 // so project-dependent hooks, helpers and fsmonitor cannot execute outside the
 // policy. It is nil when the stack has no runner, and the caller keeps the

@@ -5,14 +5,11 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-
-	"github.com/pilat/coagent/internal/coagenthome"
 )
 
 func TestResolvePath(t *testing.T) {
 	home := t.TempDir()
-	restore := coagenthome.Override(home)
-	defer restore()
+	t.Setenv("HOME", home)
 
 	tests := []struct {
 		name    string

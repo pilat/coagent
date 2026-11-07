@@ -63,7 +63,11 @@ func TestMigrate_RootAgentTypeFreshDB(t *testing.T) {
 	defer db.Close()
 
 	ctx := context.Background()
-	require.NoError(t, Run(ctx, db, dbPath))
+
+	provider, err := NewProvider(db)
+	require.NoError(t, err)
+	_, err = provider.Up(ctx)
+	require.NoError(t, err)
 
 	var count int
 	require.NoError(t, db.QueryRowContext(ctx, `SELECT COUNT(*) FROM sessions`).Scan(&count))

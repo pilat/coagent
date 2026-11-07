@@ -22,7 +22,7 @@ func TestReadTool_Execute(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	tool := newReadTool(tmpDir)
+	tool := newReadToolWithAccess(tmpDir, nil, nil)
 
 	t.Run("basic read", func(t *testing.T) {
 		params, _ := json.Marshal(readParams{FilePath: testFile})
@@ -131,7 +131,7 @@ func TestReadTool_LongLines(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	tool := newReadTool(tmpDir)
+	tool := newReadToolWithAccess(tmpDir, nil, nil)
 	params, _ := json.Marshal(readParams{FilePath: testFile})
 	result, err := tool.Execute(context.Background(), params)
 	if err != nil {
@@ -161,7 +161,7 @@ func TestReadTool_BinaryFile(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	tool := newReadTool(tmpDir)
+	tool := newReadToolWithAccess(tmpDir, nil, nil)
 	params, _ := json.Marshal(readParams{FilePath: testFile})
 	_, err = tool.Execute(context.Background(), params)
 	if err == nil {
@@ -184,7 +184,7 @@ func TestReadTool_Metadata(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	tool := newReadTool(tmpDir)
+	tool := newReadToolWithAccess(tmpDir, nil, nil)
 
 	t.Run("ID", func(t *testing.T) {
 		if tool.ID() != "read" {

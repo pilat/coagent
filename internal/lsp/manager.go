@@ -58,17 +58,8 @@ type clientKey struct {
 
 func (k clientKey) String() string { return k.serverID + ":" + k.root }
 
-// NewManager creates a new LSP manager. provider may be nil: servers then spawn
-// with the daemon's inherited env instead of the project's activated toolchain.
-func NewManager(provider shellenv.Provider, runner procexec.Runner) Manager {
-	return &manager{
-		servers:  defaultServers(),
-		clients:  make(map[clientKey]*client),
-		provider: provider,
-		runner:   runner,
-	}
-}
-
+// NewManagerWithAccess creates an LSP manager; nil provider inherits the daemon's environment.
+// A nil access leaves filesystem operations unconfined.
 func NewManagerWithAccess(
 	provider shellenv.Provider,
 	runner procexec.Runner,

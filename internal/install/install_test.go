@@ -10,27 +10,15 @@ import (
 )
 
 func TestRenderUnit(t *testing.T) {
-	_, got, err := expectedUnit(target{name: "testuser", home: "/home/testuser"})
+	got, err := renderUnit(
+		unitParams{User: "testuser", BinaryPath: binaryPathFor(target{name: "testuser", home: "/home/testuser"})},
+	)
 	require.NoError(t, err)
 
 	assert.Equal(t, golden(t, "coagent.service"), got)
 }
 
-// TestUnsupportedPlatformRefusesBeforeTargetResolution pins the product
-// boundary: direct package callers get the platform refusal without any target
-// discovery, since the CLI guard may have been bypassed.
-func TestUnsupportedPlatformRefusesBeforeTargetResolution(t *testing.T) {
-	t.Setenv("SUDO_USER", "nonexistent-target-that-must-never-be-looked-up")
-
-	require.ErrorIs(t, updateBinaryOn("darwin"), errUnsupported)
-	require.ErrorIs(t, updateBinaryOn("windows"), errUnsupported)
-
-	_, err := unitStaleOn("darwin")
-	require.ErrorIs(t, err, errUnsupported)
-
-	_, err = unitStaleOn("windows")
-	require.ErrorIs(t, err, errUnsupported)
-
+func TestPlatformSupported(t *testing.T) {
 	assert.True(t, platformSupported("linux"))
 	assert.False(t, platformSupported("darwin"))
 }
@@ -166,27 +154,6 @@ func TestInstallBinaryDoesNotChownAsUser(t *testing.T) {
 	require.NoError(t, installBinary(dst, target{name: "testuser", uid: 501, gid: 20}))
 
 	assert.Empty(t, *got)
-}
-
-// TestUnitStaleWhenMissing: nothing on disk cannot match what this version would
-// write, so the update path warns rather than staying quiet.
-func TestUnitStaleWhenMissing(t *testing.T) {
-	stale, err := unitFileStale(filepath.Join(t.TempDir(), "missing.service"), "expected")
-	require.NoError(t, err)
-	assert.True(t, stale)
-}
-
-func TestUnitFileStaleComparesContents(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "coagent.service")
-	require.NoError(t, os.WriteFile(path, []byte("expected"), 0o600))
-
-	stale, err := unitFileStale(path, "expected")
-	require.NoError(t, err)
-	assert.False(t, stale)
-
-	stale, err = unitFileStale(path, "changed")
-	require.NoError(t, err)
-	assert.True(t, stale)
 }
 
 type chownCall struct {

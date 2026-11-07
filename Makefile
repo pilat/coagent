@@ -5,6 +5,7 @@
 # Go and golangci-lint versions are pinned in mise.toml (golangci-lint 2.12.2 is
 # the floor for the `modernize` linter in .golangci.yml).
 GO_ARCH_LINT_VERSION ?= v1.18.0
+DEADCODE_VERSION ?= v0.52.0
 GREMLINS_VERSION ?= v0.6.0
 GOPLS_VERSION ?= v0.20.0
 ACTIONLINT_VERSION ?= v1.7.12
@@ -60,7 +61,7 @@ help:
 	@echo "  lint             golangci-lint over the whole module"
 	@echo "  lint.paths       scoped lint (LINT_PATHS=./internal/session/...)"
 	@echo "  lint.fix         apply every golangci-lint autofix"
-	@echo "  arch             architecture boundaries and documentation contract"
+	@echo "  arch             architecture boundaries, documentation contract and production reachability"
 	@echo "  workflow.check   validate GitHub Actions workflows with actionlint"
 	@echo "  tools            online bootstrap for modules and pinned dev tools"
 	@echo ""
@@ -166,6 +167,7 @@ tools:
 	golangci-lint version
 	go install golang.org/x/tools/gopls@$(GOPLS_VERSION)
 	go install github.com/fe3dback/go-arch-lint@$(GO_ARCH_LINT_VERSION)
+	go install golang.org/x/tools/cmd/deadcode@$(DEADCODE_VERSION)
 	go install github.com/go-gremlins/gremlins/cmd/gremlins@$(GREMLINS_VERSION)
 	go install github.com/rhysd/actionlint/cmd/actionlint@$(ACTIONLINT_VERSION)
 	go install github.com/zricethezav/gitleaks/v8@$(GITLEAKS_VERSION)
@@ -175,9 +177,18 @@ tools:
 # Architecture boundary and documentation-contract checks. Gates never install.
 arch:
 	@go-arch-lint version 2>/dev/null | grep -q "$(GO_ARCH_LINT_VERSION)" || { echo "✋ go-arch-lint $(GO_ARCH_LINT_VERSION) required; run make tools"; exit 1; }
+	@deadcode_bin="$$(command -v deadcode)"; \
+		go version -m "$$deadcode_bin" 2>/dev/null | awk '$$1 == "mod" && $$2 == "golang.org/x/tools" && $$3 == "$(DEADCODE_VERSION)" { found = 1 } END { exit !found }' || { echo "✋ deadcode $(DEADCODE_VERSION) required; run make tools"; exit 1; }
 	@go-arch-lint self-inspect --json >/dev/null
 	go-arch-lint check
 	./scripts/check-architecture.sh
+	@echo "deadcode ./cmd/coagent ./cmd/releasebuilder"
+	@output="$$(GOOS=linux deadcode ./cmd/coagent ./cmd/releasebuilder)" || exit $$?; \
+		if [ -n "$$output" ]; then \
+			printf '%s\n' "$$output"; \
+			echo "Delete unreachable code or move test-only helpers into _test.go (see docs/testing.md)."; \
+			exit 1; \
+		fi
 
 # Project invariants that are not expressible as a Go linter (.semgrep/). Every
 # rule there is at zero violations, so this is a hard gate with no baseline.

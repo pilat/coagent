@@ -82,16 +82,6 @@ func New(opts ...Option) Fetcher {
 	return f
 }
 
-// WithHTTPClient overrides the HTTP client.
-func WithHTTPClient(c *http.Client) Option {
-	return func(f *fetcher) { f.http = c }
-}
-
-// WithCacheDir overrides the disk cache location. Empty disables the cache.
-func WithCacheDir(dir string) Option {
-	return func(f *fetcher) { f.cacheDir = dir }
-}
-
 // CacheName derives a stable per-URL cache filename, for drivers whose endpoint
 // is configurable and therefore cannot use a fixed name.
 func CacheName(prefix, url string) string {
