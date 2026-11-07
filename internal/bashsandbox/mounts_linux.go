@@ -31,12 +31,13 @@ const (
 )
 
 // mountOp is one ordered operation. source is a host path pinned to fd before
-// launch; tmpfs operations carry a target only.
+// launch unless an optional op is dropped; tmpfs operations carry a target only.
 type mountOp struct {
-	kind   opKind
-	source string
-	target string
-	fd     int
+	kind     opKind
+	source   string
+	target   string
+	fd       int
+	optional bool
 }
 
 // mountPlan is the ordered operation list one sandbox invocation applies.
@@ -199,8 +200,9 @@ func buildMountPlan(entries []sandboxpolicy.Entry, hostMountPoints []string) (mo
 		return mountPlan{}, fmt.Errorf("validate mount policy: %w", err)
 	}
 
+	writableRoots := (sandboxpolicy.Policy{Entries: entries}).WritableRoots()
 	plan := mountPlan{ops: []mountOp{{kind: opBindRO, source: "/", target: "/"}}}
-	plan.ops = append(plan.ops, hostMountOps(hostMountPoints)...)
+	plan.ops = append(plan.ops, hostMountOps(hostMountPoints, writableRoots)...)
 
 	for i, entry := range entries {
 		if i == 0 && isHostRootEntry(entry) {
@@ -214,7 +216,7 @@ func buildMountPlan(entries []sandboxpolicy.Entry, hostMountPoints []string) (mo
 
 		plan.ops = append(plan.ops, ops...)
 		if isHostRootEntry(entry) {
-			plan.ops = append(plan.ops, hostMountOps(hostMountPoints)...)
+			plan.ops = append(plan.ops, hostMountOps(hostMountPoints, writableRoots)...)
 		}
 	}
 
@@ -273,8 +275,9 @@ func rwEntryOps(entry sandboxpolicy.Entry) ([]mountOp, error) {
 
 // hostMountOps re-binds every host mount point read-only. Bubblewrap's
 // read-only bind of the root applies MS_RDONLY to the top mount alone, so a
-// nested mount would otherwise stay writable.
-func hostMountOps(mountPoints []string) []mountOp {
+// nested mount would otherwise stay writable. Mounts outside writable grants
+// are optional at the pin.
+func hostMountOps(mountPoints, writableRoots []string) []mountOp {
 	ordered := append([]string(nil), mountPoints...)
 	sort.Slice(ordered, func(i, j int) bool {
 		left, right := pathDepth(ordered[i]), pathDepth(ordered[j])
@@ -292,10 +295,23 @@ func hostMountOps(mountPoints []string) []mountOp {
 			continue
 		}
 
-		ops = append(ops, mountOp{kind: opBindRO, source: mountPoint, target: mountPoint})
+		ops = append(ops, mountOp{
+			kind: opBindRO, source: mountPoint, target: mountPoint,
+			optional: !withinWritableGrant(mountPoint, writableRoots),
+		})
 	}
 
 	return ops
+}
+
+func withinWritableGrant(path string, writableRoots []string) bool {
+	for _, root := range writableRoots {
+		if pathWithinRoot(path, root) {
+			return true
+		}
+	}
+
+	return false
 }
 
 func kernelOwned(path string) bool {
@@ -311,7 +327,7 @@ func kernelOwned(path string) bool {
 // pinMountPlan opens every bind source before launching Bubblewrap. The
 // descriptors are inherited by the launcher, so a rename after validation
 // cannot redirect a bind to another object. An empty-file mask shares one
-// /dev/null descriptor.
+// /dev/null descriptor. Optional ops are dropped on EACCES or ENOENT.
 func pinMountPlan(plan mountPlan) (mountPlan, []*os.File, error) {
 	const firstFD = 3
 
@@ -356,6 +372,11 @@ func pinMountPlan(plan mountPlan) (mountPlan, []*os.File, error) {
 			Flags: unix.O_PATH | unix.O_CLOEXEC, Resolve: unix.RESOLVE_NO_SYMLINKS,
 		})
 		if err != nil {
+			if op.optional && (errors.Is(err, unix.EACCES) || errors.Is(err, unix.ENOENT)) {
+				// Outside writable grants, the sandbox cannot reach an unsearchable or vanished source.
+				continue
+			}
+
 			return fail(fmt.Errorf("pin mount source %q: %w", op.source, err))
 		}
 

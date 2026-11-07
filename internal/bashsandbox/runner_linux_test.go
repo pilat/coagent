@@ -12,6 +12,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/sys/unix"
 
 	"github.com/pilat/coagent/internal/procexec"
 	"github.com/pilat/coagent/internal/sandboxpolicy"
@@ -472,6 +473,196 @@ func TestPinMountPlanHoldsOriginalObjectAcrossReplacement(t *testing.T) {
 	info, err := files[0].Stat()
 	require.NoError(t, err)
 	assert.True(t, info.IsDir(), "the inherited descriptor still names the original directory")
+}
+
+func TestPinMountPlanSkipsUnreachableHostMount(t *testing.T) {
+	source := unreachableMountSource(t)
+	first, second := t.TempDir(), t.TempDir()
+	plan := mountPlan{ops: []mountOp{
+		{kind: opBindRO, source: first, target: "/first"},
+		{kind: opBindRO, source: source, target: source, optional: true},
+		{kind: opBindRW, source: second, target: "/second"},
+		{kind: opTmpfs, target: "/mask"},
+	}}
+
+	pinned, files, err := pinMountPlan(plan)
+	require.NoError(t, err)
+	defer func() {
+		for _, file := range files {
+			_ = file.Close()
+		}
+	}()
+
+	require.Len(t, files, 2)
+	assert.Equal(t, []mountOp{
+		{kind: opBindRO, source: first, target: "/first", fd: 3},
+		{kind: opBindRW, source: second, target: "/second", fd: 4},
+		{kind: opTmpfs, target: "/mask"},
+	}, pinned.ops)
+
+	for _, op := range pinned.ops {
+		assert.NotEqual(t, source, op.source)
+	}
+}
+
+func TestPinMountPlanFailsOnUnreachablePolicyMount(t *testing.T) {
+	source := unreachableMountSource(t)
+	first := t.TempDir()
+	plan := mountPlan{ops: []mountOp{
+		{kind: opBindRO, source: first, target: "/first"},
+		{kind: opBindRO, source: source, target: source},
+	}}
+
+	_, files, err := pinMountPlan(plan)
+	require.ErrorContains(t, err, "pin mount source")
+	require.ErrorIs(t, err, unix.EACCES)
+	assert.Nil(t, files)
+}
+
+func TestPinMountPlanSkipsVanishedHostMount(t *testing.T) {
+	first, second := t.TempDir(), t.TempDir()
+	source := filepath.Join(t.TempDir(), "gone")
+	plan := mountPlan{ops: []mountOp{
+		{kind: opBindRO, source: first, target: "/first"},
+		{kind: opBindRO, source: source, target: source, optional: true},
+		{kind: opBindRW, source: second, target: "/second"},
+	}}
+
+	pinned, files, err := pinMountPlan(plan)
+	require.NoError(t, err)
+	defer func() {
+		for _, file := range files {
+			_ = file.Close()
+		}
+	}()
+
+	require.Len(t, files, 2)
+	assert.Equal(t, []mountOp{
+		{kind: opBindRO, source: first, target: "/first", fd: 3},
+		{kind: opBindRW, source: second, target: "/second", fd: 4},
+	}, pinned.ops)
+}
+
+func TestPinMountPlanFailsOnMissingPolicyMount(t *testing.T) {
+	source := filepath.Join(t.TempDir(), "gone")
+	plan := mountPlan{ops: []mountOp{{kind: opBindRO, source: source, target: source}}}
+
+	_, files, err := pinMountPlan(plan)
+	require.ErrorContains(t, err, "pin mount source")
+	require.ErrorIs(t, err, unix.ENOENT)
+	assert.Nil(t, files)
+}
+
+func TestPinMountPlanFailsOnSymlinkedHostMount(t *testing.T) {
+	source := filepath.Join(t.TempDir(), "link")
+	require.NoError(t, os.Symlink(t.TempDir(), source))
+	plan := mountPlan{ops: []mountOp{{kind: opBindRO, source: source, target: source, optional: true}}}
+
+	_, files, err := pinMountPlan(plan)
+	require.ErrorContains(t, err, "pin mount source")
+	require.ErrorIs(t, err, unix.ELOOP)
+	assert.Nil(t, files)
+}
+
+func TestHostMountOpsAreOptionalAndPolicyOpsAreNot(t *testing.T) {
+	t.Run("host mounts", func(t *testing.T) {
+		ops := hostMountOps([]string{"/", "/home", "/srv/data", "/proc", "/work", "/work/nested"}, []string{"/work"})
+		require.Len(t, ops, 4)
+
+		for _, op := range ops {
+			assert.Equal(t, opBindRO, op.kind)
+			assert.Equal(t, op.source, op.target)
+			assert.Equal(t, op.target == "/home" || op.target == "/srv/data", op.optional, op.target)
+		}
+	})
+
+	t.Run("policy entries", func(t *testing.T) {
+		project := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(project, "file"), nil, 0o600))
+		entries := []sandboxpolicy.Entry{
+			{
+				Path:    project,
+				Action:  sandboxpolicy.ActionAllow,
+				Mode:    sandboxpolicy.ModeReadOnly,
+				Kind:    sandboxpolicy.KindDir,
+				Present: true,
+			},
+			{
+				Path:    project,
+				Action:  sandboxpolicy.ActionAllow,
+				Mode:    sandboxpolicy.ModeReadWrite,
+				Kind:    sandboxpolicy.KindDir,
+				Present: true,
+			},
+			{Path: project, Action: sandboxpolicy.ActionDeny, Kind: sandboxpolicy.KindDir, Present: true},
+			{
+				Path:    filepath.Join(project, "file"),
+				Action:  sandboxpolicy.ActionDeny,
+				Kind:    sandboxpolicy.KindFile,
+				Present: true,
+			},
+		}
+
+		for _, entry := range entries {
+			ops, err := entryOps(entry)
+			require.NoError(t, err)
+			require.NotEmpty(t, ops)
+
+			for _, op := range ops {
+				assert.False(t, op.optional)
+			}
+		}
+	})
+
+	t.Run("build passes writable grants", func(t *testing.T) {
+		project := t.TempDir()
+		nested := filepath.Join(project, "nested")
+		plan, err := buildMountPlan([]sandboxpolicy.Entry{
+			rootEntry(),
+			{
+				Path:    project,
+				Action:  sandboxpolicy.ActionAllow,
+				Mode:    sandboxpolicy.ModeReadWrite,
+				Kind:    sandboxpolicy.KindDir,
+				Present: true,
+			},
+		}, []string{"/", "/home", nested})
+		require.NoError(t, err)
+		require.NotEmpty(t, plan.ops)
+		assert.False(t, plan.ops[0].optional)
+
+		homeIndex := opIndex(plan, opBindRO, "/home")
+		nestedIndex := opIndex(plan, opBindRO, nested)
+		require.NotEqual(t, -1, homeIndex)
+		require.NotEqual(t, -1, nestedIndex)
+		assert.True(t, plan.ops[homeIndex].optional)
+		assert.False(t, plan.ops[nestedIndex].optional)
+	})
+}
+
+func unreachableMountSource(t *testing.T) string {
+	t.Helper()
+
+	holds, err := procexec.HoldsCapabilities()
+	require.NoError(t, err)
+
+	if os.Geteuid() == 0 || holds {
+		t.Skip("root or capabilities bypass directory search permissions")
+	}
+
+	blocked := filepath.Join(t.TempDir(), "blocked")
+	source := filepath.Join(blocked, "mount")
+	require.NoError(t, os.Mkdir(blocked, 0o700))
+	require.NoError(t, os.Mkdir(source, 0o700))
+	directory, err := os.Open(blocked)
+	require.NoError(t, err)
+	require.NoError(t, os.Chmod(blocked, 0o000))
+	t.Cleanup(func() {
+		require.NoError(t, directory.Chmod(0o700))
+		require.NoError(t, directory.Close())
+	})
+
+	return source
 }
 
 func TestCreateGrantedDirRefusesNonDirectoryComponent(t *testing.T) {
