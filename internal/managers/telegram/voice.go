@@ -25,13 +25,13 @@ func (m *Manager) handleVoiceMessage(
 
 	transcript, err := m.transcribeVoice(ctx, msg.Voice.FileID)
 	if err != nil {
-		_, _ = m.sendMessage(ctx, "Voice transcription failed: "+err.Error())
+		m.reply(ctx, "", "Voice transcription failed: "+err.Error())
 		return
 	}
 
-	_, _ = m.sendRawHTML(ctx, "🗣 <i>"+escapeHTML(transcript)+"</i>")
+	m.replyHTML(ctx, "", "🗣 <i>"+escapeHTML(transcript)+"</i>")
 
-	m.handleSessionMessage(ctx, sessionID, transcript)
+	m.handleSessionMessage(ctx, sessionID, "", transcript)
 }
 
 func (m *Manager) transcribeVoice(ctx context.Context, fileID string) (string, error) {

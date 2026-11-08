@@ -77,36 +77,41 @@ func (m *Manager) handleChatText(ctx context.Context, text string) {
 	case "/switch":
 		id, err := strconv.ParseInt(strings.TrimPrefix(arg, "#"), 10, 64)
 		if err != nil || id <= 0 {
-			_, _ = m.sendMessage(ctx, strings.ReplaceAll("Usage: /switch N.", "\n", " "))
+			m.reply(ctx, command, strings.ReplaceAll("Usage: /switch N.", "\n", " "))
 			return
 		}
 
-		m.switchChat(ctx, id)
+		m.switchChat(ctx, command, id)
 	case commandKill, commandStop:
 		if arg != "" {
 			m.handleNumberedControl(ctx, command, arg)
 			return
 		}
 
-		m.handleFocusedText(ctx, text)
+		m.handleFocusedText(ctx, command, text)
 	default:
-		m.handleFocusedText(ctx, text)
+		m.handleFocusedText(ctx, command, text)
 	}
 }
 
-func (m *Manager) handleFocusedText(ctx context.Context, text string) {
+func (m *Manager) handleFocusedText(ctx context.Context, command, text string) {
+	if !strings.HasPrefix(command, "/") {
+		command = ""
+	}
+
 	focus, err := m.chat.ChatFocus(ctx, strconv.FormatInt(m.effectiveChatID(), 10))
 	if err != nil {
-		_, _ = m.sendMessage(ctx, strings.ReplaceAll(err.Error(), "\n", " "))
+		m.reply(ctx, command, strings.ReplaceAll(err.Error(), "\n", " "))
 		return
 	}
 
-	command, arg, _ := strings.Cut(text, " ")
+	_, arg, _ := strings.Cut(text, " ")
+
 	if focus == 0 {
 		if command == "/help" || command == "/start" {
-			m.handleHelp(ctx, 0)
+			m.handleHelp(ctx, command, 0)
 		} else {
-			_, _ = m.sendMessage(ctx, noFocusHint)
+			m.reply(ctx, command, noFocusHint)
 		}
 
 		return
@@ -121,39 +126,39 @@ func (m *Manager) handleFocusedText(ctx context.Context, text string) {
 	case "/model":
 		m.handleModel(ctx, focus, strings.TrimSpace(arg))
 	case "/help", "/start":
-		m.handleHelp(ctx, focus)
+		m.handleHelp(ctx, command, focus)
 	default:
-		m.handleSessionMessage(ctx, focus, text)
+		m.handleSessionMessage(ctx, focus, command, text)
 	}
 }
 
 func (m *Manager) handleTitle(ctx context.Context, focus int64, raw string) {
 	if strings.TrimSpace(raw) == "" {
-		_, _ = m.sendMessage(ctx, strings.ReplaceAll("Usage: /title text.", "\n", " "))
+		m.reply(ctx, "/title", strings.ReplaceAll("Usage: /title text.", "\n", " "))
 		return
 	}
 
 	title, ok := controllerapi.NormalizeSessionTitle(raw)
 	if !ok {
-		_, _ = m.sendMessage(ctx, strings.ReplaceAll("Title must be one line of 1-80 characters.", "\n", " "))
+		m.reply(ctx, "/title", strings.ReplaceAll("Title must be one line of 1-80 characters.", "\n", " "))
 		return
 	}
 
 	if err := m.chat.SetSessionTitle(ctx, strconv.FormatInt(m.effectiveChatID(), 10), focus, title); err != nil {
-		_, _ = m.sendMessage(ctx, strings.ReplaceAll(err.Error(), "\n", " "))
+		m.reply(ctx, "/title", strings.ReplaceAll(err.Error(), "\n", " "))
 		return
 	}
 
-	_, _ = m.sendMessage(ctx, strings.ReplaceAll(fmt.Sprintf("Renamed #%d: %s", focus, title), "\n", " "))
+	m.reply(ctx, "/title", strings.ReplaceAll(fmt.Sprintf("Renamed #%d: %s", focus, title), "\n", " "))
 }
 
-func (m *Manager) switchChat(ctx context.Context, id int64) {
+func (m *Manager) switchChat(ctx context.Context, command string, id int64) {
 	m.mu.RLock()
 	delivery := m.delivery
 	m.mu.RUnlock()
 
 	if err := m.chat.SetChatFocus(ctx, strconv.FormatInt(m.effectiveChatID(), 10), id); err != nil {
-		_, _ = m.sendMessage(ctx, strings.ReplaceAll(err.Error(), "\n", " "))
+		m.reply(ctx, command, strings.ReplaceAll(err.Error(), "\n", " "))
 
 		return
 	}
@@ -166,36 +171,36 @@ func (m *Manager) switchChat(ctx context.Context, id int64) {
 func (m *Manager) handleNumberedControl(ctx context.Context, command, arg string) {
 	id, err := strconv.ParseInt(strings.TrimPrefix(arg, "#"), 10, 64)
 	if err != nil {
-		_, _ = m.sendMessage(ctx, strings.ReplaceAll("Usage: "+command+" N.", "\n", " "))
+		m.reply(ctx, command, strings.ReplaceAll("Usage: "+command+" N.", "\n", " "))
 		return
 	}
 
 	sessions, err := m.chat.ChatSessions(ctx, strconv.FormatInt(m.effectiveChatID(), 10))
 	if err != nil {
-		_, _ = m.sendMessage(ctx, strings.ReplaceAll(err.Error(), "\n", " "))
+		m.reply(ctx, command, strings.ReplaceAll(err.Error(), "\n", " "))
 		return
 	}
 
 	for _, session := range sessions {
 		if session.ID == id && id > 0 {
-			m.handleSessionMessage(ctx, id, command)
+			m.handleSessionMessage(ctx, id, command, command)
 			return
 		}
 	}
 
-	_, _ = m.sendMessage(ctx, strings.ReplaceAll(fmt.Sprintf("#%d is not a live session", id), "\n", " "))
+	m.reply(ctx, command, strings.ReplaceAll(fmt.Sprintf("#%d is not a live session", id), "\n", " "))
 }
 
 func (m *Manager) handleSessions(ctx context.Context, word string) {
 	sessions, err := m.chat.ChatSessions(ctx, strconv.FormatInt(m.effectiveChatID(), 10))
 	if err != nil {
-		_, _ = m.sendMessage(ctx, strings.ReplaceAll(err.Error(), "\n", " "))
+		m.reply(ctx, "/sessions", strings.ReplaceAll(err.Error(), "\n", " "))
 		return
 	}
 
 	focus, err := m.chat.ChatFocus(ctx, strconv.FormatInt(m.effectiveChatID(), 10))
 	if err != nil {
-		_, _ = m.sendMessage(ctx, strings.ReplaceAll(err.Error(), "\n", " "))
+		m.reply(ctx, "/sessions", strings.ReplaceAll(err.Error(), "\n", " "))
 		return
 	}
 
@@ -206,7 +211,7 @@ func (m *Manager) handleSessions(ctx context.Context, word string) {
 			message = "No sessions match \"" + word + "\"."
 		}
 
-		_, _ = m.sendMessage(ctx, message)
+		m.reply(ctx, "/sessions", message)
 
 		return
 	}
@@ -229,7 +234,7 @@ func (m *Manager) handleSessions(ctx context.Context, word string) {
 		lines = append(lines, fmt.Sprintf("… and %d more", remaining))
 	}
 
-	_, _ = m.sendMessage(ctx, strings.Join(lines, "\n"))
+	m.reply(ctx, "/sessions", strings.Join(lines, "\n"))
 }
 
 func filterSessionNames(sessions []controllerapi.ChatSessionInfo, word string) []controllerapi.ChatSessionInfo {
@@ -249,7 +254,7 @@ func filterSessionNames(sessions []controllerapi.ChatSessionInfo, word string) [
 	return filtered
 }
 
-func (m *Manager) handleHelp(ctx context.Context, sessionID int64) {
+func (m *Manager) handleHelp(ctx context.Context, command string, sessionID int64) {
 	lines := make([]string, 1, 1+len(publishedCommands))
 	lines[0] = "<b>Commands:</b>"
 
@@ -257,16 +262,17 @@ func (m *Manager) handleHelp(ctx context.Context, sessionID int64) {
 		lines = append(lines, "  /"+command[tgKeyCommand]+" — "+escapeHTML(command[tgKeyDescription]))
 	}
 
-	_, _ = m.sendRawHTML(ctx, strings.Join(lines, "\n"))
+	m.replyHTML(ctx, command, strings.Join(lines, "\n"))
+
 	if sessionID > 0 {
-		m.handleCommands(ctx, sessionID)
+		m.handleCommands(ctx, command, sessionID)
 	}
 }
 
-func (m *Manager) handleCommands(ctx context.Context, sessionID int64) {
+func (m *Manager) handleCommands(ctx context.Context, command string, sessionID int64) {
 	result, err := m.controller.ListSkills(ctx, controllerapi.ConfigSkillsData{SessionID: sessionID})
 	if err != nil || len(result.Skills) == 0 {
-		_, _ = m.sendRawHTML(ctx, "No skills loaded.")
+		m.replyHTML(ctx, command, "No skills loaded.")
 		return
 	}
 
@@ -281,13 +287,13 @@ func (m *Manager) handleCommands(ctx context.Context, sessionID int64) {
 		lines = append(lines, "  /skill "+escapeHTML(skill.Name)+desc)
 	}
 
-	_, _ = m.sendRawHTML(ctx, strings.Join(lines, "\n"))
+	m.replyHTML(ctx, command, strings.Join(lines, "\n"))
 }
 
-func (m *Manager) handleSessionMessage(ctx context.Context, sessionID int64, text string) {
+func (m *Manager) handleSessionMessage(ctx context.Context, sessionID int64, command, text string) {
 	if err := m.controller.SendSessionMessage(ctx, controllerapi.SessionMessageData{
 		SessionID: sessionID, Message: text,
 	}); err != nil {
-		_, _ = m.sendMessage(ctx, strings.ReplaceAll(err.Error(), "\n", " "))
+		m.reply(ctx, command, strings.ReplaceAll(err.Error(), "\n", " "))
 	}
 }

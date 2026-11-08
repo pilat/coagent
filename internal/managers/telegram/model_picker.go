@@ -17,13 +17,14 @@ func (m *Manager) handleModel(ctx context.Context, sessionID int64, arg string) 
 
 	result, err := m.controller.ListModels(ctx)
 	if err != nil {
-		_, _ = m.sendMessage(ctx, strings.ReplaceAll("Failed to list models: "+err.Error(), "\n", " "))
+		m.reply(ctx, "/model", strings.ReplaceAll("Failed to list models: "+err.Error(), "\n", " "))
 		return
 	}
 
 	if len(result.Models) == 0 {
-		_, _ = m.sendMessage(
+		m.reply(
 			ctx,
+			"/model",
 			strings.ReplaceAll("No models configured. Add models to "+config.DefaultUnifiedConfigFile, "\n", " "),
 		)
 
@@ -39,8 +40,9 @@ func (m *Manager) handleModel(ctx context.Context, sessionID int64, arg string) 
 
 	number, err := strconv.Atoi(parts[0])
 	if err != nil || number < 1 || number > len(result.Models) || len(parts) > 2 {
-		_, _ = m.sendMessage(
+		m.reply(
 			ctx,
+			"/model",
 			strings.ReplaceAll("Usage: /model N [effort]. Choose a number from /model.", "\n", " "),
 		)
 
@@ -58,7 +60,7 @@ func (m *Manager) handleModel(ctx context.Context, sessionID int64, arg string) 
 				allowed = "none"
 			}
 
-			_, _ = m.sendMessage(ctx, strings.ReplaceAll("Allowed effort levels: "+allowed+".", "\n", " "))
+			m.reply(ctx, "/model", strings.ReplaceAll("Allowed effort levels: "+allowed+".", "\n", " "))
 
 			return
 		}
@@ -67,17 +69,17 @@ func (m *Manager) handleModel(ctx context.Context, sessionID int64, arg string) 
 	if err := m.controller.SetSessionModel(ctx, controllerapi.SessionSetModelData{
 		SessionID: sessionID, Model: model.ID, ReasoningLevel: effort,
 	}); err != nil {
-		_, _ = m.sendMessage(ctx, strings.ReplaceAll("Model switch failed: "+err.Error(), "\n", " "))
+		m.reply(ctx, "/model", strings.ReplaceAll("Model switch failed: "+err.Error(), "\n", " "))
 		return
 	}
 
-	_, _ = m.sendRawHTML(ctx, modelHeader(model, effort))
+	m.replyHTML(ctx, "/model", modelHeader(model, effort))
 }
 
 func (m *Manager) listModels(ctx context.Context, sessionID int64, models []controllerapi.ConfigModelInfo) {
 	sessions, err := m.controller.ListSessions(ctx)
 	if err != nil {
-		_, _ = m.sendMessage(ctx, strings.ReplaceAll("Failed to list sessions: "+err.Error(), "\n", " "))
+		m.reply(ctx, "/model", strings.ReplaceAll("Failed to list sessions: "+err.Error(), "\n", " "))
 		return
 	}
 
@@ -113,7 +115,7 @@ func (m *Manager) listModels(ctx context.Context, sessionID int64, models []cont
 		lines = append(lines, line)
 	}
 
-	_, _ = m.sendRawHTML(ctx, strings.Join(lines, "\n"))
+	m.replyHTML(ctx, "/model", strings.Join(lines, "\n"))
 }
 
 func modelHeader(model controllerapi.ConfigModelInfo, effort string) string {

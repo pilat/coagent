@@ -35,7 +35,7 @@ func (m *Manager) handleAttachment(
 	savedPath, err := m.saveAttachment(ctx, att)
 	if err != nil {
 		log.Error("attachment_save_failed", zap.String("name", att.name), zap.Error(err))
-		_, _ = m.sendMessage(ctx, "❌ Failed to save "+att.displayName()+": "+err.Error())
+		m.reply(ctx, "", "❌ Failed to save "+att.displayName()+": "+err.Error())
 
 		return
 	}
@@ -45,13 +45,14 @@ func (m *Manager) handleAttachment(
 
 	// Doubles as failure visibility: when nothing arrives here but no error did,
 	// the download produced an empty artifact worth investigating in-chat.
-	_, _ = m.sendMessage(
+	m.reply(
 		ctx,
+		"",
 		fmt.Sprintf("📎 %s (%s) → %s", name, sizeText, savedPath),
 	)
 
 	synthetic := buildSyntheticMessage(name, sizeText, savedPath, msg.Caption)
-	m.handleSessionMessage(ctx, sessionID, synthetic)
+	m.handleSessionMessage(ctx, sessionID, "", synthetic)
 }
 
 // tgAttachment normalizes the four upload shapes behind one accessor set.
