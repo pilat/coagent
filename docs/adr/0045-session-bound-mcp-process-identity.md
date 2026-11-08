@@ -2,6 +2,7 @@
 
 - **Status:** Superseded by [ADR-0063](0063-explicit-filesystem-boundary.md)
 - **Date:** 2026-09-06
+- **Supersedes:** [ADR-0041](0041-mcp-tool-catalogs-outlive-idle-clients.md)
 
 ## Context
 

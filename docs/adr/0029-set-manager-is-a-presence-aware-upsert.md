@@ -2,6 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-08-23
+- **Amended by:** [ADR-0072](0072-flat-chat-with-a-focus.md) — forum targets and service topics are gone, so their identity and settings no longer exist
 
 ## Context
 

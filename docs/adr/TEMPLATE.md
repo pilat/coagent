@@ -2,6 +2,8 @@
 
 - **Status:** Proposed | Accepted | Superseded by [ADR-NNNN](NNNN-slug.md)
 - **Date:** YYYY-MM-DD
+- **Supersedes:** [ADR-NNNN](NNNN-slug.md) (only if it does; that ADR's Status links back)
+- **Amends:** [ADR-NNNN](NNNN-slug.md) (only if it does; that ADR gains an `Amended by` line)
 
 ## Context
 

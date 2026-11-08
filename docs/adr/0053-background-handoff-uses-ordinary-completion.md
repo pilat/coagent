@@ -2,6 +2,7 @@
 
 - **Status:** Superseded by [ADR-0060](0060-wake-aware-model-completion-check.md)
 - **Date:** 2026-09-11
+- **Supersedes:** [ADR-0050](0050-asynchronous-completions-use-session-inbox.md)
 
 ## Context
 

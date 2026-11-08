@@ -2,6 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-10-03
+- **Amends:** [ADR-0038](0038-runtime-owners-replace-daemon-capability-discovery.md)
 
 ## Context
 

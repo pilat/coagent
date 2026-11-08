@@ -2,6 +2,8 @@
 
 - **Status:** Accepted
 - **Date:** 2026-08-24
+- **Supersedes:** [ADR-0021](0021-best-effort-control-pushes.md)
+- **Amended by:** [ADR-0072](0072-flat-chat-with-a-focus.md) — the outbox is an append-only log behind one per-chat cursor; the claim/ack/retry/block queue, receipts and manager bindings are gone
 
 ## Context
 

@@ -62,7 +62,7 @@ help:
 	@echo "  lint             golangci-lint over the whole module"
 	@echo "  lint.paths       scoped lint (LINT_PATHS=./internal/session/...)"
 	@echo "  lint.fix         apply every golangci-lint autofix"
-	@echo "  arch             architecture boundaries, documentation contract and production reachability"
+	@echo "  arch             architecture boundaries, documentation and ADR contract and production reachability"
 	@echo "  semgrep          project invariants"
 	@echo "  workflow.check   validate GitHub Actions workflows with actionlint"
 	@echo "  tools            online bootstrap for modules and pinned dev tools"

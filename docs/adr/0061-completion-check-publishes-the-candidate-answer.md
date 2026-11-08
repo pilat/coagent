@@ -3,6 +3,7 @@
 - **Status:** Accepted
 - **Date:** 2026-09-18
 - **Amends:** [ADR-0060](0060-wake-aware-model-completion-check.md)
+- **Amended by:** [ADR-0072](0072-flat-chat-with-a-focus.md) — the candidate stays invisible until it is confirmed, since progress cards are gone
 
 ## Context
 

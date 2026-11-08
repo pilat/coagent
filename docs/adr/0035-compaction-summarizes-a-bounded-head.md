@@ -2,6 +2,7 @@
 
 - **Status:** Superseded by [ADR-0056](0056-compaction-replays-the-native-bounded-prefix.md)
 - **Date:** 2026-08-29
+- **Supersedes:** [ADR-0012](0012-compaction-is-all-or-nothing.md), [ADR-0013](0013-immutable-history-single-compaction-point.md)
 
 ## Context
 
