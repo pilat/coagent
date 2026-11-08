@@ -158,9 +158,9 @@ Mutation is not part of local development or any handoff gate. The nightly
 workflow owns it.
 
 After all checkpoints are complete, run `make all` once. Diagnose failures with
-the focused failing target and repeat the local gate only after the fix. Complete
-Semgrep, secret scanning, and `make ci` runs are owned by CI/CD and reject local
-execution.
+the focused failing target and repeat the local gate only after the fix. `make all`
+includes Semgrep. Secret scanning and `make ci` runs are owned by CI/CD and reject
+local execution.
 
 ## Orthogonal test amplifiers
 

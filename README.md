@@ -391,7 +391,7 @@ saving it can repeat a message. Killing the focus leaves no session selected;
 ```bash
 make tools          # online bootstrap: modules and pinned development tools
 make test           # fast package suites; CI-owned packages excluded
-make all            # local format + build + lint + architecture + fast tests
+make all            # local format + build + lint + architecture + Semgrep + fast tests
 make verify-offline # prove a warmed checkout needs no dependency resolution
 make ci             # CI-only: static gates + full ordinary/integration tests
 ```

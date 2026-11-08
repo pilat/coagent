@@ -33,9 +33,10 @@ Apply formatting with `make fmt`, then run `make all`. The local test target
 omits complete lifecycle, migration, protocol-store, manager and external-process
 package suites; use an exact `-run` selection when changing one of them.
 Integration, E2E, fuzz, race, stress and mutation targets are CI/CD-owned and
-reject local execution. Architecture checks run locally in `make all`; Semgrep
-and secret-history gates are CI/CD-owned. Do not set `CI=true` locally to bypass
-that boundary.
+reject local execution. Architecture checks and Semgrep run locally in `make all`;
+secret-history gates are CI/CD-owned. Do not set `CI=true` locally to bypass that
+boundary. In a sandboxed session `make semgrep` needs `~/.cache`,
+`~/.local/share/uv/tools`, `~/.semgrep` and a temp directory writable.
 
 ## Open a pull request
 

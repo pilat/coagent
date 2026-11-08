@@ -19,7 +19,7 @@ make test           # fast package suites; CI-owned packages excluded
 make lint           # golangci-lint run ./...
 make fmt            # golangci-lint fmt
 make tools          # online bootstrap for modules and pinned development tools
-make all            # local handoff gate with architecture and fast tests
+make all            # local handoff gate with architecture, Semgrep and fast tests
 make verify-offline # run the everyday gate with Go/uv resolution disabled
 make ci             # CI-only: static gates + full ordinary/integration tests
 make mutation.nightly # nightly workflow only; never a commit or PR gate
@@ -60,9 +60,8 @@ them after every edit or agent turn.
   final handoff. If it fails, iterate with the specific failing target or focused
   test, then rerun `make all` once after the fix.
 - Do not repeat a successful command unless a relevant input changed.
-- `make ci`, Semgrep, secret scanning, integration, E2E, fuzz, race, stress,
-  and mutation targets are CI-only. Never set
-  `CI=true` locally to bypass their guard.
+- `make ci`, secret scanning, integration, E2E, fuzz, race, stress, and mutation
+  targets are CI-only. Never set `CI=true` locally to bypass their guard.
 
 Mutation testing belongs exclusively to the sharded scheduled or manually
 triggered `Nightly Mutation` workflow. It may run for hours and publishes
@@ -118,7 +117,7 @@ output. These are temporal protocols: unit tests alone are not sufficient.
 - **[docs/glossary.md](docs/glossary.md)** — the project vocabulary: what each coagent term means and which synonyms to avoid. Read it first; everything else is written in these words.
 - **[ARCHITECTURE.md](ARCHITECTURE.md)** — the single, bounded architecture document. Every production package appears exactly once in its grouped package map; only packages that own lifecycle, durable state, concurrency, trust boundaries or cross-package protocols receive a profile. Obey the anti-bloat contract at the top and never turn it into a file/member inventory, API reference, changelog or test plan.
 - **After implementing changes**, run `/pilat:arch-sync` to catch drift between the code and this document before committing.
-- Dependency tiers, package-map coverage, durable-protocol/trust headings, the architecture line budget and production reachability (deadcode over the binaries; see [docs/testing.md](docs/testing.md#test-only-code)) are mechanically enforced locally by `make arch`; project invariants by `make semgrep` in CI/CD.
+- Dependency tiers, package-map coverage, durable-protocol/trust headings, the architecture line budget and production reachability (deadcode over the binaries; see [docs/testing.md](docs/testing.md#test-only-code)) are mechanically enforced locally by `make arch`; project invariants by `make semgrep`. `make all` runs both.
 
 ## Decision Records
 
