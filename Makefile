@@ -13,7 +13,8 @@ SEMGREP_VERSION ?= 1.168.0
 GITLEAKS_VERSION ?= v8.30.1
 
 GOLANGCI_RUN = golangci-lint run ./...
-SEMGREP ?= uv tool run --offline --from semgrep==$(SEMGREP_VERSION) semgrep
+SEMGREP_ENV = uv tool run --offline --from semgrep==$(SEMGREP_VERSION)
+SEMGREP ?= $(SEMGREP_ENV) semgrep
 MODULE_PATH := github.com/pilat/coagent
 
 # CI owns these lifecycle, migration, protocol, manager, and process suites.
@@ -50,7 +51,7 @@ GO_LDFLAGS := -X $(VERSION_PKG).Version=$(VERSION)
 
 help:
 	@echo "Everyday gate:"
-	@echo "  all / verify     format check + build + lint + architecture + fast tests"
+	@echo "  all / verify     format check + build + lint + architecture + semgrep + fast tests"
 	@echo "  verify-offline   verify with Go/uv network resolution disabled"
 	@echo ""
 	@echo "Pieces:"
@@ -62,6 +63,7 @@ help:
 	@echo "  lint.paths       scoped lint (LINT_PATHS=./internal/session/...)"
 	@echo "  lint.fix         apply every golangci-lint autofix"
 	@echo "  arch             architecture boundaries, documentation contract and production reachability"
+	@echo "  semgrep          project invariants"
 	@echo "  workflow.check   validate GitHub Actions workflows with actionlint"
 	@echo "  tools            online bootstrap for modules and pinned dev tools"
 	@echo ""
@@ -70,7 +72,6 @@ help:
 	@echo ""
 	@echo "CI-only (slow):"
 	@echo "  ci               static gates + full ordinary and integration tests"
-	@echo "  semgrep          project invariants"
 	@echo "  secrets          Git history and working tree credential scan"
 	@echo "  test.integration full ordinary + integration suites (harness excluded)"
 	@echo ""
@@ -85,9 +86,9 @@ help:
 	@echo "  mutation.critical  curated critical-file diagnostic"
 	@echo "  mutation.nightly   scheduled workflow shard; do not run as a handoff gate"
 
-# The bounded local handoff gate. Security, full lifecycle, integration, E2E,
-# fuzz, race, stress, and mutation belong to CI/CD.
-all verify: fmt.check build lint arch tests
+# The bounded local handoff gate. Secret scanning, full lifecycle, integration,
+# E2E, fuzz, race, stress, and mutation belong to CI/CD.
+all verify: fmt.check build lint arch semgrep tests
 
 # Prove the warmed checkout does not need module or Python-package resolution.
 # Missing modules or uv tool state fail closed; only `tools` may populate them.
@@ -190,12 +191,12 @@ arch:
 			exit 1; \
 		fi
 
-# Project invariants that are not expressible as a Go linter (.semgrep/). Every
-# rule there is at zero violations, so this is a hard gate with no baseline.
+# Project invariants no Go linter expresses (.semgrep/), at zero violations: a hard gate.
+# Scan "." only: outside a git checkout, rule paths anchor to the target. The version check would hit the network.
 semgrep:
-	$(require_ci)
 	@command -v uv >/dev/null 2>&1 || { echo "✋ uv missing (semgrep runs through it): curl -LsSf https://astral.sh/uv/install.sh | sh"; exit 1; }
-	$(SEMGREP) scan --config .semgrep/ --error --metrics=off --quiet .
+	@uv_error="$$($(SEMGREP_ENV) python -V 2>&1 >/dev/null)" || { printf '%s\n' "$$uv_error"; echo "✋ semgrep $(SEMGREP_VERSION) is not runnable through uv; a cold cache needs make tools"; exit 1; }
+	$(SEMGREP) scan --config .semgrep/ --error --metrics=off --disable-version-check --quiet .
 
 secrets:
 	$(require_ci)
