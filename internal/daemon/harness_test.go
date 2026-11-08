@@ -477,6 +477,7 @@ type harnessOptions struct {
 	clientFor      func(*config.Config) (llm.Client, error)
 	configure      func(*config.Config)
 	links          func(subagent.Store) subagent.Store
+	schedules      func(schedule.Store) schedule.Store
 	mcp            mcpstore.Store
 	observeRequest func(providerRequest)
 }
@@ -501,6 +502,9 @@ func newHarness(t *testing.T, o harnessOptions) *harness {
 		links = o.links(links)
 	}
 	schedules := schedule.NewStore(db, store)
+	if o.schedules != nil {
+		schedules = o.schedules(schedules)
+	}
 	cfg := &config.Config{WorkDir: t.TempDir(), Model: "fake-model"}
 	if o.configure != nil {
 		o.configure(cfg)
@@ -951,11 +955,13 @@ func (c *eventCollector) waitMessage(sessionID int64, message string) {
 	})
 }
 
-func (c *eventCollector) waitIdleAfter(sessionID int64, message string) {
+// waitIdleAfter returns the trace through the turn's own idle; a late wake may re-activate the session after it.
+func (c *eventCollector) waitIdleAfter(sessionID int64, message string) []controllerapi.SessionNotification {
 	c.t.Helper()
+	var turn []controllerapi.SessionNotification
 	c.waitFor(c.t, "idle after "+message, func(events []controllerapi.SessionNotification) bool {
 		messageSeen := false
-		for _, event := range events {
+		for i, event := range events {
 			if event.SessionID != sessionID {
 				continue
 			}
@@ -964,11 +970,13 @@ func (c *eventCollector) waitIdleAfter(sessionID int64, message string) {
 			}
 			if messageSeen && event.Notification.Type == sessionevent.NotifyStateChanged &&
 				event.Notification.Status == sessionevent.StateIdle {
+				turn = events[:i+1]
 				return true
 			}
 		}
 		return false
 	})
+	return turn
 }
 
 func (c *eventCollector) waitWait(sessionID int64, kind sessionevent.WaitKind) {

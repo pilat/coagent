@@ -694,7 +694,7 @@ func TestHarnessScenario_ProcessCompletionInterruptsSleep(t *testing.T) {
 	collector.waitWait(rootID, sessionevent.WaitSleep)
 	process := startScenarioProcess(t, service, rootID, rootID, "printf 'wake\\n'")
 	collector.waitMessage(rootID, "process interrupted sleep")
-	collector.waitIdleAfter(rootID, "process interrupted sleep")
+	turn := collector.waitIdleAfter(rootID, "process interrupted sleep")
 	messages := h.messages(rootID)
 	// The completion wake's stop is the hidden candidate; the confirmation adds the second stop of the two-phase check.
 	assert.Equal(t, int64(3), modelCalls.Load())
@@ -718,7 +718,7 @@ func TestHarnessScenario_ProcessCompletionInterruptsSleep(t *testing.T) {
 			})
 			return record
 		}().State)
-	assertHarnessTrace(t, h, "process_interrupts_sleep.json", collector.snapshot(), rootID)
+	assertHarnessTrace(t, h, "process_interrupts_sleep.json", turn, rootID)
 }
 
 func TestHarnessScenario_ProcessCompletionWaitsForForegroundChild(t *testing.T) {

@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -22,6 +23,7 @@ import (
 	"github.com/pilat/coagent/internal/sessionbus"
 	"github.com/pilat/coagent/internal/sessionevent"
 	"github.com/pilat/coagent/internal/sessionstore"
+	"github.com/pilat/coagent/internal/subagent"
 	"github.com/pilat/coagent/internal/tool"
 )
 
@@ -127,7 +129,7 @@ func TestHarnessScenario_SleepProjectsWakeAtAndUserInputInterruptsIt(t *testing.
 	h.startInboxWake()
 	require.NoError(t, h.mgr.sendToSession(h.ctx, parentID, "interrupt now"))
 	collector.waitMessage(parentID, "sleep interruption handled")
-	collector.waitIdleAfter(parentID, "sleep interruption handled")
+	turn := collector.waitIdleAfter(parentID, "sleep interruption handled")
 	messages := h.messages(parentID)
 	require.NoError(t, llmtest.ValidateToolPairing(messages))
 	assert.Equal(t, 1, countToolResultsFor(messages, tool.IDSleep))
@@ -135,7 +137,173 @@ func TestHarnessScenario_SleepProjectsWakeAtAndUserInputInterruptsIt(t *testing.
 	schedules, err := h.schedules.ListSchedules(h.ctx, parentID)
 	require.NoError(t, err)
 	assert.Empty(t, schedules)
-	assertHarnessTrace(t, h, "sleep_interrupted_by_input.json", collector.snapshot(), parentID)
+	assertHarnessTrace(t, h, "sleep_interrupted_by_input.json", turn, parentID)
+}
+
+// Without the wake loop the runner is the only caller that can observe the stale sleep row.
+func TestHarnessScenario_SleepInterruptedWhileRowRetiredConcurrently(t *testing.T) {
+	const answer = "sleep interruption handled"
+	t.Run("root trace", func(t *testing.T) {
+		h, retired := newStaleSleepHarness(t, sleepThenAnswer(answer))
+		collector := collectEvents(t, h.mgr.bus.SubscribeAll())
+		defer collector.stop()
+		id, turn := interruptSleep(t, h, collector, nil, answer)
+		assert.EqualValues(t, 1, retired.retired.Load())
+		assert.Equal(t, sessionstore.SessionStatusCompleted, h.session(id).Status)
+		assertHarnessTraceForScenario(t, h, "TestHarnessScenario_SleepProjectsWakeAtAndUserInputInterruptsIt",
+			"sleep_interrupted_by_input.json", turn, id)
+	})
+	t.Run("manager root", func(t *testing.T) {
+		h, retired := newStaleSleepHarness(t, sleepThenAnswer(answer))
+		collector := collectEvents(t, h.mgr.bus.SubscribeAll())
+		defer collector.stop()
+		id, _ := interruptSleep(t, h, collector, managerAttrs(scenarioManagerID), answer)
+		assert.EqualValues(t, 1, retired.retired.Load())
+		assert.Equal(t, sessionstore.SessionStatusCompleted, h.session(id).Status)
+		outputs, _ := scenarioOutputs(t, h)
+		contents := make([]string, 0, len(outputs))
+		for _, output := range outputs {
+			contents = append(contents, output.Content)
+		}
+		assert.Equal(t, []string{"", "→ sleep", answer}, contents)
+	})
+	t.Run("subagent", func(t *testing.T) {
+		runInterruptedSubagentScenario(t)
+	})
+}
+
+func runInterruptedSubagentScenario(t *testing.T) {
+	t.Helper()
+	const answer = "child answer after interruption"
+	h, retired := newStaleSleepHarness(t, func(_ string, messages []llmwire.Message) *llmwire.Response {
+		if hasUserContaining(messages, "CHILD_TASK") {
+			return sleepThenAnswer(answer)("", messages)
+		}
+		if hasToolResultFor(messages, tool.IDTask) {
+			return textReply("parent ack")
+		}
+		return callReply(taskCallID, tool.IDTask,
+			`{"prompt":"CHILD_TASK","description":"child work","subagent_type":"general","background":true}`)
+	})
+	parentID, err := h.mgr.Send(h.ctx, h.projectID, "delegate", "fake-model", nil)
+	require.NoError(t, err)
+	var childID int64
+	h.waitUntil("child asleep", func() bool {
+		links, listErr := h.links.ListPendingChildLinks(h.ctx, parentID)
+		if listErr != nil || len(links) != 1 {
+			return false
+		}
+		childID = links[0].ChildID
+		entries, scheduleErr := h.schedules.ListSchedules(h.ctx, childID)
+		return scheduleErr == nil && len(entries) == 1 && !h.mgr.HasActiveLoop(childID)
+	})
+	require.NoError(t, h.mgr.SendToChild(h.ctx, childID, "wake up early"))
+	var link *subagent.Link
+	h.waitUntil("child terminal", func() bool {
+		var linkErr error
+		link, linkErr = h.links.GetLink(h.ctx, childID)
+		return linkErr == nil && link != nil && link.Terminal()
+	})
+	assert.EqualValues(t, 1, retired.retired.Load())
+	assert.Equal(t, subagent.StateCompleted, link.State)
+	assert.Equal(t, answer, link.Result)
+}
+
+// A wake that read the input before its acceptance may start one runner after the turn ended.
+func TestHarnessScenario_LateWakeAfterInterruptedSleepAddsNoOutput(t *testing.T) {
+	const answer = "sleep interruption handled"
+	var modelCalls atomic.Int64
+	respond := sleepThenAnswer(answer)
+	h := newHarness(t, harnessOptions{respond: func(model string, messages []llmwire.Message) *llmwire.Response {
+		modelCalls.Add(1)
+		return respond(model, messages)
+	}})
+	collector := collectEvents(t, h.mgr.bus.SubscribeAll())
+	defer collector.stop()
+	id, _ := interruptSleep(t, h, collector, managerAttrs(scenarioManagerID), answer)
+	h.waitUntil("turn runner gone", func() bool { return !h.mgr.HasActiveLoop(id) })
+	before := collector.snapshot()
+	outputs, owners := scenarioOutputs(t, h)
+	messages, status, calls := h.messages(id), h.session(id).Status, modelCalls.Load()
+
+	require.NoError(t, h.mgr.start(h.ctx, id))
+	collector.waitFor(t, "late activation idle", func(events []controllerapi.SessionNotification) bool {
+		return hasStateEvent(events[len(before):], id, sessionevent.StateIdle)
+	})
+	h.waitUntil("late runner gone", func() bool { return !h.mgr.HasActiveLoop(id) })
+
+	lateEvents := 0
+	for _, event := range collector.snapshot()[len(before):] {
+		if event.SessionID != id {
+			continue
+		}
+		lateEvents++
+		assert.Contains(t, []sessionevent.NotificationType{
+			sessionevent.NotifySessionCreated, sessionevent.NotifyStateChanged,
+		}, event.Notification.Type)
+	}
+	require.Positive(t, lateEvents)
+	lateOutputs, lateOwners := scenarioOutputs(t, h)
+	assert.Equal(t, outputs, lateOutputs)
+	assert.Equal(t, owners, lateOwners)
+	assert.Equal(t, messages, h.messages(id))
+	assert.Equal(t, status, h.session(id).Status)
+	assert.Equal(t, calls, modelCalls.Load())
+}
+
+// Another owner retires the row after the caller listed it and before the caller deletes it.
+type staleSleepRetiredFirstStore struct {
+	schedule.Store
+	retired atomic.Int64
+}
+
+func (s *staleSleepRetiredFirstStore) CallPending(ctx context.Context, sessionID int64, callID string) (bool, error) {
+	pending, err := s.Store.CallPending(ctx, sessionID, callID)
+	if err != nil || pending {
+		return pending, err
+	}
+	removed, err := s.RemoveSleepSchedules(ctx, sessionID)
+	s.retired.Add(removed)
+	return false, err
+}
+
+func newStaleSleepHarness(
+	t *testing.T,
+	respond func(string, []llmwire.Message) *llmwire.Response,
+) (*harness, *staleSleepRetiredFirstStore) {
+	t.Helper()
+	retired := &staleSleepRetiredFirstStore{}
+	h := newHarness(t, harnessOptions{respond: respond, schedules: func(store schedule.Store) schedule.Store {
+		retired.Store = store
+		return retired
+	}})
+	return h, retired
+}
+
+func sleepThenAnswer(answer string) func(string, []llmwire.Message) *llmwire.Response {
+	return func(_ string, messages []llmwire.Message) *llmwire.Response {
+		if hasToolResultFor(messages, tool.IDSleep) {
+			return textReply(answer)
+		}
+		return callReply("scenario-sleep", tool.IDSleep, `{"duration":"1h","reason":"scenario"}`)
+	}
+}
+
+func interruptSleep(
+	t *testing.T,
+	h *harness,
+	collector *eventCollector,
+	attrs map[string]any,
+	answer string,
+) (int64, []controllerapi.SessionNotification) {
+	t.Helper()
+	id, err := h.mgr.Send(h.ctx, h.projectID, "sleep", "fake-model", attrs)
+	require.NoError(t, err)
+	collector.waitWait(id, sessionevent.WaitSleep)
+	h.waitUntil("sleeping runner gone", func() bool { return !h.mgr.HasActiveLoop(id) })
+	require.NoError(t, h.mgr.sendToSession(h.ctx, id, "interrupt now"))
+	collector.waitMessage(id, answer)
+	return id, collector.waitIdleAfter(id, answer)
 }
 
 // The real executor, daemon sender and session must attach one exact scheduled result to its original tool call.

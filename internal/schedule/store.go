@@ -165,7 +165,7 @@ func (s *store) RemoveSchedule(ctx context.Context, id int64) error {
 	}
 
 	if rows == 0 {
-		return fmt.Errorf("schedule %d not found", id)
+		return fmt.Errorf("remove schedule %d: %w", id, errScheduleNotFound)
 	}
 
 	return nil
