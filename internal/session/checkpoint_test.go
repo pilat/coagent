@@ -199,6 +199,7 @@ func TestRawCutLegality(t *testing.T) {
 // batch-shaped output never qualify, and the latest candidate wins.
 func TestSelectCurrentSkill(t *testing.T) {
 	rendered := skillMessage(t, "review", "Review carefully.")
+	loadsSkills := func(name string) bool { return name == "skill" }
 
 	t.Run("stamped user row", func(t *testing.T) {
 		msgs := []llmwire.Message{
@@ -207,7 +208,7 @@ func TestSelectCurrentSkill(t *testing.T) {
 			{Role: llmwire.RoleUser, Content: "[stamp] " + rendered.Content},
 		}
 
-		idx, env := selectCurrentSkill(msgs, 2, -1)
+		idx, env := selectCurrentSkill(msgs, 2, -1, loadsSkills)
 		require.Equal(t, 2, idx)
 		assert.Equal(t, rendered.Content, env)
 	})
@@ -220,7 +221,7 @@ func TestSelectCurrentSkill(t *testing.T) {
 			{Role: llmwire.RoleTool, ToolCallID: "s1", ToolName: "skill", Content: "[review]\n" + rendered.Content},
 		}
 
-		idx, env := selectCurrentSkill(msgs, 2, -1)
+		idx, env := selectCurrentSkill(msgs, 2, -1, loadsSkills)
 		assert.Equal(t, 3, idx)
 		assert.Equal(t, rendered.Content, env)
 	})
@@ -232,7 +233,7 @@ func TestSelectCurrentSkill(t *testing.T) {
 			{Role: llmwire.RoleTool, ToolCallID: "sf", ToolName: "skill", Content: "Error: skill unavailable: nope"},
 		}
 
-		idx, env := selectCurrentSkill(msgs, 1, -1)
+		idx, env := selectCurrentSkill(msgs, 1, -1, loadsSkills)
 		assert.Equal(t, -1, idx)
 		assert.Empty(t, env)
 	})
@@ -247,7 +248,7 @@ func TestSelectCurrentSkill(t *testing.T) {
 			},
 		}
 
-		idx, _ := selectCurrentSkill(msgs, 2, -1)
+		idx, _ := selectCurrentSkill(msgs, 2, -1, loadsSkills)
 		assert.Equal(t, -1, idx)
 	})
 
@@ -262,7 +263,7 @@ func TestSelectCurrentSkill(t *testing.T) {
 			compactionUserMessage(reinvoked.Content),
 		}
 
-		idx, env := selectCurrentSkill(msgs, 2, -1)
+		idx, env := selectCurrentSkill(msgs, 2, -1, loadsSkills)
 		assert.Equal(t, 4, idx, "the latest candidate wins")
 		assert.Equal(t, reinvoked.Content, env)
 	})

@@ -14,6 +14,7 @@ import (
 
 	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/llmwire"
+	"github.com/pilat/coagent/internal/loader"
 	"github.com/pilat/coagent/internal/sessionevent"
 	"github.com/pilat/coagent/internal/tool"
 )
@@ -213,6 +214,68 @@ func TestHarnessScenario_SkillSurvivesTwoCompactionsExactlyOnce(t *testing.T) {
 	require.NotEmpty(t, calls)
 	assert.True(t, hasUserContaining(calls[len(calls)-1].msgs, "Follow these steps for the release."),
 		"the compacted transcript still teaches the model the skill")
+}
+
+func TestHarnessScenario_ModelLoadedSkillSurvivesCompaction(t *testing.T) {
+	const skillName = "playbook"
+	respond := func(model string, msgs []llmwire.Message) *llmwire.Response {
+		if !isCompactionInstruction(msgs) && !hasToolResultFor(msgs, "skill") && !hasSummaryRow(msgs) {
+			return callReply("load-playbook", "skill", `{"name":"playbook","args":"the release"}`)
+		}
+		return skillCompactRespond(model, msgs)
+	}
+	wrapped := newSkillHarness(t, map[string]string{
+		skillName: skillDoc(skillName, "The playbook", "Follow these steps for $ARGUMENTS."),
+	}, respond)
+	h, rec := wrapped.harness, wrapped.recorder
+	collector := collectEvents(t, h.mgr.bus.SubscribeAll())
+	defer collector.stop()
+	h.startInboxWake()
+	sessionID, err := h.mgr.Send(h.ctx, h.projectID, "load the playbook and start the work", "fake-model", nil)
+	require.NoError(t, err)
+	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(sessionID) })
+	before := h.messages(sessionID)
+	require.Equal(t, 1, countMessagesWithSkill(before, skillName))
+	var envelope string
+	for _, msg := range before {
+		if msg.Role == llmwire.RoleTool && msg.ToolName == "skill" {
+			skills := loader.ExtractRenderedSkills(msg.Content)
+			require.Len(t, skills, 1)
+			envelope = skills[0].Envelope
+		}
+	}
+	require.NotEmpty(t, envelope, "the model loaded the skill through its tool")
+	require.Contains(t, envelope, "Follow these steps for the release.")
+
+	// Later work puts the skill call in the summarized head, requiring a new envelope row.
+	h.startInboxWake()
+	require.NoError(t, h.mgr.sendToSession(h.ctx, sessionID, "keep going"))
+	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(sessionID) })
+	h.startInboxWake()
+	require.NoError(t, h.mgr.sendToSession(h.ctx, sessionID, "/compact"))
+	collector.waitFor(t, "compaction reported", func(events []controllerapi.SessionNotification) bool {
+		return countPublishedMessage(events, sessionID, noticeCompacted) == 1
+	})
+	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(sessionID) })
+	after := h.messages(sessionID)
+	require.True(t, hasSummaryRow(after))
+	require.Equal(t, 1, countMessagesWithSkill(after, skillName), "the skill is reattached exactly once")
+	var reattached int
+	for _, msg := range after {
+		if msg.Role == llmwire.RoleUser && msg.Content == envelope {
+			reattached++
+		}
+	}
+	require.Equal(t, 1, reattached, "the survivor is a byte-identical standalone envelope")
+
+	h.startInboxWake()
+	require.NoError(t, h.mgr.sendToSession(h.ctx, sessionID, "what next?"))
+	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(sessionID) })
+	calls := rec.snapshot()
+	require.NotEmpty(t, calls)
+	last := calls[len(calls)-1].msgs
+	assert.Equal(t, 1, countMessagesWithSkill(last, skillName))
+	assert.True(t, hasUserContaining(last, envelope), "the model receives the reattached skill")
 }
 
 // The expansion is programmatic: what reaches the provider is the rendered skill

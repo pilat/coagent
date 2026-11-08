@@ -244,7 +244,10 @@ func preparePrompt(
 
 	prompt.RefreshToolsSection(reg)
 
-	if reg.Get(tool.IDSkill) != nil {
+	if slices.ContainsFunc(reg.List(), func(candidate tool.Tool) bool {
+		_, ok := candidate.(tool.SkillLoader)
+		return ok
+	}) {
 		prompt.SetSkillsSection(sessionprompt.BuildSkillsSection(in.Loader))
 	}
 

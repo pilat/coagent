@@ -18,6 +18,12 @@ import (
 	"github.com/pilat/coagent/internal/tool"
 )
 
+var _ tool.SkillLoader = (*skillLoaderTool)(nil)
+
+type skillLoaderTool struct{ *stubTool }
+
+func (*skillLoaderTool) SkillLoader() {}
+
 // An aborted assistant turn is history, not a pairable call: the ordinary
 // repair stubs it in the head projection and compaction succeeds around it.
 func TestCompactionSucceedsAroundAnAbortedToolCall(t *testing.T) {
@@ -1090,6 +1096,7 @@ func TestCurrentSkillInHeadIsReattachedByteIdentically(t *testing.T) {
 		contextWindow: window,
 	}
 	s := newCompactionTestSvc(llm)
+	s.registry.Register(&skillLoaderTool{stubTool: &stubTool{id: "skill"}})
 
 	rendered := skillMessage(t, "review", "Review carefully.")
 
@@ -1130,6 +1137,7 @@ func TestMixedAssistantResponseKeepsSiblingCallsValid(t *testing.T) {
 		contextWindow: window,
 	}
 	s := newCompactionTestSvc(llm)
+	s.registry.Register(&skillLoaderTool{stubTool: &stubTool{id: "skill"}})
 
 	rendered := skillMessage(t, "review", "Review carefully.")
 
