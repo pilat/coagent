@@ -63,20 +63,6 @@ const (
 	UntrustedContentEnd   = "<<<END_UNTRUSTED_EXTERNAL_DATA>>>"
 )
 
-// untrustedOutputTools are the built-in tool IDs whose direct output the host
-// classifies as external content; MCP tools carry the mcp__ prefix instead.
-var untrustedOutputTools = map[string]bool{
-	"webfetch":  true,
-	"websearch": true,
-}
-
-// IsUntrustedOutputSource reports whether a tool ID is a source the runtime
-// identifies as external: the built-in web tools, or any MCP tool. Direct
-// errors from these never produced a typed result and need the same treatment.
-func IsUntrustedOutputSource(name string) bool {
-	return untrustedOutputTools[name] || strings.HasPrefix(name, "mcp__")
-}
-
 // ErrSuspend is returned by tools (e.g., sleep) to signal that the agent loop
 // should exit without recording the tool result. The session is checkpointed
 // with the tool_call pending, and the real result is injected on resume.
@@ -104,6 +90,12 @@ type Tool interface {
 type FrameRule interface { //nolint:iface // Declared by the tool stack, consulted by the session.
 	Owns(toolID string) bool
 	ResultLimit() int
+}
+
+// UntrustedSource declares external output provenance so direct errors are wrapped too.
+type UntrustedSource interface { //nolint:iface // Declared by tools elsewhere, consulted by the core.
+	Tool
+	UntrustedSource()
 }
 
 // ActivationDeclarer marks mutations that require an exact user command turn.

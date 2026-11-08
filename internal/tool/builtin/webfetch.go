@@ -37,7 +37,10 @@ Use this for:
 Note: Some sites may block automated requests.`
 )
 
-var _ tool.Tool = (*webFetchTool)(nil)
+var (
+	_ tool.Tool            = (*webFetchTool)(nil)
+	_ tool.UntrustedSource = (*webFetchTool)(nil)
+)
 
 type webFetchParams struct {
 	URL string `json:"url"`
@@ -63,6 +66,8 @@ func newWebFetchTool() *webFetchTool {
 func (t *webFetchTool) ID() string          { return "webfetch" }
 func (t *webFetchTool) ParallelSafe() bool  { return true }
 func (t *webFetchTool) Description() string { return webfetchDescription }
+
+func (t *webFetchTool) UntrustedSource() {}
 
 func (t *webFetchTool) Parameters() json.RawMessage {
 	return json.RawMessage(`{

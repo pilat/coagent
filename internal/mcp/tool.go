@@ -10,6 +10,8 @@ import (
 	"github.com/pilat/coagent/internal/tool"
 )
 
+var _ tool.UntrustedSource = (*mcpTool)(nil)
+
 type Attachment struct {
 	Note  string
 	Image *llmwire.ImageRef
@@ -81,6 +83,8 @@ func (t *mcpTool) ID() string {
 
 // Remote concurrency annotations are hints, not a trusted contract.
 func (t *mcpTool) ParallelSafe() bool { return false }
+
+func (t *mcpTool) UntrustedSource() {}
 
 func (t *mcpTool) Description() string {
 	return t.meta.Description

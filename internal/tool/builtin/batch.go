@@ -133,7 +133,7 @@ func (t *BatchTool) Execute(ctx context.Context, params json.RawMessage) (*tool.
 		zap.Int64("duration_ms", report.Summary.DurationMS),
 	)
 
-	return t.formatResult(p.Calls, report), nil
+	return t.formatResult(calls, report), nil
 }
 
 func (t *BatchTool) validateCalls(calls []BatchCall) error {
@@ -183,7 +183,7 @@ func (t *BatchTool) validateCalls(calls []BatchCall) error {
 // calls fabricate neither. Any nested external provenance marks the combined
 // result external: after truncation the outer formatter cannot protect only one
 // segment of the rendered payload.
-func (t *BatchTool) formatResult(calls []BatchCall, report tool.Report) *tool.Result {
+func (t *BatchTool) formatResult(calls []tool.Call, report tool.Report) *tool.Result {
 	var output strings.Builder
 
 	direct := make([]string, 0)
@@ -199,7 +199,7 @@ func (t *BatchTool) formatResult(calls []BatchCall, report tool.Report) *tool.Re
 	for _, r := range report.Results {
 		call := calls[r.Index]
 
-		fmt.Fprintf(&output, "=== %s (call %d) ===\n", call.Tool, r.Index+1)
+		fmt.Fprintf(&output, "=== %s (call %d) ===\n", call.Name, r.Index+1)
 
 		switch r.Outcome {
 		case tool.OutcomeExecuted, tool.OutcomeFailed:
@@ -231,7 +231,8 @@ func (t *BatchTool) formatResult(calls []BatchCall, report tool.Report) *tool.Re
 				break
 			}
 
-			untrusted = untrusted || tool.IsUntrustedOutputSource(call.Tool)
+			_, declared := call.Tool.(tool.UntrustedSource)
+			untrusted = untrusted || declared
 
 			fmt.Fprintf(&output, "Error: %v\n", r.Err)
 

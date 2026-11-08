@@ -28,7 +28,10 @@ Use this for:
 Note: Results are search snippets only. Use webfetch to read a page's full content.`
 )
 
-var _ tool.Tool = (*webSearchTool)(nil)
+var (
+	_ tool.Tool            = (*webSearchTool)(nil)
+	_ tool.UntrustedSource = (*webSearchTool)(nil)
+)
 
 type webSearchParams struct {
 	Query      string `json:"query"`
@@ -62,6 +65,8 @@ func clampSearchResults(n int) int {
 func (t *webSearchTool) ID() string          { return websearchToolID }
 func (t *webSearchTool) ParallelSafe() bool  { return true } // stateless HTTP
 func (t *webSearchTool) Description() string { return websearchDescription }
+
+func (t *webSearchTool) UntrustedSource() {}
 
 func (t *webSearchTool) Parameters() json.RawMessage {
 	return json.RawMessage(`{

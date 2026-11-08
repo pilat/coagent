@@ -68,15 +68,17 @@ func batchConflict(batch []llmwire.ToolCall, call llmwire.ToolCall) error {
 	return nil
 }
 
-func failedItem(index int, tc llmwire.ToolCall, err error, contextWindow int) toolCallResultItem {
+func failedItem(index int, tc llmwire.ToolCall, declared tool.Tool, err error, contextWindow int) toolCallResultItem {
+	_, untrusted := declared.(tool.UntrustedSource)
+
 	content := fmt.Sprintf("Error: %v", err)
-	if tool.IsUntrustedOutputSource(tc.Name) {
+	if untrusted {
 		content = wrapUntrustedContent(content, contextWindow)
 	}
 
 	return toolCallResultItem{
 		index: index, toolCall: tc, content: content,
-		untrusted: tool.IsUntrustedOutputSource(tc.Name), outcome: tool.OutcomeFailed, err: err,
+		untrusted: untrusted, outcome: tool.OutcomeFailed, err: err,
 	}
 }
 
@@ -99,7 +101,7 @@ func executeToolCallsInternal(ctx context.Context, agent *Session, toolCalls []l
 			return call.Name == agent.currentActivation.ToolID
 		}) {
 			for i, call := range toolCalls {
-				inv := failedItem(i, call, fmt.Errorf(
+				inv := failedItem(i, call, agent.registry.Get(call.Name), fmt.Errorf(
 					"%s must be invoked alone in its activated command turn", agent.currentActivation.ToolID,
 				), contextWindow)
 				results[i] = inv
@@ -146,7 +148,7 @@ func executeToolCallsInternal(ctx context.Context, agent *Session, toolCalls []l
 		zap.Int64("duration_ms", report.Summary.DurationMS),
 	)
 
-	mapped := mapExecutorReport(agent, log, scheduledCalls, report)
+	mapped := mapExecutorReport(agent, log, scheduledCalls, calls, report)
 	if scheduledIndexes == nil {
 		return mapped
 	}
@@ -200,6 +202,7 @@ func mapExecutorReport(
 	agent *Session,
 	log *zap.Logger,
 	toolCalls []llmwire.ToolCall,
+	calls []tool.Call,
 	report tool.Report,
 ) []toolCallResultItem {
 	results := make([]toolCallResultItem, len(toolCalls))
@@ -230,7 +233,7 @@ func mapExecutorReport(
 			}
 		case tool.OutcomeExecuted, tool.OutcomeFailed:
 			if r.Result == nil {
-				results[i] = failedItem(i, tc, r.Err, agent.contextWindow())
+				results[i] = failedItem(i, tc, calls[i].Tool, r.Err, agent.contextWindow())
 				continue
 			}
 
