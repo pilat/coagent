@@ -21,8 +21,9 @@ func parseGwtCommand(text string) (string, bool) {
 
 func (m *Manager) handleGWT(ctx context.Context, sessionID int64, name string) {
 	if name == "" {
-		_, _ = m.sendMessage(
+		m.reply(
 			ctx,
+			commandGWT,
 			strings.ReplaceAll("Usage: /gwt <name> — fork this project into a git worktree.", "\n", " "),
 		)
 
@@ -31,11 +32,11 @@ func (m *Manager) handleGWT(ctx context.Context, sessionID int64, name string) {
 
 	workDir, ok := m.workDirBySessionID(ctx, sessionID)
 	if !ok || workDir == "" {
-		_, _ = m.sendMessage(ctx, strings.ReplaceAll("Could not resolve this session's directory.", "\n", " "))
+		m.reply(ctx, commandGWT, strings.ReplaceAll("Could not resolve this session's directory.", "\n", " "))
 		return
 	}
 
-	m.createAndSwitch(ctx, controllerapi.SessionCreateData{
+	m.createAndSwitch(ctx, commandGWT, controllerapi.SessionCreateData{
 		WorkDir: workDir, WorktreeName: name, Attributes: map[string]any{"channel": telegramChannel},
 	})
 }

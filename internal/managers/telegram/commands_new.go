@@ -30,22 +30,22 @@ func (m *Manager) handleNew(ctx context.Context, name string) {
 
 	result, err := m.controller.CreateProject(ctx, controllerapi.ProjectCreateData{Name: name})
 	if err != nil {
-		_, _ = m.sendMessage(ctx, strings.ReplaceAll(err.Error(), "\n", " "))
+		m.reply(ctx, "/new", strings.ReplaceAll(err.Error(), "\n", " "))
 		return
 	}
 
-	m.handleLaunch(ctx, result.Path)
+	m.handleLaunch(ctx, "/new", result.Path)
 }
 
 func (m *Manager) listProjects(ctx context.Context) {
 	result, err := m.controller.ListRecentProjects(ctx)
 	if err != nil {
-		_, _ = m.sendMessage(ctx, strings.ReplaceAll("Failed to list projects: "+err.Error(), "\n", " "))
+		m.reply(ctx, "/new", strings.ReplaceAll("Failed to list projects: "+err.Error(), "\n", " "))
 		return
 	}
 
 	if len(result.Projects) == 0 {
-		_, _ = m.sendMessage(ctx, strings.ReplaceAll("No projects yet. Create one with /new <name>.", "\n", " "))
+		m.reply(ctx, "/new", strings.ReplaceAll("No projects yet. Create one with /new <name>.", "\n", " "))
 		return
 	}
 
@@ -54,18 +54,18 @@ func (m *Manager) listProjects(ctx context.Context) {
 		lines = append(lines, fmt.Sprintf("%d. %s · %s", i+1, project.Name, relativeAge(project.LastActivity)))
 	}
 
-	_, _ = m.sendMessage(ctx, strings.Join(lines, "\n"))
+	m.reply(ctx, "/new", strings.Join(lines, "\n"))
 }
 
 func (m *Manager) handleSpawn(ctx context.Context, path string) {
 	if path != "" {
-		m.handleLaunch(ctx, path)
+		m.handleLaunch(ctx, "/spawn", path)
 		return
 	}
 
 	favorites, err := m.controller.SpawnFavorites(ctx)
 	if err != nil {
-		_, _ = m.sendMessage(ctx, strings.ReplaceAll("Failed to list favorites: "+err.Error(), "\n", " "))
+		m.reply(ctx, "/spawn", strings.ReplaceAll("Failed to list favorites: "+err.Error(), "\n", " "))
 		return
 	}
 
@@ -75,23 +75,23 @@ func (m *Manager) handleSpawn(ctx context.Context, path string) {
 		lines = append(lines, favorites...)
 	}
 
-	_, _ = m.sendMessage(ctx, strings.Join(lines, "\n"))
+	m.reply(ctx, "/spawn", strings.Join(lines, "\n"))
 }
 
-func (m *Manager) handleLaunch(ctx context.Context, path string) {
-	m.createAndSwitch(ctx, controllerapi.SessionCreateData{
+func (m *Manager) handleLaunch(ctx context.Context, command, path string) {
+	m.createAndSwitch(ctx, command, controllerapi.SessionCreateData{
 		WorkDir: path, Attributes: map[string]any{"channel": telegramChannel},
 	})
 }
 
-func (m *Manager) createAndSwitch(ctx context.Context, data controllerapi.SessionCreateData) {
+func (m *Manager) createAndSwitch(ctx context.Context, command string, data controllerapi.SessionCreateData) {
 	id, err := m.controller.CreateSession(ctx, data)
 	if err != nil {
-		_, _ = m.sendMessage(ctx, strings.ReplaceAll(err.Error(), "\n", " "))
+		m.reply(ctx, command, strings.ReplaceAll(err.Error(), "\n", " "))
 		return
 	}
 
-	m.switchChat(ctx, id)
+	m.switchChat(ctx, command, id)
 }
 
 func relativeAge(t *time.Time) string {

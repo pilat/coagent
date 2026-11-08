@@ -118,12 +118,12 @@ func (m *Manager) processChatUpdate(ctx context.Context, msg *telegramMessage) {
 
 	focus, err := m.chat.ChatFocus(ctx, strconv.FormatInt(m.effectiveChatID(), 10))
 	if err != nil {
-		_, _ = m.sendMessage(ctx, strings.ReplaceAll(err.Error(), "\n", " "))
+		m.reply(ctx, "", strings.ReplaceAll(err.Error(), "\n", " "))
 		return
 	}
 
 	if focus == 0 {
-		_, _ = m.sendMessage(ctx, noFocusHint)
+		m.reply(ctx, "", noFocusHint)
 		return
 	}
 
