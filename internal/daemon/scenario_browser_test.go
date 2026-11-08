@@ -93,7 +93,7 @@ func TestScenario_BrowserFramesStayStoredAndProjectToLatest(t *testing.T) {
 	}}
 	h := newHarness(t, options)
 	require.NoError(t, h.mgr.mcpStore.Add(h.ctx, &h.projectID, mcpstore.ServerDef{
-		Name: tool.PlaywrightServerName, Command: server, Args: []string{log}, Enabled: true,
+		Name: "playwright", Command: server, Args: []string{log}, Enabled: true,
 	}))
 	h.startInboxWake()
 	rootID, err := h.mgr.Send(h.ctx, h.projectID, "inspect site", "fake-model", nil)
@@ -269,7 +269,7 @@ func TestScenario_BrowserFramesProjectAfterPlaywrightIsDisabled(t *testing.T) {
 	}}
 	h := newHarness(t, options)
 	require.NoError(t, h.mgr.mcpStore.Add(h.ctx, &h.projectID, mcpstore.ServerDef{
-		Name: tool.PlaywrightServerName, Command: server, Args: []string{log}, Enabled: true,
+		Name: "playwright", Command: server, Args: []string{log}, Enabled: true,
 	}))
 	h.startInboxWake()
 	rootID, err := h.mgr.Send(h.ctx, h.projectID, "inspect site", "fake-model", nil)
@@ -358,7 +358,7 @@ func TestScenario_BrowserRunsOnlyFirstActionInMessage(t *testing.T) {
 		cfg.WorkDir = t.TempDir()
 	}})
 	require.NoError(t, h.mgr.mcpStore.Add(h.ctx, &h.projectID, mcpstore.ServerDef{
-		Name: tool.PlaywrightServerName, Command: server, Args: []string{log}, Enabled: true,
+		Name: "playwright", Command: server, Args: []string{log}, Enabled: true,
 	}))
 	h.startInboxWake()
 	rootID, err := h.mgr.Send(h.ctx, h.projectID, "inspect site", "fake-model", nil)

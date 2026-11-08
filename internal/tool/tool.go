@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"slices"
-	"strings"
 	"sync"
 
 	"github.com/pilat/coagent/internal/llmwire"
@@ -28,16 +27,9 @@ const (
 	IDMCPDisable     = "mcp_disable"
 	IDMCPList        = "mcp_list"
 
-	IDConfigEdit         = "config_edit"
-	IDConfigRead         = "config_read"
-	PlaywrightServerName = "playwright"
-	BrowserTaskState     = "task_state"
+	IDConfigEdit = "config_edit"
+	IDConfigRead = "config_read"
 )
-
-func ValidBrowserTaskState(value any) bool {
-	state, ok := value.(string)
-	return ok && strings.TrimSpace(state) != ""
-}
 
 // FrameAvailability configures the task tool after MCP discovery.
 type FrameAvailability interface { //nolint:iface // Its implementation and consumer are in other packages.

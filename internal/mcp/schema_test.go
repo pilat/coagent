@@ -7,8 +7,6 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"github.com/pilat/coagent/internal/tool"
 )
 
 func TestNormalizeToolSchema(t *testing.T) {
@@ -147,8 +145,14 @@ func TestClientToolSchemaEmptyInputSchema(t *testing.T) {
 }
 
 func TestMCPToolParametersNormalizedSchema(t *testing.T) {
-	for _, serverName := range []string{"other", tool.PlaywrightServerName} {
-		t.Run(serverName, func(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		profile Profile
+	}{
+		{name: "without profile"},
+		{name: "with profile", profile: testProfile{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			normalized, err := normalizeToolSchema([]byte(`{
 				"$schema":"http://json-schema.org/draft-07/schema#","title":"LookupArguments",
@@ -156,19 +160,16 @@ func TestMCPToolParametersNormalizedSchema(t *testing.T) {
 				"required":["id"],"additionalProperties":false
 			}`))
 			require.NoError(t, err)
-			mcpTool := newMCPTool(serverName, ToolMeta{Name: "lookup", Schema: normalized}, nil, nil)
+			mcpTool := newMCPTool("example", ToolMeta{Name: "lookup", Schema: normalized}, nil, nil, tc.profile)
 			var got map[string]any
 			require.NoError(t, json.Unmarshal(mcpTool.Parameters(), &got))
 			assert.NotContains(t, got, "$schema")
 
-			if serverName == tool.PlaywrightServerName {
-				properties := got["properties"].(map[string]any)
-				state := properties[tool.BrowserTaskState].(map[string]any)
-				assert.Equal(t, "string", state["type"])
-				assert.NotEmpty(t, state["description"])
-				assert.Equal(t, []any{"id", tool.BrowserTaskState}, got["required"])
-				delete(properties, tool.BrowserTaskState)
-				got["required"] = []any{"id"}
+			if tc.profile != nil {
+				assert.Equal(t, true, got["profile"])
+				delete(got, "profile")
+			} else {
+				assert.Equal(t, string(normalized), string(mcpTool.Parameters()))
 			}
 
 			var want map[string]any
@@ -178,4 +179,11 @@ func TestMCPToolParametersNormalizedSchema(t *testing.T) {
 				"required":["id"],"additionalProperties":false}`, string(mcpTool.meta.Schema))
 		})
 	}
+
+	t.Run("empty schema precedes profile", func(t *testing.T) {
+		t.Parallel()
+		candidate := newMCPTool("example", ToolMeta{Name: "missing"}, nil, nil, testProfile{})
+		//nolint:testifylint // Schema bytes form the prompt-cache key.
+		assert.Equal(t, json.RawMessage(`{"type":"object"}`), candidate.Parameters())
+	})
 }

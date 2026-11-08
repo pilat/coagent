@@ -65,7 +65,7 @@ func (m *mockMCPClient) CallTool(ctx context.Context, name string, args map[stri
 func TestMCPToolDeclaresUntrustedSource(t *testing.T) {
 	t.Parallel()
 
-	var candidate tool.Tool = newLiveMCPTool("test_server", "test_tool", &Client{}, nil)
+	var candidate tool.Tool = newLiveMCPTool("test_server", "test_tool", &Client{}, nil, nil)
 	if _, declared := candidate.(tool.UntrustedSource); !declared {
 		t.Fatal("MCP tool must declare untrusted output provenance")
 	}
@@ -76,7 +76,7 @@ func TestMCPTool_ID(t *testing.T) {
 	mcpTool := newLiveMCPTool("test_server", "test_tool", &Client{
 		name:  "test_server",
 		tools: client.tools,
-	}, nil)
+	}, nil, nil)
 
 	expected := "mcp__test_server__test_tool"
 	if got := mcpTool.ID(); got != expected {
@@ -98,7 +98,7 @@ func TestMCPTool_ID_SpecialCharacters(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.serverName+"_"+tt.toolName, func(t *testing.T) {
 			client := &Client{name: tt.serverName, tools: map[string]mcp.Tool{}}
-			mcpTool := newLiveMCPTool(tt.serverName, tt.toolName, client, nil)
+			mcpTool := newLiveMCPTool(tt.serverName, tt.toolName, client, nil, nil)
 
 			if got := mcpTool.ID(); got != tt.expected {
 				t.Errorf("ID() = %q, want %q", got, tt.expected)
@@ -113,7 +113,7 @@ func TestMCPTool_Description(t *testing.T) {
 		name:  "test_server",
 		tools: client.tools,
 	}
-	mcpTool := newLiveMCPTool("test_server", "test_tool", wrappedClient, nil)
+	mcpTool := newLiveMCPTool("test_server", "test_tool", wrappedClient, nil, nil)
 
 	expected := "A test tool"
 	if got := mcpTool.Description(); got != expected {
@@ -126,7 +126,7 @@ func TestMCPTool_Description_NotFound(t *testing.T) {
 		name:  "test_server",
 		tools: map[string]mcp.Tool{},
 	}
-	mcpTool := newLiveMCPTool("test_server", "nonexistent", client, nil)
+	mcpTool := newLiveMCPTool("test_server", "nonexistent", client, nil, nil)
 
 	// Should return empty string for a tool the client never discovered
 	if got := mcpTool.Description(); got != "" {
@@ -140,7 +140,7 @@ func TestMCPTool_Parameters(t *testing.T) {
 		name:  "test_server",
 		tools: client.tools,
 	}
-	mcpTool := newLiveMCPTool("test_server", "test_tool", wrappedClient, nil)
+	mcpTool := newLiveMCPTool("test_server", "test_tool", wrappedClient, nil, nil)
 
 	params := mcpTool.Parameters()
 	if params == nil {
@@ -164,7 +164,7 @@ func TestMCPTool_ResultStructure(t *testing.T) {
 		client: stubMCPClient{},
 		tools:  client.tools,
 	}
-	mcpTool := newLiveMCPTool("test_server", "test_tool", wrappedClient, nil)
+	mcpTool := newLiveMCPTool("test_server", "test_tool", wrappedClient, nil, nil)
 
 	params := json.RawMessage(`{}`)
 	result, err := mcpTool.Execute(context.Background(), params)

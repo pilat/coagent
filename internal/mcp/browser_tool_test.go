@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	mcpclient "github.com/mark3labs/mcp-go/client"
@@ -15,6 +16,32 @@ import (
 )
 
 type fixedAttachmentSink struct{ note string }
+
+type testProfile struct{}
+
+func (testProfile) Admit(meta ToolMeta) bool { return meta.Name == "safe" }
+
+func (testProfile) Schema(input json.RawMessage) json.RawMessage {
+	var schema map[string]any
+	if err := json.Unmarshal(input, &schema); err != nil {
+		panic(err)
+	}
+	schema["profile"] = true
+	encoded, err := json.Marshal(schema)
+	if err != nil {
+		panic(err)
+	}
+	return encoded
+}
+
+func (testProfile) Gate(args map[string]any, decodeErr error) *tool.Result {
+	value, ok := args["gate"].(string)
+	if decodeErr != nil || !ok || strings.TrimSpace(value) == "" {
+		return &tool.Result{IsError: true, Output: "gate required"}
+	}
+	delete(args, "gate")
+	return nil
+}
 
 func (s fixedAttachmentSink) Store(BinaryPart) (Attachment, error) {
 	return Attachment{Note: s.note}, nil
@@ -60,67 +87,67 @@ func TestMCPBinaryContentNeverBecomesText(t *testing.T) {
 	assert.Empty(t, failed.Binary)
 	assert.Contains(t, failed.Text, "server failed")
 	assert.NotContains(t, failed.Text, encoded)
-	toolResult, err := newLiveMCPTool("other", "x", client, nil).Execute(t.Context(), json.RawMessage(`{}`))
+	toolResult, err := newLiveMCPTool("other", "x", client, nil, nil).Execute(t.Context(), json.RawMessage(`{}`))
 	require.NoError(t, err)
 	assert.True(t, toolResult.IsError)
 	assert.True(t, toolResult.Untrusted)
 	assert.NotContains(t, toolResult.Output, encoded)
 }
 
-func TestPlaywrightTaskStateValidationAndForwarding(t *testing.T) {
+func TestProfileGatesArgumentsBeforeForwarding(t *testing.T) {
 	remote := &recordingCallClient{result: &mcp.CallToolResult{Content: []mcp.Content{mcp.TextContent{Text: "frame"}}}}
 	client := &Client{
 		client: remote,
 		tools:  map[string]mcp.Tool{"click": {Name: "click", InputSchema: mcp.ToolInputSchema{Type: "object"}}},
 	}
-	browser := newLiveMCPTool(tool.PlaywrightServerName, "click", client, nil)
-	var schema struct {
-		Properties map[string]json.RawMessage `json:"properties"`
-		Required   []string                   `json:"required"`
-	}
-	require.NoError(t, json.Unmarshal(browser.Parameters(), &schema))
-	assert.Contains(t, schema.Properties, tool.BrowserTaskState)
-	assert.Contains(t, schema.Required, tool.BrowserTaskState)
-	for _, args := range []string{`{}`, `{"task_state":"  "}`, `{"task_state":42}`, `broken`} {
-		result, err := browser.Execute(t.Context(), json.RawMessage(args))
+	adapted := newLiveMCPTool("example", "click", client, nil, testProfile{})
+	assert.JSONEq(t, `{"type":"object","properties":{},"required":[],"profile":true}`, string(adapted.Parameters()))
+	for _, args := range []string{`{}`, `{"gate":"  "}`, `{"gate":42}`, `broken`} {
+		result, err := adapted.Execute(t.Context(), json.RawMessage(args))
 		require.NoError(t, err)
-		assert.True(t, result.IsError)
-		assert.False(t, result.Untrusted)
+		assert.Equal(t, &tool.Result{IsError: true, Output: "gate required"}, result)
 	}
 	assert.Empty(t, remote.calls)
-	result, err := browser.Execute(t.Context(), json.RawMessage(`{"task_state":"continue","x":1}`))
+	result, err := adapted.Execute(t.Context(), json.RawMessage(`{"gate":"continue","x":1}`))
 	require.NoError(t, err)
 	assert.False(t, result.IsError)
 	require.Len(t, remote.calls, 1)
 	assert.Equal(t, map[string]any{"x": float64(1)}, remote.calls[0].Params.Arguments)
 	assert.True(t, result.Untrusted)
 
-	other := newLiveMCPTool("playwright2", "click", client, nil)
-	assert.JSONEq(t, string(toolMetaOf(client, "click").Schema), string(other.Parameters()))
+	other := newLiveMCPTool("playwright", "click", client, nil, nil)
+	assert.Equal(t, toolMetaOf(client, "click").Schema, other.Parameters())
+	_, err = other.Execute(t.Context(), json.RawMessage(`broken`))
+	require.ErrorContains(t, err, "invalid parameters:")
+	assert.Len(t, remote.calls, 1)
 }
 
-func TestRegisterToolsUsesActivationSinkAndSkipsTaskStateCollision(t *testing.T) {
+func TestRegisterToolsUsesActivationSinkAndProfileAdmission(t *testing.T) {
 	encoded := base64.StdEncoding.EncodeToString([]byte("blob"))
 	remote := &recordingCallClient{result: &mcp.CallToolResult{Content: []mcp.Content{
 		mcp.ImageContent{MIMEType: "image/png", Data: encoded},
 	}}}
 	client := &Client{client: remote, tools: map[string]mcp.Tool{
-		"safe": {Name: "safe", InputSchema: mcp.ToolInputSchema{Type: "object"}},
-		"collision": {
-			Name: "collision",
-			InputSchema: mcp.ToolInputSchema{
-				Type:       "object",
-				Properties: map[string]any{tool.BrowserTaskState: map[string]any{"type": "string"}},
-			},
-		},
+		"safe":     {Name: "safe", InputSchema: mcp.ToolInputSchema{Type: "object"}},
+		"rejected": {Name: "rejected", InputSchema: mcp.ToolInputSchema{Type: "object"}},
 	}}
-	service := &svc{clients: map[string]*Client{tool.PlaywrightServerName: client}}
+	service := &svc{clients: map[string]*Client{"example": client}}
 	for _, note := range []string{"first activation", "second activation"} {
 		registry := tool.NewRegistry()
-		assert.Equal(t, 1, service.RegisterTools(registry, fixedAttachmentSink{note: note}))
-		assert.Nil(t, registry.Get("mcp__playwright__"+"collision"))
-		result, err := registry.Get("mcp__playwright__"+"safe").
-			Execute(t.Context(), json.RawMessage(`{"task_state":"continue"}`))
+		assert.Equal(
+			t,
+			1,
+			service.RegisterTools(
+				registry,
+				fixedAttachmentSink{note: note},
+				map[string]Profile{"example": testProfile{}},
+			),
+		)
+		assert.Nil(t, registry.Get("mcp__example__rejected"))
+		adapted := registry.Get("mcp__example__safe")
+		require.NotNil(t, adapted)
+		assert.Contains(t, string(adapted.Parameters()), `"profile":true`)
+		result, err := adapted.Execute(t.Context(), json.RawMessage(`{"gate":"continue"}`))
 		require.NoError(t, err)
 		assert.Contains(t, result.Output, note)
 	}
