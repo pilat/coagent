@@ -14,6 +14,13 @@ import (
 	"github.com/pilat/coagent/internal/tool"
 )
 
+func TestSkillToolDeclaresSkillLoader(t *testing.T) {
+	t.Parallel()
+
+	_, declared := NewSkillTool(nil).(tool.SkillLoader)
+	assert.True(t, declared)
+}
+
 func TestSkillToolNilLoaderReturnsUnavailable(t *testing.T) {
 	t.Parallel()
 

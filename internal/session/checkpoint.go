@@ -153,11 +153,13 @@ func parseCheckpointPrefix(messages []llmwire.Message, headerSize int) checkpoin
 	return cp
 }
 
-// selectCurrentSkill returns the latest skill candidate in position order:
-// rendered envelopes in role-user rows or in paired role-tool rows named
-// `skill`. skip excludes one row (the previous summary row — its model text may
-// quote an envelope). Failed calls and batch-shaped output never qualify.
-func selectCurrentSkill(messages []llmwire.Message, from, skip int) (int, string) {
+// The previous summary is skipped because model text may quote an envelope.
+// Tool rows qualify only while their tool is registered and declares skill loading.
+func selectCurrentSkill(
+	messages []llmwire.Message,
+	from, skip int,
+	loadsSkills func(toolName string) bool,
+) (int, string) {
 	last, envelope := -1, ""
 
 	for i := from; i < len(messages); i++ {
@@ -172,7 +174,7 @@ func selectCurrentSkill(messages []llmwire.Message, from, skip int) (int, string
 			if env, ok := lastEnvelope(msg.Content); ok {
 				last, envelope = i, env
 			}
-		case msg.Role == llmwire.RoleTool && msg.ToolName == tool.IDSkill:
+		case msg.Role == llmwire.RoleTool && loadsSkills(msg.ToolName):
 			if env, ok := lastEnvelope(msg.Content); ok {
 				last, envelope = i, env
 			}

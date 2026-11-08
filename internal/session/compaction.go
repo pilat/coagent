@@ -165,7 +165,10 @@ func (s *Session) compactLocked(
 	cp := parseCheckpointPrefix(s.ms.messages, headerSize)
 	window := s.contextWindow()
 
-	candIdx, candEnvelope := selectCurrentSkill(s.ms.messages, headerSize, cp.summaryRowIdx)
+	candIdx, candEnvelope := selectCurrentSkill(s.ms.messages, headerSize, cp.summaryRowIdx, func(name string) bool {
+		_, ok := s.registry.Get(name).(tool.SkillLoader)
+		return ok
+	})
 
 	split, summaryMsg, err := s.buildCheckpointCandidate(ctx, cp, background, pendingExternal, window, completionPin)
 	if err != nil {

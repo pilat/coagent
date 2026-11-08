@@ -98,6 +98,13 @@ type UntrustedSource interface { //nolint:iface // Declared by tools elsewhere, 
 	UntrustedSource()
 }
 
+// SkillLoader is declared by the tool that loads skills: it enables the skills
+// inventory, and its rows may carry the current skill across compaction.
+type SkillLoader interface { //nolint:iface // Declared by builtin, consulted by the core.
+	Tool
+	SkillLoader()
+}
+
 // ActivationDeclarer marks mutations that require an exact user command turn.
 // The declaration advertises routing only; execution must revalidate the
 // durable grant carried by the tool context.

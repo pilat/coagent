@@ -11,7 +11,10 @@ import (
 	"github.com/pilat/coagent/internal/tool"
 )
 
-var _ tool.Tool = (*skillTool)(nil)
+var (
+	_ tool.Tool        = (*skillTool)(nil)
+	_ tool.SkillLoader = (*skillTool)(nil)
+)
 
 type skillParams struct {
 	Name string `json:"name"`
@@ -33,6 +36,7 @@ func NewSkillTool(ldr *loader.Service) tool.Tool {
 
 func (t *skillTool) ID() string         { return tool.IDSkill }
 func (t *skillTool) ParallelSafe() bool { return false }
+func (t *skillTool) SkillLoader()       {}
 
 // Description builds a deterministic skill listing for the LLM prompt cache key.
 func (t *skillTool) Description() string { return t.buildDescription() }
