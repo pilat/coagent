@@ -35,7 +35,10 @@ Usage:
 Read the ranges needed for the current question. Group independent reads in one response; choose follow-up reads after inspecting the results.`
 )
 
-var _ tool.Tool = (*readTool)(nil)
+var (
+	_ tool.Tool          = (*readTool)(nil)
+	_ tool.TrailDeclarer = (*readTool)(nil)
+)
 
 type readParams struct {
 	FilePath string `json:"file_path"`
@@ -56,6 +59,10 @@ func newReadToolWithAccess(workDir string, access *safefile.Access, tracker File
 func (t *readTool) ID() string          { return "read" }
 func (t *readTool) ParallelSafe() bool  { return true }
 func (t *readTool) Description() string { return readDescription }
+
+func (t *readTool) TrailArgument() tool.TrailArgument {
+	return tool.TrailArgument{Param: filePathParam, Path: true}
+}
 
 func (t *readTool) Parameters() json.RawMessage {
 	return json.RawMessage(`{

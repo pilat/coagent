@@ -39,6 +39,7 @@ Note: Some sites may block automated requests.`
 
 var (
 	_ tool.Tool            = (*webFetchTool)(nil)
+	_ tool.TrailDeclarer   = (*webFetchTool)(nil)
 	_ tool.UntrustedSource = (*webFetchTool)(nil)
 )
 
@@ -66,6 +67,10 @@ func newWebFetchTool() *webFetchTool {
 func (t *webFetchTool) ID() string          { return "webfetch" }
 func (t *webFetchTool) ParallelSafe() bool  { return true }
 func (t *webFetchTool) Description() string { return webfetchDescription }
+
+func (t *webFetchTool) TrailArgument() tool.TrailArgument {
+	return tool.TrailArgument{Param: "url"}
+}
 
 func (t *webFetchTool) UntrustedSource() {}
 

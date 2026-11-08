@@ -23,6 +23,11 @@ Usage:
 - Hidden files (starting with .) are excluded
 - Files show their size in human-readable format (B, KB, MB, GB)`
 
+var (
+	_ tool.Tool          = (*LsTool)(nil)
+	_ tool.TrailDeclarer = (*LsTool)(nil)
+)
+
 type LsParams struct {
 	Path string `json:"path"`
 }
@@ -31,8 +36,6 @@ type LsTool struct {
 	workDir string
 	access  *safefile.Access
 }
-
-var _ tool.Tool = (*LsTool)(nil)
 
 type entryInfo struct {
 	name  string
@@ -47,6 +50,10 @@ func newLsTool(workDir string, access *safefile.Access) *LsTool {
 func (t *LsTool) ID() string          { return "ls" }
 func (t *LsTool) ParallelSafe() bool  { return true }
 func (t *LsTool) Description() string { return lsDescription }
+
+func (t *LsTool) TrailArgument() tool.TrailArgument {
+	return tool.TrailArgument{Param: "path", Path: true}
+}
 
 func (t *LsTool) Parameters() json.RawMessage {
 	return json.RawMessage(`{

@@ -7,11 +7,12 @@ import (
 
 	"github.com/pilat/coagent/internal/llmwire"
 	"github.com/pilat/coagent/internal/logger"
+	"github.com/pilat/coagent/internal/tool"
 )
 
 const toolTrailWidth = 80
 
-func renderToolTrail(calls []llmwire.ToolCall, workDir string) string {
+func renderToolTrail(calls []llmwire.ToolCall, reg *tool.Registry, workDir string) string {
 	var lines []string
 
 	for _, call := range calls {
@@ -24,20 +25,20 @@ func renderToolTrail(calls []llmwire.ToolCall, workDir string) string {
 			}
 			if err := json.Unmarshal(call.Arguments, &batch); err == nil && len(batch.Calls) > 0 {
 				for _, inner := range batch.Calls {
-					lines = append(lines, toolTrailLine(inner.Tool, inner.Params, workDir))
+					lines = append(lines, toolTrailLine(inner.Tool, inner.Params, reg, workDir))
 				}
 
 				continue
 			}
 		}
 
-		lines = append(lines, toolTrailLine(call.Name, call.Arguments, workDir))
+		lines = append(lines, toolTrailLine(call.Name, call.Arguments, reg, workDir))
 	}
 
 	return strings.Join(lines, "\n")
 }
 
-func toolTrailLine(name string, arguments json.RawMessage, workDir string) string {
+func toolTrailLine(name string, arguments json.RawMessage, reg *tool.Registry, workDir string) string {
 	label := clipToolTrail(strings.NewReplacer("\n", "", "\r", "", "`", "").Replace(name))
 	if strings.TrimSpace(label) == "" {
 		label = "?"
@@ -45,8 +46,8 @@ func toolTrailLine(name string, arguments json.RawMessage, workDir string) strin
 
 	line := "→ " + label
 
-	key := toolTrailArgument(name)
-	if key == "" {
+	argument := toolTrailArgument(reg, name)
+	if argument.Param == "" {
 		return line
 	}
 
@@ -56,12 +57,12 @@ func toolTrailLine(name string, arguments json.RawMessage, workDir string) strin
 	}
 
 	var value string
-	if err := json.Unmarshal(params[key], &value); err != nil {
+	if err := json.Unmarshal(params[argument.Param], &value); err != nil {
 		return line
 	}
 
 	value = logger.Redact(value)
-	if key == "file_path" || key == "path" {
+	if argument.Path {
 		if rel, err := filepath.Rel(workDir, value); err == nil && rel != ".." &&
 			!strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 			value = rel
@@ -78,27 +79,20 @@ func toolTrailLine(name string, arguments json.RawMessage, workDir string) strin
 	return line + ": `" + value + "`"
 }
 
-func toolTrailArgument(name string) string {
-	switch name {
-	case "bash":
-		return "command"
-	case "read", "write", "edit":
-		return "file_path"
-	case "grep", "glob":
-		return "pattern"
-	case "ls":
-		return "path"
-	case "webfetch":
-		return "url"
-	case "websearch":
-		return "query"
-	case "task":
-		return "description"
-	case "skill":
-		return "name"
-	default:
-		return ""
+func toolTrailArgument(reg *tool.Registry, name string) tool.TrailArgument {
+	if name == tool.IDTask {
+		return tool.TrailArgument{Param: "description"}
 	}
+
+	if reg == nil {
+		return tool.TrailArgument{}
+	}
+
+	if declarer, ok := reg.Get(name).(tool.TrailDeclarer); ok {
+		return declarer.TrailArgument()
+	}
+
+	return tool.TrailArgument{}
 }
 
 func clipToolTrail(value string) string {

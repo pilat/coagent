@@ -33,7 +33,10 @@ const (
 	metaKeyProcessID = "process_id"
 )
 
-var _ tool.Tool = (*bashTool)(nil)
+var (
+	_ tool.Tool          = (*bashTool)(nil)
+	_ tool.TrailDeclarer = (*bashTool)(nil)
+)
 
 // bashParams are the parameters for the bash tool.
 type bashParams struct {
@@ -75,6 +78,10 @@ func newBashToolWithAccess(
 func (t *bashTool) ID() string          { return "bash" }
 func (t *bashTool) ParallelSafe() bool  { return false }
 func (t *bashTool) Description() string { return bashDescription + backgroundDescriptionSuffix }
+
+func (t *bashTool) TrailArgument() tool.TrailArgument {
+	return tool.TrailArgument{Param: "command"}
+}
 
 func (t *bashTool) Parameters() json.RawMessage {
 	return json.RawMessage(`{
