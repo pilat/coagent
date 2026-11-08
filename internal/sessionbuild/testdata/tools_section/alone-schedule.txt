@@ -1,0 +1,10 @@
+
+
+# TOOLS
+
+Available tools for this session:
+- Scheduling: schedule (wake-up timer)
+
+# SCHEDULING
+
+Use schedule only for future work or reminders. Never use it to poll the status or completion of already-started work, including processes, builds, tests, CI runs, deployments, subagents, or output files.

@@ -1,0 +1,10 @@
+
+
+# TOOLS
+
+Available tools for this session:
+- Memory: memory_delete
+
+# PERSISTENT MEMORY
+
+**Curated memories** — shown in your system prompt above. Use memory_save to store short facts (max 200 chars, 50 per project). Use memory_delete to remove by ID. When the limit is reached, consolidate: merge related entries, delete obsolete ones. Always ask the user before modifying or deleting existing memories.

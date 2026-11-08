@@ -1,0 +1,10 @@
+
+
+# TOOLS
+
+Available tools for this session:
+- Parallel execution: batch (group tool calls (fallback))
+
+# PARALLEL EXECUTION
+
+Prefer native multiple tool calls for independent work; use `batch` only as a fallback.

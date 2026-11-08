@@ -1,0 +1,6 @@
+
+
+# TOOLS
+
+Available tools for this session:
+- Sub-agents: send_to_subagent (continue/resume an existing subagent)
