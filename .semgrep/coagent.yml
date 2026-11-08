@@ -228,3 +228,41 @@ rules:
       - pattern-either:
           - pattern: $S.AddSchedule(...)
           - pattern: $S.AddScheduleWithMeta(...)
+
+  # Naming extensible tools in the core makes every new tool require core edits.
+  # Traits keep that knowledge with the tool's owner.
+  - id: coagent-tool-identity-via-traits
+    languages: [go]
+    severity: ERROR
+    paths:
+      include: ["internal/**/*.go", "cmd/**/*.go"]
+      exclude: ["internal/tool/**", "cmd/coagent/**", "*_test.go"]
+    message: >-
+      The core must not special-case a tool by name, or every new tool has to
+      teach the core its identifier. Declare a trait on the tool instead (an
+      optional interface in internal/tool, or for rows that outlive the tool an
+      ID rule from the tool stack) and consult that instead of tool.$NAME. Only
+      the tool's own package names it.
+    patterns:
+      - pattern: tool.$NAME
+      - metavariable-regex:
+          metavariable: $NAME
+          regex: '^(?!(IDSleep|IDSchedule|IDTask|IDSendToSubagent|IDBatch|IDCancelProcess|IDConfigEdit|IDConfigRead|IsExternalCall|IDMCPAdd|IDMCPRemove|IDMCPEnable|IDMCPDisable|IDMCPList)$)(ID[A-Z]|Is[A-Z]|Browser|Playwright)'
+
+  # MCP management identities belong to their store, so other packages must
+  # consult declared traits rather than grow another list of management tools.
+  - id: coagent-mcp-store-tool-ids-stay-in-mcpstore
+    languages: [go]
+    severity: ERROR
+    paths:
+      include: ["internal/**/*.go", "cmd/**/*.go"]
+      exclude: ["internal/tool/**", "cmd/coagent/**", "*_test.go", "internal/mcpstore/**"]
+    message: >-
+      The MCP management tools belong to internal/mcpstore, and the core must
+      not special-case them by name. Declare a trait on the tool instead and
+      consult that instead of tool.$NAME.
+    patterns:
+      - pattern: tool.$NAME
+      - metavariable-regex:
+          metavariable: $NAME
+          regex: '^IDMCP(Add|Remove|Enable|Disable|List)$'
