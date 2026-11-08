@@ -28,12 +28,21 @@ type ToolMeta struct {
 	Schema      json.RawMessage
 }
 
+// Profile lets the owner of one server's tool surface adapt its tools.
+// Gate receives nil args when decodeErr is non-nil; a nil result means forward the call.
+type Profile interface {
+	Admit(meta ToolMeta) bool
+	Schema(schema json.RawMessage) json.RawMessage
+	Gate(args map[string]any, decodeErr error) *tool.Result
+}
+
 // mcpTool keeps the metadata discovered for one stack and calls its live client.
 type mcpTool struct {
 	serverName string
 	meta       ToolMeta
 	clientFor  func(ctx context.Context) (*Client, error)
 	sink       AttachmentSink
+	profile    Profile
 }
 
 // newMCPTool builds a direct MCP tool from discovered metadata.
@@ -42,21 +51,23 @@ func newMCPTool(
 	meta ToolMeta,
 	clientFor func(ctx context.Context) (*Client, error),
 	sink AttachmentSink,
+	profile Profile,
 ) *mcpTool {
 	return &mcpTool{
 		serverName: serverName,
 		meta:       meta,
 		clientFor:  clientFor,
 		sink:       sink,
+		profile:    profile,
 	}
 }
 
 // newLiveMCPTool pins a live client: metadata is projected from the client's
 // discovered tools and every execution runs on that client.
-func newLiveMCPTool(serverName, toolName string, client *Client, sink AttachmentSink) *mcpTool {
+func newLiveMCPTool(serverName, toolName string, client *Client, sink AttachmentSink, profile Profile) *mcpTool {
 	return newMCPTool(serverName, toolMetaOf(client, toolName), func(context.Context) (*Client, error) {
 		return client, nil
-	}, sink)
+	}, sink, profile)
 }
 
 func toolMetaOf(client *Client, toolName string) ToolMeta {
@@ -95,52 +106,23 @@ func (t *mcpTool) Parameters() json.RawMessage {
 		return json.RawMessage(`{"type":"object"}`)
 	}
 
-	if t.serverName != tool.PlaywrightServerName {
+	if t.profile == nil {
 		return t.meta.Schema
 	}
 
-	var schema map[string]any
-	if err := json.Unmarshal(t.meta.Schema, &schema); err != nil || schema == nil {
-		schema = map[string]any{"type": "object"}
-	}
-
-	properties, _ := schema["properties"].(map[string]any)
-	if properties == nil {
-		properties = make(map[string]any)
-	}
-
-	properties[tool.BrowserTaskState] = map[string]any{
-		"type":        "string",
-		"description": "In up to five sentences, say whether the previous action succeeded, failed, or is uncertain based on the current frame; preserve task facts from this frame (names, prices, URLs, counts, exclusions); and name the next immediate goal. Do not describe screen coordinates or layout.",
-	}
-	schema["properties"] = properties
-	required, _ := schema["required"].([]any)
-	schema["required"] = append(required, tool.BrowserTaskState)
-
-	encoded, err := json.Marshal(schema)
-	if err != nil {
-		return t.meta.Schema
-	}
-
-	return encoded
+	return t.profile.Schema(t.meta.Schema)
 }
 
 func (t *mcpTool) Execute(ctx context.Context, params json.RawMessage) (*tool.Result, error) {
 	var args map[string]any
-	if err := json.Unmarshal(params, &args); err != nil {
-		if t.serverName == tool.PlaywrightServerName {
-			return browserTaskStateError(), nil
-		}
 
+	err := json.Unmarshal(params, &args)
+	if t.profile != nil {
+		if result := t.profile.Gate(args, err); result != nil {
+			return result, nil
+		}
+	} else if err != nil {
 		return nil, fmt.Errorf("invalid parameters: %w", err)
-	}
-
-	if t.serverName == tool.PlaywrightServerName {
-		if !tool.ValidBrowserTaskState(args[tool.BrowserTaskState]) {
-			return browserTaskStateError(), nil
-		}
-
-		delete(args, tool.BrowserTaskState)
 	}
 
 	client, err := t.clientFor(ctx)
@@ -206,11 +188,4 @@ func (t *mcpTool) Execute(ctx context.Context, params json.RawMessage) (*tool.Re
 			"tool":   t.meta.Name,
 		},
 	}, nil
-}
-
-func browserTaskStateError() *tool.Result {
-	return &tool.Result{
-		IsError: true,
-		Output:  "Every playwright tool call requires a non-blank string task_state recording the previous action's outcome, task facts from the current frame, and the next goal.",
-	}
 }

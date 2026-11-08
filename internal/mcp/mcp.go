@@ -2,7 +2,6 @@ package mcp
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"sync"
 	"time"
@@ -28,7 +27,7 @@ type ServerStats struct {
 type Service interface {
 	Start(ctx context.Context, config *Config) (*ServerStats, error)
 	Stop()
-	RegisterTools(registry *tool.Registry, sink AttachmentSink) int
+	RegisterTools(registry *tool.Registry, sink AttachmentSink, profiles map[string]Profile) int
 	GetClient(name string) *Client
 	Stats() ServerStats
 	// Refresh checks live connections and refreshes their catalog before reuse.
@@ -139,31 +138,21 @@ func (s *svc) Stop() {
 	}
 }
 
-func (s *svc) RegisterTools(registry *tool.Registry, sink AttachmentSink) int {
+func (s *svc) RegisterTools(registry *tool.Registry, sink AttachmentSink, profiles map[string]Profile) int {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	count := 0
 
 	for serverName, client := range s.clients {
+		profile := profiles[serverName]
+
 		for toolName := range client.Tools() {
-			if serverName == tool.PlaywrightServerName {
-				meta := toolMetaOf(client, toolName)
-
-				var schema struct {
-					Properties map[string]json.RawMessage `json:"properties"`
-				}
-				if json.Unmarshal(meta.Schema, &schema) == nil && schema.Properties != nil {
-					if _, collision := schema.Properties[tool.BrowserTaskState]; collision {
-						logger.Named("mcp.service").
-							Warn("playwright_task_state_collision", zap.String("tool", toolName))
-
-						continue
-					}
-				}
+			if profile != nil && !profile.Admit(toolMetaOf(client, toolName)) {
+				continue
 			}
 
-			registry.Register(newLiveMCPTool(serverName, toolName, client, sink))
+			registry.Register(newLiveMCPTool(serverName, toolName, client, sink, profile))
 
 			count++
 		}

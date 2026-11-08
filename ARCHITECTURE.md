@@ -113,7 +113,7 @@ does not imply a tier except where it expresses an implementation variant.
 - `internal/subagent` — parent-child link ledger, completion transactions and agent-facing tools.
 - `internal/todo` — session-local task tracking.
 - `internal/tool` — tool protocol, registry, suspension sentinel and ordered stage execution.
-- `internal/tool/builtin` — built-in tools and their common stack construction.
+- `internal/tool/builtin` — built-in tools, the browser tool surface and their common stack construction.
 - `internal/transcript` — durable append-only conversation row vocabulary.
 - `internal/version` — build-stamped version vocabulary.
 - `internal/worktree` — shared remote-default worktree creation, origin attestation and failure rollback.
@@ -942,8 +942,9 @@ process launches cannot disagree about declared authority. A suspending tool may
 not be batched with ordinary synchronous tools because its result is delivered
 after the loop exits.
 
-Browser frames use a tool-stack rule declared by tool ID ([ADR-0083](docs/adr/0083-core-recognises-tools-by-declared-traits.md)),
-because stored frames outlive their tools.
+The core recognises tools by declared traits, not tool ID ([ADR-0083](docs/adr/0083-core-recognises-tools-by-declared-traits.md)).
+A live-call property is an optional tool interface; the tool stack declares the browser
+frame rule by ID because stored frames outlive their tools.
 
 Session assembly uses a shared tool-resource cache keyed by session ID, canonical workdir,
 policy and MCP configuration. It retains shell snapshots and MCP clients across
@@ -1057,7 +1058,8 @@ The MCP client normalizes model-facing input schemas before tool registration:
 only top-level `type`, `properties`, `required`, `additionalProperties` and
 `$defs` survive. Type arrays prefer `object` when present, otherwise the first
 non-null type; empty types default to `object`. Nested schemas remain unchanged.
-Playwright adds its required task-state property afterward.
+A per-server profile from the tool stack may then extend the schema; the browser
+surface adds its required task-state property.
 
 Schedule owns cron validation, schedule-list rendering, durable schedule records and execution of sleep
 and schedule tools, including the sleep guard over pending producer obligations. It enqueues through session-store and uses a narrow sender

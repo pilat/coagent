@@ -164,6 +164,7 @@ func BuildStack(ctx context.Context, cfg StackConfig) (*Stack, error) {
 		mcpSvc.RegisterTools(
 			registry,
 			mcp.AttachmentSink(&mcpAttachmentSink{projectID: cfg.ProjectID, sessionID: cfg.SessionID, access: access}),
+			map[string]mcp.Profile{browserServerName: browserProfile{}},
 		)
 	}
 
