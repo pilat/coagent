@@ -203,6 +203,120 @@ func TestScenario_BrowserFramesStayStoredAndProjectToLatest(t *testing.T) {
 	assert.Equal(t, 4, wirePlaceholderCount(restarted))
 }
 
+func TestScenario_BrowserFramesProjectAfterPlaywrightIsDisabled(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX fake MCP server")
+	}
+	imageBytes := browserScenarioPNG(t)
+	encoded := base64.StdEncoding.EncodeToString(imageBytes)
+	dir := t.TempDir()
+	server := filepath.Join(dir, "browser.sh")
+	log := filepath.Join(dir, "calls.log")
+	dbPath := filepath.Join(dir, "session.db")
+	workDir := t.TempDir()
+	require.NoError(
+		t,
+		os.WriteFile(server, []byte(strings.ReplaceAll(browserScenarioScript, "IMAGE_DATA", encoded)), 0o700),
+	)
+	require.NoError(t, os.WriteFile(log, nil, 0o600))
+	var mu sync.Mutex
+	var wireRequests []providerRequest
+	respond := func(_ string, msgs []llmwire.Message) *llmwire.Response {
+		if hasUserContaining(msgs, "GENERAL_CHILD") {
+			return textReply("general complete")
+		}
+		if hasUserContaining(msgs, "BROWSER_CHILD") {
+			for _, step := range []struct{ id, args string }{
+				{"frame-1", `{"task_state":"open page"}`},
+				{"missing", `{}`},
+				{"frame-2", `{"task_state":"first frame showed one item; inspect next"}`},
+				{"server-error", `{"task_state":"second frame showed two items; retry after server failure","fail":true}`},
+				{"frame-3", `{"task_state":"second frame showed two items; finish"}`},
+			} {
+				if toolResultForCallID(msgs, step.id) == nil {
+					return mcpToolCall(step.id, tool.PlaywrightToolPrefix+"view", step.args)
+				}
+			}
+			return textReply("browser complete")
+		}
+		if toolResultForCallID(msgs, "general-task") != nil {
+			return textReply("root complete")
+		}
+		if toolResultForCallID(msgs, "browser-task") != nil {
+			return callReply(
+				"general-task",
+				tool.IDTask,
+				`{"prompt":"GENERAL_CHILD inspect tools","description":"inspect tools","subagent_type":"general"}`,
+			)
+		}
+		return callReply(
+			"browser-task",
+			tool.IDTask,
+			`{"prompt":"BROWSER_CHILD inspect example.test and report facts","description":"inspect site","subagent_type":"browser"}`,
+		)
+	}
+	options := harnessOptions{dbPath: dbPath, respond: respond, configure: func(cfg *config.Config) {
+		cfg.WorkDir = workDir
+		cfg.UnifiedConfig = &config.UnifiedConfig{
+			Models: []config.ModelEntry{
+				{ID: "fake-model", ContextWindow: 200000, InputModalities: []string{"text", "image"}},
+			},
+		}
+	}, observeRequest: func(request providerRequest) {
+		mu.Lock()
+		wireRequests = append(wireRequests, request)
+		mu.Unlock()
+	}}
+	h := newHarness(t, options)
+	require.NoError(t, h.mgr.mcpStore.Add(h.ctx, &h.projectID, mcpstore.ServerDef{
+		Name: tool.PlaywrightServerName, Command: server, Args: []string{log}, Enabled: true,
+	}))
+	h.startInboxWake()
+	rootID, err := h.mgr.Send(h.ctx, h.projectID, "inspect site", "fake-model", nil)
+	require.NoError(t, err)
+	h.waitUntil("browser child spawned", func() bool { return h.linkByCall(rootID, "browser-task") != nil })
+	childID := h.linkByCall(rootID, "browser-task").ChildID
+	h.waitUntil(
+		"browser child completed",
+		func() bool { return lastAssistantTextDTO(h.messages(childID)) == "browser complete" },
+	)
+	h.waitUntil("root completed", func() bool { return lastAssistantTextDTO(h.messages(rootID)) == "root complete" })
+	mu.Lock()
+	wires := append([]providerRequest(nil), wireRequests...)
+	mu.Unlock()
+
+	h.shutdown()
+	require.NoError(t, h.db.Close())
+	second := newHarness(t, options)
+	require.NoError(t, second.mgr.mcpStore.SetEnabled(second.ctx, &second.projectID, "playwright", false))
+	second.startInboxWake()
+	require.NoError(t, second.mgr.SendToChild(second.ctx, childID, "BROWSER_CHILD follow-up after restart"))
+	second.waitUntil("browser follow-up after restart", func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		for _, request := range wireRequests[len(wires):] {
+			if strings.HasSuffix(request.SessionID, ":"+strconv.FormatInt(childID, 10)) {
+				return true
+			}
+		}
+		return false
+	})
+	mu.Lock()
+	var restarted providerRequest
+	for _, request := range wireRequests[len(wires):] {
+		if strings.HasSuffix(request.SessionID, ":"+strconv.FormatInt(childID, 10)) {
+			restarted = request
+			break
+		}
+	}
+	mu.Unlock()
+	assert.Equal(t, 1, wireImageCount(restarted))
+	assert.Equal(t, 4, wirePlaceholderCount(restarted))
+	for _, name := range wireToolNames(restarted) {
+		assert.NotContains(t, name, "mcp__playwright__")
+	}
+}
+
 func TestScenario_BrowserRunsOnlyFirstActionInMessage(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("POSIX fake MCP server")

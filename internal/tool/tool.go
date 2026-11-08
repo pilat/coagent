@@ -103,6 +103,13 @@ type Tool interface {
 	ParallelSafe() bool
 }
 
+// FrameRule classifies calls returning whole frames of one shared surface.
+// It answers by tool ID because stored rows outlive their tools.
+type FrameRule interface { //nolint:iface // Declared by the tool stack, consulted by the session.
+	Owns(toolID string) bool
+	ResultLimit() int
+}
+
 // ActivationDeclarer marks mutations that require an exact user command turn.
 // The declaration advertises routing only; execution must revalidate the
 // durable grant carried by the tool context.

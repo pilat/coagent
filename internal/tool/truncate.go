@@ -2,7 +2,6 @@ package tool
 
 const (
 	MaxToolResultSize         = 25000
-	MaxBrowserFrameSize       = 120000
 	MaxToolResultContextShare = 0.3
 )
 

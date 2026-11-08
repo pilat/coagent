@@ -199,6 +199,10 @@ the attack, not the content category.
 A tool whose Execute may run concurrently with its siblings in one assistant response, declared in code by `ParallelSafe() bool` (a compile-time contract, not an annotation — [ADR-0040](adr/0040-tool-calls-use-declared-ordered-scheduling.md)). The initial allowlist is `read`, `ls`, `glob`, `grep`, `webfetch`, `websearch`, `todoread`, `task`; MCP and every unlisted tool are serialized.
 _Avoid_: thread-safe (an implementation property, not the declared scheduling policy), batch-able.
 
+**tool trait**:
+A property the core consults instead of a tool's ID, declared by the tool as an optional interface or, where stored rows must be classified after their tool is gone, by the tool stack as an ID rule (the browser frame rule).
+_Avoid_: tool kind.
+
 **websearch**:
 The builtin search tool (`internal/tool/builtin`), registered only when `tools.search` selects a REST provider — a model never sees a dead tool. Returns SERP-style results (title/url/snippet); page fetching stays `webfetch`'s job. With no `tools.search` section, `openrouter`-driver models instead get the driver's server-side search injection ([ADR-0043](adr/0043-integrated-search-quality-first.md)).
 _Avoid_: web search tool vs MCP search servers (those keep their `mcp__…` tool IDs and coexist).

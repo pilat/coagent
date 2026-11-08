@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -14,6 +15,18 @@ import (
 	"github.com/pilat/coagent/internal/tool"
 	"github.com/pilat/coagent/internal/transcript"
 )
+
+const testFrameResultLimit = 120000
+
+type testFrameRule struct{}
+
+func (testFrameRule) Owns(id string) bool {
+	return strings.HasPrefix(id, "mcp__playwright__")
+}
+
+func (testFrameRule) ResultLimit() int {
+	return testFrameResultLimit
+}
 
 func browserCall(id string) llmwire.Message {
 	return llmwire.Message{
@@ -45,18 +58,18 @@ func TestProjectBrowserFramesLaterSuccessOnly(t *testing.T) {
 		browserCall("two"),
 		browserFrame("two", true),
 	}
-	failed := projectBrowserFrames(input)
+	failed := projectBrowserFrames(input, testFrameRule{})
 	assert.Equal(t, "frame-one", failed[1].Content)
 	assert.Len(t, failed[1].Images, 1)
 	input = append(input, browserCall("three"), browserFrame("three", false))
-	projected := projectBrowserFrames(input)
+	projected := projectBrowserFrames(input, testFrameRule{})
 	for _, i := range []int{1, 3} {
 		assert.Equal(t, supersededBrowserFrame, projected[i].Content)
 		assert.Nil(t, projected[i].Images)
 	}
 	assert.Equal(t, "frame-three", projected[5].Content)
 	assert.Equal(t, input[0], projected[0])
-	assert.Equal(t, projected, projectBrowserFrames(input))
+	assert.Equal(t, projected, projectBrowserFrames(input, testFrameRule{}))
 	assert.Less(t, estimateTokens(projected), estimateTokens(input))
 	_, count := imagePressure(projected)
 	assert.Equal(t, 1, count)
@@ -75,10 +88,10 @@ func TestProjectBrowserFramesSameTurnAndOtherTools(t *testing.T) {
 		first, browserFrame("one", false), browserFrame("two", false),
 		{Role: llmwire.RoleTool, ToolName: "read", Content: "other"},
 	}
-	projected := projectBrowserFrames(input)
+	projected := projectBrowserFrames(input, testFrameRule{})
 	assert.Equal(t, input, projected)
 	input = append(input, browserCall("three"), browserFrame("three", false))
-	projected = projectBrowserFrames(input)
+	projected = projectBrowserFrames(input, testFrameRule{})
 	assert.Equal(t, supersededBrowserFrame, projected[1].Content)
 	assert.Equal(t, supersededBrowserFrame, projected[2].Content)
 	assert.Equal(t, "other", projected[3].Content)
@@ -129,7 +142,7 @@ func TestBrowserLoopDiversityUsesImageResults(t *testing.T) {
 func TestBrowserCheckpointDoesNotPersistProjectedFrames(t *testing.T) {
 	ctx := context.Background()
 	_, store, sessionID := newAttachmentsStore(t)
-	ms := newMessageStore(store, sessionID, tool.BrowserAgentType)
+	ms := newMessageStore(store, sessionID, testFrameRule{})
 	require.NoError(t, appendTestMessage(ctx, ms, &llmwire.Message{Role: llmwire.RoleUser, Content: "browse"}))
 	for _, id := range []string{"one", "two"} {
 		require.NoError(t, appendTestAssistant(ctx, ms, &llmwire.Response{ToolCalls: browserCall(id).ToolCalls}))
@@ -161,7 +174,7 @@ func TestBrowserCheckpointDoesNotPersistProjectedFrames(t *testing.T) {
 func TestBrowserFrameReplacementClearsMeasuredBaseline(t *testing.T) {
 	ctx := context.Background()
 	_, store, sessionID := newAttachmentsStore(t)
-	ms := newMessageStore(store, sessionID, tool.BrowserAgentType)
+	ms := newMessageStore(store, sessionID, testFrameRule{})
 	require.NoError(t, appendTestAssistant(ctx, ms, &llmwire.Response{ToolCalls: browserCall("one").ToolCalls}))
 	first := browserFrame("one", false)
 	require.NoError(t, appendTestMessage(ctx, ms, &first))
