@@ -7,6 +7,8 @@ import (
 
 	"github.com/mark3labs/mcp-go/client"
 	"github.com/mark3labs/mcp-go/mcp"
+
+	"github.com/pilat/coagent/internal/tool"
 )
 
 // stubMCPClient answers one successful tools/call; embedding the interface
@@ -58,6 +60,15 @@ func (m *mockMCPClient) ToolSchema(name string) (json.RawMessage, error) {
 
 func (m *mockMCPClient) CallTool(ctx context.Context, name string, args map[string]any) (string, error) {
 	return `{"result": "success"}`, nil
+}
+
+func TestMCPToolDeclaresUntrustedSource(t *testing.T) {
+	t.Parallel()
+
+	var candidate tool.Tool = newLiveMCPTool("test_server", "test_tool", &Client{}, nil)
+	if _, declared := candidate.(tool.UntrustedSource); !declared {
+		t.Fatal("MCP tool must declare untrusted output provenance")
+	}
 }
 
 func TestMCPTool_ID(t *testing.T) {

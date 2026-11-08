@@ -225,6 +225,10 @@ type gateTool struct {
 	typedFor map[string]bool
 }
 
+type untrustedGateTool struct{ *gateTool }
+
+func (*untrustedGateTool) UntrustedSource() {}
+
 func (t *imageStubTool) ID() string { return t.id }
 
 func (t *imageStubTool) ParallelSafe() bool { return false }

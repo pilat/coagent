@@ -27,7 +27,11 @@ type scriptedTool struct {
 	directMessages []string
 }
 
+type untrustedScriptedTool struct{ *scriptedTool }
+
 var _ tool.Tool = (*scriptedTool)(nil)
+
+func (*untrustedScriptedTool) UntrustedSource() {}
 
 func (s *scriptedTool) ID() string                  { return s.id }
 func (s *scriptedTool) Description() string         { return s.id + " description" }
@@ -359,7 +363,9 @@ func TestBatchToolUntrustedProvenance(t *testing.T) {
 			name: "one external nested result marks the batch",
 			setup: func(reg *tool.Registry) {
 				reg.Register(local)
-				reg.Register(&scriptedTool{id: "webfetch", result: &tool.Result{Output: "page", Untrusted: true}})
+				reg.Register(&untrustedScriptedTool{&scriptedTool{
+					id: "webfetch", result: &tool.Result{Output: "page", Untrusted: true},
+				}})
 			},
 			calls: []string{"local", "webfetch"},
 			want:  true,
@@ -368,7 +374,9 @@ func TestBatchToolUntrustedProvenance(t *testing.T) {
 			name: "external typed failure with a result marks the batch",
 			setup: func(reg *tool.Registry) {
 				reg.Register(
-					&scriptedTool{id: "webfetch", result: &tool.Result{Output: "err", IsError: true, Untrusted: true}},
+					&untrustedScriptedTool{&scriptedTool{
+						id: "webfetch", result: &tool.Result{Output: "err", IsError: true, Untrusted: true},
+					}},
 				)
 			},
 			calls: []string{"webfetch"},
@@ -378,7 +386,7 @@ func TestBatchToolUntrustedProvenance(t *testing.T) {
 			// The classifier keys on the call, not on a result that never existed.
 			name: "external nested error without a result marks the batch",
 			setup: func(reg *tool.Registry) {
-				reg.Register(&scriptedTool{id: "mcp__fake__ping", err: errors.New("boom")})
+				reg.Register(&untrustedScriptedTool{&scriptedTool{id: "mcp__fake__ping", err: errors.New("boom")}})
 			},
 			calls: []string{"mcp__fake__ping"},
 			want:  true,
