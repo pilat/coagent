@@ -1,0 +1,11 @@
+
+
+# TOOLS
+
+Available tools for this session:
+- Scheduling: sleep (fixed delay)
+
+# SCHEDULING
+
+Use sleep to pause execution for a specified duration.
+A sleep call cannot order or delay another tool call from the same assistant response; calls emitted together may execute concurrently.
