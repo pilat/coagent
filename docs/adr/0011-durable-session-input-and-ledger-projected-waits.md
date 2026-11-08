@@ -1,8 +1,7 @@
 # ADR-0011: Durable session input and ledger-projected waits
 
-## Status
-
-Accepted
+- **Status:** Accepted
+- **Date:** 2026-08-11
 
 ## Context
 

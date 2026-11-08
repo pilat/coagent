@@ -1,7 +1,8 @@
 # ADR-0038: Runtime owners replace daemon capability discovery
 
-- **Status:** Superseded in part by [ADR-0065](0065-daemon-owns-lifecycle-composition.md)
+- **Status:** Accepted
 - **Date:** 2026-08-31
+- **Amended by:** [ADR-0065](0065-daemon-owns-lifecycle-composition.md) — replaces the separate lifecycle component and store-facet grouping; the manager-control boundary and provider-neutral transcript identity stand
 
 ## Context
 

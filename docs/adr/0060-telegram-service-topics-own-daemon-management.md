@@ -2,6 +2,11 @@
 
 - **Status:** Superseded by [ADR-0072](0072-flat-chat-with-a-focus.md): the service topic and the management session are removed; its status-only control socket remains
 - **Date:** 2026-09-14
+- **Supersedes:** [ADR-0007](0007-cli-manager-onboarding.md),
+  [ADR-0008](0008-config-tools-restart-apply.md),
+  [ADR-0009](0009-system-daemon-user-binary.md),
+  [ADR-0022](0022-reserved-coagent-configuration-project.md),
+  [ADR-0049](0049-whole-file-config-tool-and-hand-placed-secrets.md)
 
 ## Context
 

@@ -2,7 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-09-26
-- **Supersedes:** [worktree filesystem grants](0042-work-tree-sessions-write-the-main-repository-git.md), [session shields](0044-session-shields-confine-project-filesystem.md), [pooled session-bound MCP processes](0045-session-bound-mcp-process-identity.md)
+- **Supersedes:** [ADR-0042](0042-work-tree-sessions-write-the-main-repository-git.md) (worktree filesystem grants), [ADR-0044](0044-session-shields-confine-project-filesystem.md) (session shields), [ADR-0045](0045-session-bound-mcp-process-identity.md) (pooled session-bound MCP processes)
 
 ## Context
 

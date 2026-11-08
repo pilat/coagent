@@ -2,6 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-09-12
+- **Supersedes:** [ADR-0035](0035-compaction-summarizes-a-bounded-head.md)
 
 ## Context
 

@@ -2,6 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-08-21
+- **Supersedes:** [ADR-0018](0018-verified-atomic-lsp-installs.md)
 
 ## Context
 

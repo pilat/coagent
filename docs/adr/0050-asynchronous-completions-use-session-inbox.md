@@ -2,6 +2,7 @@
 
 - **Status:** Superseded by [ADR-0053](0053-background-handoff-uses-ordinary-completion.md)
 - **Date:** 2026-09-09
+- **Supersedes:** [ADR-0046](0046-background-bash-process-lifecycle.md)
 
 ## Context
 
