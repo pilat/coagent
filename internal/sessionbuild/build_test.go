@@ -43,7 +43,7 @@ func TestBuildPrompt_AgentInventory(t *testing.T) {
 			set := registry.NewSet(nil)
 			agent, ok := set.Get(tc.agent)
 			require.True(t, ok)
-			reg = filterRegistryForAgent(set, reg, agent)
+			reg = filterRegistryForAgent(set, reg, agent, (*builtin.Stack)(nil).Frames().Owns)
 			in := BuildInput{Config: &config.Config{Model: "current-model"}, Loader: ldr, WorkDir: t.TempDir()}
 			prompt := preparePrompt(in, agent, nil, todo.New(), reg, nil, "medium")
 			text := prompt.SystemPrompt()
@@ -51,6 +51,32 @@ func TestBuildPrompt_AgentInventory(t *testing.T) {
 			assert.Equal(t, tc.wantSubagents, containsText(text, "## Available Subagents"))
 			assert.Contains(t, text, "You are running on current-model.")
 			assert.NotContains(t, text, "# Active background work")
+		})
+	}
+}
+
+func TestBuildPrompt_ReservedSubagentIsNotListed(t *testing.T) {
+	for _, custom := range []bool{false, true} {
+		t.Run(map[bool]string{false: "reserved only", true: "with custom"}[custom], func(t *testing.T) {
+			t.Parallel()
+
+			ldr := loader.New()
+			ldr.RegisterSubagent(&loader.Subagent{Name: "browser", Description: "shadow"})
+			if custom {
+				ldr.RegisterSubagent(&loader.Subagent{Name: "custom", Description: "Custom helper"})
+			}
+			reg := tool.NewRegistry()
+			reg.Register(testTool{id: tool.IDTask})
+			agent, ok := registry.NewSet(nil).Get(registry.AgentTypeBuild)
+			require.True(t, ok)
+			in := BuildInput{Config: &config.Config{}, Loader: ldr, WorkDir: t.TempDir()}
+			prompt := preparePrompt(in, agent, nil, todo.New(), reg, nil, "medium")
+			text := prompt.SystemPrompt()
+
+			assert.Equal(t, custom, strings.Contains(text, "## Available Subagents"))
+			assert.Equal(t, custom, strings.Contains(text, "- **custom**: Custom helper"))
+			assert.NotContains(t, text, "- **browser**")
+			assert.NotContains(t, text, "shadow")
 		})
 	}
 }

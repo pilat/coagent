@@ -19,7 +19,7 @@ func TestFilterRegistryForAgent_BuiltInSubagentExcludesTodoTools(t *testing.T) {
 	cfg, ok := set.Get(registry.AgentTypeGeneral)
 	require.True(t, ok)
 
-	filtered := filterRegistryForAgent(set, testRegistry(), cfg)
+	filtered := filterRegistryForAgent(set, testRegistry(), cfg, (*builtin.Stack)(nil).Frames().Owns)
 
 	assert.Nil(t, filtered.Get("todoread"))
 	assert.Nil(t, filtered.Get("todowrite"))
@@ -37,7 +37,7 @@ func TestFilterRegistryForAgent_DynamicSubagentExcludesTodoTools(t *testing.T) {
 	cfg, ok := set.Get(customType)
 	require.True(t, ok)
 
-	filtered := filterRegistryForAgent(set, testRegistry(), cfg)
+	filtered := filterRegistryForAgent(set, testRegistry(), cfg, (*builtin.Stack)(nil).Frames().Owns)
 
 	assert.Nil(t, filtered.Get("todoread"))
 	assert.Nil(t, filtered.Get("todowrite"))
@@ -50,7 +50,7 @@ func TestFilterRegistryForAgent_BuildAgentKeepsTodoTools(t *testing.T) {
 	cfg, ok := set.Get(registry.AgentTypeBuild)
 	require.True(t, ok)
 
-	filtered := filterRegistryForAgent(set, testRegistry(), cfg)
+	filtered := filterRegistryForAgent(set, testRegistry(), cfg, (*builtin.Stack)(nil).Frames().Owns)
 
 	assert.NotNil(t, filtered.Get("todoread"))
 	assert.NotNil(t, filtered.Get("todowrite"))
@@ -73,7 +73,7 @@ func TestFilterRegistryForAgent_BatchCannotReachExcludedTools(t *testing.T) {
 	full := testRegistry()
 	full.Register(builtin.NewBatchTool(full))
 
-	filtered := filterRegistryForAgent(set, full, cfg)
+	filtered := filterRegistryForAgent(set, full, cfg, (*builtin.Stack)(nil).Frames().Owns)
 	require.NotNil(t, filtered.Get(tool.IDBatch))
 	require.Nil(t, filtered.Get("bash"))
 

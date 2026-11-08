@@ -12,7 +12,6 @@ import (
 
 	"github.com/pilat/coagent/internal/llmwire"
 	"github.com/pilat/coagent/internal/sessionstore"
-	"github.com/pilat/coagent/internal/tool"
 	"github.com/pilat/coagent/internal/transcript"
 )
 
@@ -35,7 +34,7 @@ func browserCall(id string) llmwire.Message {
 		ReasoningContent: "reason",
 		ReasoningRaw:     json.RawMessage(`{"x":1}`),
 		ToolCalls: []llmwire.ToolCall{
-			{ID: id, Name: tool.PlaywrightToolPrefix + "click", Arguments: []byte(`{"task_state":"next"}`)},
+			{ID: id, Name: "mcp__playwright__" + "click", Arguments: []byte(`{"task_state":"next"}`)},
 		},
 	}
 }
@@ -44,7 +43,7 @@ func browserFrame(id string, failed bool) llmwire.Message {
 	return llmwire.Message{
 		Role:       llmwire.RoleTool,
 		ToolCallID: id,
-		ToolName:   tool.PlaywrightToolPrefix + "click",
+		ToolName:   "mcp__playwright__" + "click",
 		ToolError:  failed,
 		Content:    "frame-" + id,
 		Images:     []llmwire.ImageRef{{Path: "/frame/" + id, Mime: llmwire.MimeImagePng, Size: 1000}},
@@ -83,7 +82,7 @@ func TestProjectBrowserFramesLaterSuccessOnly(t *testing.T) {
 
 func TestProjectBrowserFramesSameTurnAndOtherTools(t *testing.T) {
 	first := browserCall("one")
-	first.ToolCalls = append(first.ToolCalls, llmwire.ToolCall{ID: "two", Name: tool.PlaywrightToolPrefix + "snapshot"})
+	first.ToolCalls = append(first.ToolCalls, llmwire.ToolCall{ID: "two", Name: "mcp__playwright__" + "snapshot"})
 	input := []llmwire.Message{
 		first, browserFrame("one", false), browserFrame("two", false),
 		{Role: llmwire.RoleTool, ToolName: "read", Content: "other"},

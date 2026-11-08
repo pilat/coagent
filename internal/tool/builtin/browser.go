@@ -1,8 +1,15 @@
 package builtin
 
-import "github.com/pilat/coagent/internal/tool"
+import (
+	"strings"
 
-const browserFrameResultLimit = 120000
+	"github.com/pilat/coagent/internal/tool"
+)
+
+const (
+	browserFrameResultLimit = 120000
+	browserToolPrefix       = "mcp__playwright__"
+)
 
 var _ tool.FrameRule = browserFrameRule{}
 
@@ -14,7 +21,7 @@ func (s *Stack) Frames() tool.FrameRule {
 }
 
 func (browserFrameRule) Owns(id string) bool {
-	return tool.IsBrowserToolID(id)
+	return strings.HasPrefix(id, browserToolPrefix)
 }
 
 func (browserFrameRule) ResultLimit() int {

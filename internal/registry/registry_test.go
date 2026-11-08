@@ -1,6 +1,7 @@
 package registry
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -63,7 +64,7 @@ func TestNewSet_SubagentWithoutToolsInheritsFullInventory(t *testing.T) {
 	set := NewSet([]AgentTypeConfig{{Name: name, Mode: ModeSubagent}})
 
 	all := []string{"read", "write", "bash", "todoread", "todowrite"}
-	assert.Equal(t, []string{"read", "write", "bash"}, set.FilterTools(all, name))
+	assert.Equal(t, []string{"read", "write", "bash"}, set.FilterTools(all, name, func(string) bool { return false }))
 }
 
 func TestNewSet_SubagentWithExplicitlyEmptyToolsStaysToolless(t *testing.T) {
@@ -71,7 +72,7 @@ func TestNewSet_SubagentWithExplicitlyEmptyToolsStaysToolless(t *testing.T) {
 
 	set := NewSet([]AgentTypeConfig{{Name: name, Mode: ModeSubagent, Tools: []string{}}})
 
-	assert.Empty(t, set.FilterTools([]string{"read", "write"}, name))
+	assert.Empty(t, set.FilterTools([]string{"read", "write"}, name, func(string) bool { return false }))
 }
 
 func TestNewSet_ProjectSubagentShadowsBuiltIn(t *testing.T) {
@@ -109,7 +110,7 @@ func TestNewSet_ClonesProjectToolsBeforeNormalization(t *testing.T) {
 
 	cfg, ok := set.Get("reviewer")
 	require.True(t, ok)
-	assert.Equal(t, []string{"read", "-todoread", "-todowrite", "-mcp__playwright__*"}, cfg.Tools)
+	assert.Equal(t, []string{"read", "-todoread", "-todowrite"}, cfg.Tools)
 }
 
 func TestSet_GetReturnsClonedTools(t *testing.T) {
@@ -170,34 +171,35 @@ func TestSet_FilterTools(t *testing.T) {
 	set := NewSet(nil)
 	all := []string{"read", "write", "todoread", "todowrite", "bash"}
 
-	general := set.FilterTools(all, AgentTypeGeneral)
+	general := set.FilterTools(all, AgentTypeGeneral, func(string) bool { return false })
 	assert.Contains(t, general, "read")
 	assert.Contains(t, general, "write")
 	assert.NotContains(t, general, "todoread")
 	assert.NotContains(t, general, "todowrite")
 
-	explore := set.FilterTools(all, AgentTypeExplore)
+	explore := set.FilterTools(all, AgentTypeExplore, func(string) bool { return false })
 	assert.Contains(t, explore, "read")
 	assert.NotContains(t, explore, "write")
 	assert.NotContains(t, explore, "bash")
 
-	assert.Nil(t, set.FilterTools(all, AgentType("nonexistent")))
+	assert.Nil(t, set.FilterTools(all, AgentType("nonexistent"), func(string) bool { return false }))
 }
 
 func TestBrowserToolVisibility(t *testing.T) {
+	isFrame := func(id string) bool { return strings.HasPrefix(id, "mcp__playwright__") }
 	set := NewSet([]AgentTypeConfig{
 		{Name: "custom", Mode: ModeSubagent, Tools: []string{"mcp__playwright__click", "read"}},
 		{Name: AgentTypeBrowser, Mode: ModeSubagent, Tools: []string{"*"}, Description: "shadow"},
 	})
 	all := []string{"read", "mcp__playwright__click", "mcp__playwright__snapshot", "mcp__other__click"}
 	for _, agent := range []AgentType{AgentTypeBuild, AgentTypeGeneral, "custom"} {
-		assert.NotContains(t, set.FilterTools(all, agent), "mcp__playwright__click")
-		assert.NotContains(t, set.FilterTools(all, agent), "mcp__playwright__snapshot")
+		assert.NotContains(t, set.FilterTools(all, agent, isFrame), "mcp__playwright__click")
+		assert.NotContains(t, set.FilterTools(all, agent, isFrame), "mcp__playwright__snapshot")
 	}
 	assert.Equal(
 		t,
 		[]string{"mcp__playwright__click", "mcp__playwright__snapshot"},
-		set.FilterTools(all, AgentTypeBrowser),
+		set.FilterTools(all, AgentTypeBrowser, isFrame),
 	)
 	cfg, ok := set.Get(AgentTypeBrowser)
 	require.True(t, ok)

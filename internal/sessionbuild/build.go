@@ -132,14 +132,14 @@ func build(
 	level := configureClient(client, in.Record)
 	registerSessionTools(reg, in)
 
-	browserAvailable := slices.ContainsFunc(reg.IDs(), tool.IsBrowserToolID)
+	framesAvailable := slices.ContainsFunc(reg.IDs(), stack.Frames().Owns)
 	if taskTool := reg.Get(tool.IDTask); taskTool != nil {
-		if aware, ok := taskTool.(tool.BrowserAvailability); ok {
-			aware.SetBrowserAvailable(browserAvailable)
+		if aware, ok := taskTool.(tool.FrameAvailability); ok {
+			aware.SetFramesAvailable(framesAvailable)
 		}
 	}
 
-	reg = filterRegistryForAgent(set, reg, agentConfig)
+	reg = filterRegistryForAgent(set, reg, agentConfig, stack.Frames().Owns)
 	if reg.Get("batch") != nil {
 		reg.Register(builtin.NewBatchTool(reg))
 	}
@@ -249,7 +249,7 @@ func preparePrompt(
 	}
 
 	if reg.Get(tool.IDTask) != nil {
-		prompt.SetSubagentsSection(sessionprompt.BuildSubagentsSection(in.Loader))
+		prompt.SetSubagentsSection(sessionprompt.BuildSubagentsSection(in.Loader, registry.Reserved))
 	}
 
 	return prompt
@@ -299,8 +299,13 @@ func registerSessionTools(reg *tool.Registry, in BuildInput) {
 	}
 }
 
-func filterRegistryForAgent(set *registry.Set, reg *tool.Registry, cfg registry.AgentTypeConfig) *tool.Registry {
-	return reg.Filter(set.FilterTools(reg.IDs(), cfg.Name))
+func filterRegistryForAgent(
+	set *registry.Set,
+	reg *tool.Registry,
+	cfg registry.AgentTypeConfig,
+	isFrame func(string) bool,
+) *tool.Registry {
+	return reg.Filter(set.FilterTools(reg.IDs(), cfg.Name, isFrame))
 }
 
 func buildPrompt(

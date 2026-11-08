@@ -36,11 +36,11 @@ type taskTool struct {
 }
 
 var (
-	_ tool.Tool                = (*taskTool)(nil)
-	_ tool.BrowserAvailability = (*taskTool)(nil)
+	_ tool.Tool              = (*taskTool)(nil)
+	_ tool.FrameAvailability = (*taskTool)(nil)
 )
 
-func (t *taskTool) SetBrowserAvailable(available bool) { t.browserAvailable = available }
+func (t *taskTool) SetFramesAvailable(available bool) { t.browserAvailable = available }
 
 // NewTaskTool observes the loader after session assembly has loaded project artifacts.
 func NewTaskTool(sp Spawner, parentID int64, ldr *loader.Service, models []ModelInfo) tool.Tool {
@@ -375,7 +375,7 @@ func (t *taskTool) agentSet() *registry.Set {
 
 	if t.loader != nil {
 		for _, agent := range t.loader.ListSubagents() {
-			if agent.Name == tool.BrowserAgentType {
+			if registry.Reserved(agent.Name) {
 				continue
 			}
 

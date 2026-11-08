@@ -58,7 +58,7 @@ func TestScenario_BrowserFramesStayStoredAndProjectToLatest(t *testing.T) {
 				{"frame-3", `{"task_state":"second frame showed two items; finish"}`},
 			} {
 				if toolResultForCallID(msgs, step.id) == nil {
-					return mcpToolCall(step.id, tool.PlaywrightToolPrefix+"view", step.args)
+					return mcpToolCall(step.id, "mcp__playwright__"+"view", step.args)
 				}
 			}
 			return textReply("browser complete")
@@ -107,12 +107,12 @@ func TestScenario_BrowserFramesStayStoredAndProjectToLatest(t *testing.T) {
 	h.waitUntil("root completed", func() bool { return lastAssistantTextDTO(h.messages(rootID)) == "root complete" })
 	require.NotNil(t, h.linkByCall(rootID, "general-task"))
 	generalID := h.linkByCall(rootID, "general-task").ChildID
-	assert.Zero(t, countAssistantToolCallsFor(h.messages(rootID), tool.PlaywrightToolPrefix+"view"))
+	assert.Zero(t, countAssistantToolCallsFor(h.messages(rootID), "mcp__playwright__"+"view"))
 	stored, err := h.store.LoadActiveMessages(h.ctx, childID)
 	require.NoError(t, err)
 	frames := 0
 	for _, row := range stored {
-		if row.ToolName != tool.PlaywrightToolPrefix+"view" {
+		if row.ToolName != "mcp__playwright__"+"view" {
 			continue
 		}
 		if row.ToolCallID == "missing" || row.ToolCallID == "server-error" {
@@ -156,9 +156,9 @@ func TestScenario_BrowserFramesStayStoredAndProjectToLatest(t *testing.T) {
 	require.NotEmpty(t, rootWire)
 	require.GreaterOrEqual(t, len(childWire), 6)
 	require.NotEmpty(t, generalWire)
-	assert.NotContains(t, wireToolNames(rootWire[0]), tool.PlaywrightToolPrefix+"view")
-	assert.Equal(t, []string{tool.PlaywrightToolPrefix + "view"}, wireToolNames(childWire[0]))
-	assert.NotContains(t, wireToolNames(generalWire[0]), tool.PlaywrightToolPrefix+"view")
+	assert.NotContains(t, wireToolNames(rootWire[0]), "mcp__playwright__"+"view")
+	assert.Equal(t, []string{"mcp__playwright__" + "view"}, wireToolNames(childWire[0]))
+	assert.NotContains(t, wireToolNames(generalWire[0]), "mcp__playwright__"+"view")
 	for _, schema := range rootWire[0].Tools {
 		if schema.Function.Name == tool.IDTask {
 			assert.Contains(t, string(schema.Function.Parameters), `"browser"`)
@@ -234,7 +234,7 @@ func TestScenario_BrowserFramesProjectAfterPlaywrightIsDisabled(t *testing.T) {
 				{"frame-3", `{"task_state":"second frame showed two items; finish"}`},
 			} {
 				if toolResultForCallID(msgs, step.id) == nil {
-					return mcpToolCall(step.id, tool.PlaywrightToolPrefix+"view", step.args)
+					return mcpToolCall(step.id, "mcp__playwright__"+"view", step.args)
 				}
 			}
 			return textReply("browser complete")
@@ -338,12 +338,12 @@ func TestScenario_BrowserRunsOnlyFirstActionInMessage(t *testing.T) {
 			return &llmwire.Response{ToolCalls: []llmwire.ToolCall{
 				{
 					ID:        "first-navigation",
-					Name:      tool.PlaywrightToolPrefix + "view",
+					Name:      "mcp__playwright__" + "view",
 					Arguments: []byte(`{"task_state":"open the first page"}`),
 				},
 				{
 					ID:        "second-navigation",
-					Name:      tool.PlaywrightToolPrefix + "view",
+					Name:      "mcp__playwright__" + "view",
 					Arguments: []byte(`{"task_state":"open another page"}`),
 				},
 			}}

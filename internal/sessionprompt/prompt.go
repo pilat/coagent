@@ -248,7 +248,7 @@ func BuildActiveBackgroundSection(processes []ActiveProcessInfo, links []ActiveS
 }
 
 // BuildSubagentsSection lists spawnable subagent definitions.
-func BuildSubagentsSection(ldr *loader.Service) string {
+func BuildSubagentsSection(ldr *loader.Service, reserved func(name string) bool) string {
 	subagents := ldr.ListSubagents()
 	if len(subagents) == 0 {
 		return ""
@@ -260,7 +260,7 @@ func BuildSubagentsSection(ldr *loader.Service) string {
 	visible := 0
 
 	for _, sa := range subagents {
-		if sa.Name == tool.BrowserAgentType {
+		if reserved(sa.Name) {
 			continue
 		}
 
