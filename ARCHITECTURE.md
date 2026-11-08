@@ -942,6 +942,9 @@ process launches cannot disagree about declared authority. A suspending tool may
 not be batched with ordinary synchronous tools because its result is delivered
 after the loop exits.
 
+Browser frames use a tool-stack rule declared by tool ID ([ADR-0083](docs/adr/0083-core-recognises-tools-by-declared-traits.md)),
+because stored frames outlive their tools.
+
 Session assembly uses a shared tool-resource cache keyed by session ID, canonical workdir,
 policy and MCP configuration. It retains shell snapshots and MCP clients across
 replies and sleep/resume; distinct IDs never share them. Stacks lease those

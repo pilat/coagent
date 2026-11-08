@@ -231,12 +231,13 @@ func (s *Session) newCommit() sessionstore.Commit {
 func (s *Session) commit(ctx context.Context, c sessionstore.Commit) (*sessionstore.CommitResult, error) {
 	invalidateBaseline := false
 
-	if s.ms.agentType == tool.BrowserAgentType {
+	if s.ms.frames != nil {
 		if base := s.loadContextBaseline(); base != nil {
 			invalidateBaseline = browserResultChangesMeasuredPrefix(
 				s.ms.getMessages(),
 				c.ToolResults,
 				base.messageCount,
+				s.ms.frames,
 			)
 			if invalidateBaseline {
 				c.State.ClearContextBaseline = true

@@ -7,6 +7,17 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestFrameSessionIsBrowserOnly(t *testing.T) {
+	t.Parallel()
+
+	set := NewSet(nil)
+	for name := range builtinAgentTypes {
+		cfg, ok := set.Get(name)
+		require.True(t, ok)
+		assert.Equal(t, name == AgentTypeBrowser, cfg.FrameSession, "%s", name)
+	}
+}
+
 // TestNewSet_IsolatesSameNamedSubagents guards the former global-registry bug:
 // two sessions defining a same-named subagent with different configs must not
 // clobber each other.

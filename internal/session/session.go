@@ -36,6 +36,7 @@ type Input struct {
 	Client                   llm.Client
 	Loader                   *loader.Service
 	Registry                 *tool.Registry
+	Frames                   tool.FrameRule
 	Prompt                   *sessionprompt.Builder
 	Store                    Store
 	Events                   Events
@@ -167,7 +168,7 @@ func New(ctx context.Context, in Input) (*Session, error) {
 		s.rootID = s.id
 	}
 
-	s.ms = newMessageStore(in.Store, r.ID, r.AgentType)
+	s.ms = newMessageStore(in.Store, r.ID, in.Frames)
 	if err := s.ms.reloadMessages(ctx); err != nil {
 		return nil, fmt.Errorf("restore transcript: %w", err)
 	}

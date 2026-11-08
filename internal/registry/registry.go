@@ -55,6 +55,7 @@ var builtinAgentTypes = map[AgentType]AgentTypeConfig{
 		Prompt:                  BrowserAgentPrompt,
 		OmitProjectContext:      true,
 		DisableIntegratedSearch: true,
+		FrameSession:            true,
 	},
 	AgentTypeCompaction: {
 		Name:        AgentTypeCompaction,
@@ -81,6 +82,8 @@ type (
 		// Project-defined subagents default to the full session context.
 		OmitProjectContext      bool
 		DisableIntegratedSearch bool
+		// FrameSession applies the tool stack's frame rule to sessions of this type.
+		FrameSession bool
 	}
 )
 

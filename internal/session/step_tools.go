@@ -110,7 +110,7 @@ func executeToolCallsInternal(ctx context.Context, agent *Session, toolCalls []l
 	}
 
 	scheduledCalls, scheduledIndexes := filterExtraBrowserActions(
-		agent.ms.agentType == tool.BrowserAgentType, toolCalls, results,
+		agent.ms.frames, toolCalls, results,
 	)
 
 	// Resolve once while planning: the same tool instance is classified and
@@ -160,11 +160,11 @@ func executeToolCallsInternal(ctx context.Context, agent *Session, toolCalls []l
 }
 
 func filterExtraBrowserActions(
-	browser bool,
+	frames tool.FrameRule,
 	toolCalls []llmwire.ToolCall,
 	results []toolCallResultItem,
 ) ([]llmwire.ToolCall, []int) {
-	if !browser {
+	if frames == nil {
 		return toolCalls, nil
 	}
 
@@ -173,7 +173,7 @@ func filterExtraBrowserActions(
 	seenBrowser := false
 
 	for i, call := range toolCalls {
-		if tool.IsBrowserToolID(call.Name) {
+		if frames.Owns(call.Name) {
 			if seenBrowser {
 				results[i] = toolCallResultItem{
 					index: i, toolCall: call, outcome: tool.OutcomeSkipped,
@@ -234,9 +234,13 @@ func mapExecutorReport(
 				continue
 			}
 
+			frameLimit := 0
+			if frames := agent.ms.frames; frames != nil && frames.Owns(tc.Name) {
+				frameLimit = frames.ResultLimit()
+			}
+
 			results[i] = toolCallResultItem{
-				index: i, toolCall: tc, content: formatToolResult(r.Result, agent.contextWindow(),
-					agent.ms.agentType == tool.BrowserAgentType && tool.IsBrowserToolID(tc.Name)),
+				index: i, toolCall: tc, content: formatToolResult(r.Result, agent.contextWindow(), frameLimit),
 				untrusted: r.Result.Untrusted, images: r.Result.Images,
 				directMessages: r.Result.DirectMessages, outcome: r.Outcome,
 			}
@@ -535,12 +539,12 @@ func countUniqueOutcomes(window []toolRecord) int {
 
 // External titles and notices share the payload budget; local results retain
 // their historical output-only truncation.
-func formatToolResult(result *tool.Result, contextWindow int, browserFrame bool) string {
+func formatToolResult(result *tool.Result, contextWindow, frameLimit int) string {
 	budget := tool.ToolResultBudgetForWindow(contextWindow, tool.MaxToolResultSize)
 	hint := ""
 
-	if browserFrame {
-		budget = tool.ToolResultBudgetForWindow(contextWindow, tool.MaxBrowserFrameSize)
+	if frameLimit > 0 {
+		budget = tool.ToolResultBudgetForWindow(contextWindow, frameLimit)
 		hint = " Read an omitted part with browser_snapshot target (a CSS selector or a visible container ref) and/or depth."
 	}
 

@@ -146,11 +146,17 @@ func build(
 
 	prompt := preparePrompt(in, agentConfig, skills, todos, reg, stack, level)
 
+	var frames tool.FrameRule
+	if agentConfig.FrameSession {
+		frames = stack.Frames()
+	}
+
 	sess, err := session.New(ctx, session.Input{
 		Record:                   in.Record,
 		Client:                   client,
 		Loader:                   in.Loader,
 		Registry:                 reg,
+		Frames:                   frames,
 		Prompt:                   prompt,
 		Store:                    in.Store,
 		Events:                   in.Events,

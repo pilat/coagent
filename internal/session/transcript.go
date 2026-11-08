@@ -38,12 +38,12 @@ const (
 
 // messageStore manages the agent's conversation message history with optional persistence.
 type messageStore struct {
-	mu        sync.Mutex
-	messages  []llmwire.Message
-	rowIDs    []int64
-	store     Store // nil = in-memory only (tests without persistence)
-	sessID    int64 // session ID for persistence
-	agentType string
+	mu       sync.Mutex
+	messages []llmwire.Message
+	rowIDs   []int64
+	store    Store // nil = in-memory only (tests without persistence)
+	sessID   int64 // session ID for persistence
+	frames   tool.FrameRule
 }
 
 const supersededBrowserFrame = "[browser frame replaced — its task facts are in the task_state of the next playwright call]"
@@ -132,19 +132,19 @@ func SettleResults(calls []PendingToolCall, text string) []*transcript.Message {
 func newMessageStore(
 	store Store,
 	sessID int64,
-	agentTypes ...string,
+	frameRules ...tool.FrameRule,
 ) *messageStore {
-	agentType := ""
-	if len(agentTypes) > 0 {
-		agentType = agentTypes[0]
+	var frames tool.FrameRule
+	if len(frameRules) > 0 {
+		frames = frameRules[0]
 	}
 
 	return &messageStore{
-		messages:  make([]llmwire.Message, 0),
-		rowIDs:    make([]int64, 0),
-		store:     store,
-		sessID:    sessID,
-		agentType: agentType,
+		messages: make([]llmwire.Message, 0),
+		rowIDs:   make([]int64, 0),
+		store:    store,
+		sessID:   sessID,
+		frames:   frames,
 	}
 }
 
@@ -243,8 +243,8 @@ func (ms *messageStore) reloadMessagesLocked(ctx context.Context) error {
 		rowIDs[i] = sm.ID
 	}
 
-	if ms.agentType == tool.BrowserAgentType {
-		messages = projectBrowserFrames(messages)
+	if ms.frames != nil {
+		messages = projectBrowserFrames(messages, ms.frames)
 	}
 
 	ms.messages = messages
@@ -253,7 +253,7 @@ func (ms *messageStore) reloadMessagesLocked(ctx context.Context) error {
 	return nil
 }
 
-func projectBrowserFrames(messages []llmwire.Message) []llmwire.Message {
+func projectBrowserFrames(messages []llmwire.Message, frames tool.FrameRule) []llmwire.Message {
 	out := append([]llmwire.Message(nil), messages...)
 	callOwner := make(map[string]int)
 
@@ -270,7 +270,7 @@ func projectBrowserFrames(messages []llmwire.Message) []llmwire.Message {
 	latestSuccessCall := -1
 
 	for _, message := range messages {
-		if message.Role != llmwire.RoleTool || message.ToolError || !tool.IsBrowserToolID(message.ToolName) {
+		if message.Role != llmwire.RoleTool || message.ToolError || !frames.Owns(message.ToolName) {
 			continue
 		}
 
@@ -280,7 +280,7 @@ func projectBrowserFrames(messages []llmwire.Message) []llmwire.Message {
 	}
 
 	for i := range out {
-		if out[i].Role == llmwire.RoleTool && tool.IsBrowserToolID(out[i].ToolName) && latestSuccessCall > i {
+		if out[i].Role == llmwire.RoleTool && frames.Owns(out[i].ToolName) && latestSuccessCall > i {
 			out[i].Content = supersededBrowserFrame
 			out[i].Images = nil
 		}
@@ -289,7 +289,12 @@ func projectBrowserFrames(messages []llmwire.Message) []llmwire.Message {
 	return out
 }
 
-func browserResultChangesMeasuredPrefix(messages []llmwire.Message, results []*transcript.Message, prefixLen int) bool {
+func browserResultChangesMeasuredPrefix(
+	messages []llmwire.Message,
+	results []*transcript.Message,
+	prefixLen int,
+	frames tool.FrameRule,
+) bool {
 	owners := make(map[string]int)
 
 	for i, message := range messages {
@@ -305,7 +310,7 @@ func browserResultChangesMeasuredPrefix(messages []llmwire.Message, results []*t
 	latestSuccessCall := -1
 
 	for _, result := range results {
-		if result.ToolError || !tool.IsBrowserToolID(result.ToolName) {
+		if result.ToolError || !frames.Owns(result.ToolName) {
 			continue
 		}
 
@@ -320,7 +325,7 @@ func browserResultChangesMeasuredPrefix(messages []llmwire.Message, results []*t
 
 	for i := range min(prefixLen, latestSuccessCall) {
 		message := messages[i]
-		if message.Role == llmwire.RoleTool && tool.IsBrowserToolID(message.ToolName) &&
+		if message.Role == llmwire.RoleTool && frames.Owns(message.ToolName) &&
 			(message.Content != supersededBrowserFrame || len(message.Images) != 0) {
 			return true
 		}
