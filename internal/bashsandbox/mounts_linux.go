@@ -279,10 +279,8 @@ func rwEntryOps(entry sandboxpolicy.Entry) ([]mountOp, error) {
 	return []mountOp{{kind: opBindRW, source: entry.Path, target: entry.Path}}, nil
 }
 
-// hostMountOps re-binds the given mount points read-only. Bubblewrap's
-// read-only bind of the root applies MS_RDONLY to the top mount alone, so a
-// nested mount would otherwise stay writable. Mounts outside writable grants
-// are optional at the pin.
+// hostMountOps re-binds the given mount points read-only. Bubblewrap's ro root bind already
+// covers submounts, so this is defence in depth; writable binds do not, hence the pass after each rw grant.
 func hostMountOps(mountPoints, writableRoots []string) []mountOp {
 	ordered := append([]string(nil), mountPoints...)
 	sort.Slice(ordered, func(i, j int) bool {

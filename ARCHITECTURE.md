@@ -747,13 +747,13 @@ read-only exception beneath a writable grant fails compilation or process prepar
 
 `internal/bashsandbox` turns that policy into one ordered mount-operation list —
 excluding wholly superseded rules and preserving the remaining order. A `deny` becomes an
-empty tmpfs or empty file; an `allow` becomes a read-only or read-write bind. A
-host mount point nested under a read-only root keeps its own write flag, so each
-one is re-bound read-only or the parent bind's read-only flag would not reach
-it. A writable grant's recursive bind brings the host mounts beneath it back with
-their host write flags, so each one strictly inside the grant is re-bound
-read-only again right after it, and only a later read-write rule for that
-mount makes it writable. Outside writable grants, a host mount that has vanished
+empty tmpfs or empty file; an `allow` becomes a read-only or read-write bind.
+Bubblewrap's read-only root bind already remounts the host mounts beneath it
+read-only; coagent re-binds each one read-only itself as defence in depth, so the
+boundary does not rest on that launcher behaviour. A writable grant's recursive
+bind does bring the host mounts beneath it back with their host write flags, so
+each one strictly inside the grant is re-bound read-only right after it, and
+only a later read-write rule for that mount makes it writable. Outside writable grants, a host mount that has vanished
 or that the daemon's uid cannot reach is not re-bound: there the sandbox reaches
 the host only through read-only binds, as that uid without capabilities. A fresh
 `/proc` and `/dev` are mounted last so no host bind placed above them can shadow
@@ -963,9 +963,11 @@ selection, while the live session registry controls what is actually callable.
 The built-in `explore` type deliberately starts without project instructions,
 skills, curated memory, Git state or the model catalog, and receives only
 read-only code-search tools; its parent supplies constraints in the assignment.
-The built-in `browser` type likewise omits project context and receives only
-tools from an enabled MCP server named `playwright`; those tools are hidden from
-every other agent type, including project subagents. It is offered to `task`
+The built-in `browser` type likewise omits project context and is the one frame
+session: it receives only the frame rule's tools — those of an enabled MCP
+server named `playwright`, as the built-in browser surface declares them — and
+every other agent type, including project subagents, never sees them. Its name
+is reserved from project subagents by the registry. It is offered to `task`
 only when this activation discovered one of those tools. Every browser call
 requires a model-written `task_state`, retained in its stored tool arguments
 and stripped before forwarding to the server. Browser sessions disable
