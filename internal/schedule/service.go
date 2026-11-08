@@ -85,7 +85,9 @@ func (s *svc) PendingSleeps(ctx context.Context, sessionID int64) ([]PendingSlee
 			}
 
 			if !valid {
-				if err := s.store.RemoveSchedule(ctx, sched.id); err != nil {
+				// A concurrent reader, stop or the due timer may have retired this row first.
+				err := s.store.RemoveSchedule(ctx, sched.id)
+				if err != nil && !errors.Is(err, errScheduleNotFound) {
 					return nil, fmt.Errorf("pending sleeps: %w", err)
 				}
 

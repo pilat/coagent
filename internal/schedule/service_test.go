@@ -41,6 +41,32 @@ func TestPendingSleepsKeepsScheduleWhenCallCheckFails(t *testing.T) {
 	assert.Equal(t, sleep.ID, remaining[0].ID())
 }
 
+type failingRetirementStore struct{ schedule.Store }
+
+func (s failingRetirementStore) RemoveSchedule(ctx context.Context, id int64) error {
+	retireCtx, cancel := context.WithCancel(ctx)
+	cancel()
+
+	return s.Store.RemoveSchedule(retireCtx, id)
+}
+
+func TestPendingSleepsKeepsStaleRowWhenRetirementFails(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	schedStore, projects, sessions := newTestDB(t)
+	root, err := sessions.CreateSession(ctx, testProject(t, projects, "/tmp/project"), "", "", nil)
+	require.NoError(t, err)
+	svc := schedule.NewService(failingRetirementStore{Store: schedStore}, sessions)
+	_, err = svc.AddSleep(ctx, root.ID, "settled-call", time.Now().Add(time.Hour), "wake")
+	require.NoError(t, err)
+
+	_, err = svc.PendingSleeps(ctx, root.ID)
+	require.ErrorIs(t, err, context.Canceled)
+	remaining, err := schedStore.ListSchedules(ctx, root.ID)
+	require.NoError(t, err)
+	assert.Len(t, remaining, 1)
+}
+
 func TestService_CreationVariantsKeepExactIdentity(t *testing.T) {
 	ctx := context.Background()
 	schedStore, daemonStore, sessStore := newTestDB(t)
