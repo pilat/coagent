@@ -255,6 +255,7 @@ Use a real database in tests — open a fresh SQLite file under `t.TempDir()` an
 #### Unit vs integration boundary
 
 - **Unit tests** live next to the code as `<name>_test.go`. Fast (<100ms), no subprocesses, no network, no external tooling on PATH. Run by default under `go test ./...`.
+- **Test-only code** never ships in a production package: a helper used by one package's tests lives in its `_test.go`; one shared across packages lives in a `<pkg>test` package no binary imports (`internal/llm/llmtest`). `make arch` rejects production code unreachable from a binary ([docs/testing.md](testing.md#test-only-code)).
 - **Integration tests** live in `<name>_integration_test.go` or a dedicated file with a build tag:
 
   ```go

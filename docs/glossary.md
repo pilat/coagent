@@ -200,8 +200,16 @@ A tool whose Execute may run concurrently with its siblings in one assistant res
 _Avoid_: thread-safe (an implementation property, not the declared scheduling policy), batch-able.
 
 **tool trait**:
-A property the core consults instead of a tool's ID, declared by the tool as an optional interface or, where stored rows must be classified after their tool is gone, by the tool stack as an ID rule (the browser frame rule).
+A property the core consults instead of a tool's ID, declared by the tool as an optional interface (`tool.UntrustedSource`, `tool.SkillLoader`) or, where stored rows must be classified after their tool is gone, by the tool stack as an ID rule (the **frame rule**) ([ADR-0083](adr/0083-core-recognises-tools-by-declared-traits.md)).
 _Avoid_: tool kind.
+
+**frame rule** (`tool.FrameRule`):
+The tool stack's ID rule naming which tool calls return whole **browser frame**s and what truncation budget a frame gets. It answers for stored rows whose tool is no longer registered. An agent type opts in with `FrameSession`; such a **frame session** sees only the rule's tools, and every other type never sees them. Today the built-in browser surface declares the only rule and `browser` is the only frame session.
+_Avoid_: browser check, Playwright check (the core never tests a tool ID against either name).
+
+**MCP profile** (`mcp.Profile`):
+The per-server adapter the tool stack hands to the MCP client for one server's tools — admit or refuse a discovered tool, extend its model-facing schema, gate a call's arguments before forwarding. `internal/mcp` applies it without knowing any server name; the browser surface's profile adds and strips **browser task state**.
+_Avoid_: server hook, plugin.
 
 **websearch**:
 The builtin search tool (`internal/tool/builtin`), registered only when `tools.search` selects a REST provider — a model never sees a dead tool. Returns SERP-style results (title/url/snippet); page fetching stays `webfetch`'s job. With no `tools.search` section, `openrouter`-driver models instead get the driver's server-side search injection ([ADR-0043](adr/0043-integrated-search-quality-first.md)).
