@@ -21,6 +21,7 @@ make fmt            # golangci-lint fmt
 make tools          # online bootstrap for modules and pinned development tools
 make all            # local handoff gate with architecture, Semgrep and fast tests
 make verify-offline # run the everyday gate with Go/uv resolution disabled
+make ratchet.record # rewrite scripts/ratchet.values; only in a PR that deliberately moves a number
 make ci             # CI-only: static gates + full ordinary/integration tests
 make mutation.nightly # nightly workflow only; never a commit or PR gate
 
@@ -117,7 +118,7 @@ output. These are temporal protocols: unit tests alone are not sufficient.
 - **[docs/glossary.md](docs/glossary.md)** — the project vocabulary: what each coagent term means and which synonyms to avoid. Read it first; everything else is written in these words.
 - **[ARCHITECTURE.md](ARCHITECTURE.md)** — the single, bounded architecture document. Every production package appears exactly once in its grouped package map; only packages that own lifecycle, durable state, concurrency, trust boundaries or cross-package protocols receive a profile. Obey the anti-bloat contract at the top and never turn it into a file/member inventory, API reference, changelog or test plan.
 - **After implementing changes**, run `/pilat:arch-sync` to catch drift between the code and this document before committing.
-- Dependency tiers, package-map coverage, durable-protocol/trust headings, the architecture line budget, ADR links and numbering ([docs/adr/README.md](docs/adr/README.md)) and production reachability (deadcode over the binaries; see [docs/testing.md](docs/testing.md#test-only-code)) are mechanically enforced locally by `make arch`; project invariants by `make semgrep`. `make all` runs both.
+- Dependency tiers, package-map coverage, durable-protocol/trust headings, the architecture line budget, ADR links and numbering ([docs/adr/README.md](docs/adr/README.md)), the rot ratchet ([docs/coding-style.md](docs/coding-style.md#file-size-limits)) and production reachability (deadcode over the binaries; see [docs/testing.md](docs/testing.md#test-only-code)) are mechanically enforced locally by `make arch`; project invariants by `make semgrep`. `make all` runs both.
 
 ## Decision Records
 

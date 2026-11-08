@@ -1,4 +1,4 @@
-.PHONY: help build test tests test.integration test.live harness-e2e lint lint.paths lint.fix fmt fmt.check all verify verify-offline ci long-fuzz race stress arch semgrep secrets mutation mutation.critical mutation.nightly tools workflow.check
+.PHONY: help build test tests test.integration test.live harness-e2e lint lint.paths lint.fix fmt fmt.check all verify verify-offline ci long-fuzz race stress arch ratchet.record semgrep secrets mutation mutation.critical mutation.nightly tools workflow.check
 
 .DEFAULT_GOAL := help
 
@@ -62,7 +62,8 @@ help:
 	@echo "  lint             golangci-lint over the whole module"
 	@echo "  lint.paths       scoped lint (LINT_PATHS=./internal/session/...)"
 	@echo "  lint.fix         apply every golangci-lint autofix"
-	@echo "  arch             architecture boundaries, documentation and ADR contract and production reachability"
+	@echo "  arch             architecture boundaries, documentation and ADR contract, rot ratchet and production reachability"
+	@echo "  ratchet.record   rewrite scripts/ratchet.values from the current tree"
 	@echo "  semgrep          project invariants"
 	@echo "  workflow.check   validate GitHub Actions workflows with actionlint"
 	@echo "  tools            online bootstrap for modules and pinned dev tools"
@@ -183,6 +184,7 @@ arch:
 	@go-arch-lint self-inspect --json >/dev/null
 	go-arch-lint check
 	./scripts/check-architecture.sh
+	./scripts/ratchet.sh
 	@echo "deadcode ./cmd/coagent ./cmd/releasebuilder"
 	@output="$$(GOOS=linux deadcode ./cmd/coagent ./cmd/releasebuilder)" || exit $$?; \
 		if [ -n "$$output" ]; then \
@@ -190,6 +192,10 @@ arch:
 			echo "Delete unreachable code or move test-only helpers into _test.go (see docs/testing.md)."; \
 			exit 1; \
 		fi
+
+# Only for the PR that deliberately moves a value; the gate itself never writes the file.
+ratchet.record:
+	./scripts/ratchet.sh record
 
 # Project invariants no Go linter expresses (.semgrep/), at zero violations: a hard gate.
 # Scan "." only: outside a git checkout, rule paths anchor to the target. The version check would hit the network.

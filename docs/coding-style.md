@@ -308,6 +308,16 @@ single-use helper chains. If a file/function exceeds the limit, split by real
 responsibility or document why a flat workflow is clearer. Existing large files
 are debt; do not grow them casually.
 
+`make arch` holds the numbers still. `scripts/ratchet.sh` compares production lines
+per package, `mayDependOn` edges per component, the number of `anyProjectDeps`
+components and `//nolint` directives against `scripts/ratchet.values`, and fails on
+any growth. To move a number up, run `make ratchet.record` in the PR that needs it
+and say why in the PR description; the values diff is part of the review. Record
+from a tree holding only that PR's changes, because it counts untracked files too.
+A lower number passes with a hint, and recording it keeps the ground gained. The
+ratchet stops growth, it never asks for a refactor
+([ADR-0084](adr/0084-rot-metrics-ratchet-with-zero-slack.md)).
+
 ### Code Organization in File
 
 ```go
