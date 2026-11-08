@@ -12,8 +12,9 @@ import (
 )
 
 var (
-	_ tool.Tool        = (*skillTool)(nil)
-	_ tool.SkillLoader = (*skillTool)(nil)
+	_ tool.Tool          = (*skillTool)(nil)
+	_ tool.TrailDeclarer = (*skillTool)(nil)
+	_ tool.SkillLoader   = (*skillTool)(nil)
 )
 
 type skillParams struct {
@@ -40,6 +41,10 @@ func (t *skillTool) SkillLoader()       {}
 
 // Description builds a deterministic skill listing for the LLM prompt cache key.
 func (t *skillTool) Description() string { return t.buildDescription() }
+
+func (t *skillTool) TrailArgument() tool.TrailArgument {
+	return tool.TrailArgument{Param: "name"}
+}
 
 func (t *skillTool) Parameters() json.RawMessage {
 	return json.RawMessage(`{

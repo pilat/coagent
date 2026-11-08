@@ -269,7 +269,7 @@ func (s *Session) prepareToolResponse(
 
 	text := response.Text
 	if s.toolTrail {
-		trail := renderToolTrail(response.ToolCalls, s.workDir)
+		trail := renderToolTrail(response.ToolCalls, s.registry, s.workDir)
 		if strings.TrimSpace(text) == "" {
 			text = trail
 		} else {

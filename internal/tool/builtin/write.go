@@ -29,7 +29,10 @@ Usage:
 - ALWAYS prefer editing existing files in the codebase. NEVER write new files unless explicitly required
 - Use for creating new files; prefer Edit tool for modifying existing files`
 
-var _ tool.Tool = (*writeTool)(nil)
+var (
+	_ tool.Tool          = (*writeTool)(nil)
+	_ tool.TrailDeclarer = (*writeTool)(nil)
+)
 
 type writeParams struct {
 	FilePath string `json:"file_path"`
@@ -57,6 +60,10 @@ func newWriteToolWithAccess(
 func (t *writeTool) ID() string          { return "write" }
 func (t *writeTool) ParallelSafe() bool  { return false }
 func (t *writeTool) Description() string { return writeDescription }
+
+func (t *writeTool) TrailArgument() tool.TrailArgument {
+	return tool.TrailArgument{Param: filePathParam, Path: true}
+}
 
 func (t *writeTool) Parameters() json.RawMessage {
 	return json.RawMessage(`{

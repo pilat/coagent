@@ -8,11 +8,19 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/pilat/coagent/internal/config"
 	"github.com/pilat/coagent/internal/llmwire"
+	"github.com/pilat/coagent/internal/loader"
 	"github.com/pilat/coagent/internal/logger"
+	"github.com/pilat/coagent/internal/todo"
+	"github.com/pilat/coagent/internal/tool"
+	"github.com/pilat/coagent/internal/tool/builtin"
 )
 
 func TestRenderToolTrail_ArgumentsAndNames(t *testing.T) {
+	reg := trailRegistry(t)
+	require.NotNil(t, reg.Get("memory_save"))
+
 	for _, tt := range []struct{ name, args, want string }{
 		{"bash", `{"command":"go test * ~~x~~"}`, "→ bash: `go test * ~~x~~`"},
 		{"read", `{"file_path":"/project/src/main.go"}`, "→ read: `src/main.go`"},
@@ -41,7 +49,7 @@ func TestRenderToolTrail_ArgumentsAndNames(t *testing.T) {
 		{"unknown", `{"command":"hidden"}`, "→ unknown"},
 		{"apply_patch", `{"patch":"hidden"}`, "→ apply_patch"},
 		{"todowrite", `{}`, "→ todowrite"},
-		{"memory_save", `{}`, "→ memory_save"},
+		{"memory_save", `{"text":"hidden"}`, "→ memory_save"},
 		{"lsp", `{}`, "→ lsp"},
 		{"tail", `{}`, "→ tail"},
 		{"sleep", `{}`, "→ sleep"},
@@ -54,13 +62,15 @@ func TestRenderToolTrail_ArgumentsAndNames(t *testing.T) {
 			assert.Equal(
 				t,
 				tt.want,
-				renderToolTrail([]llmwire.ToolCall{{Name: tt.name, Arguments: []byte(tt.args)}}, "/project"),
+				renderToolTrail([]llmwire.ToolCall{{Name: tt.name, Arguments: []byte(tt.args)}}, reg, "/project"),
 			)
 		})
 	}
 }
 
 func TestRenderToolTrail_BatchOrderAndFallback(t *testing.T) {
+	reg := trailRegistry(t)
+
 	for _, tt := range []struct{ name, args, want string }{
 		{
 			"expanded", `{"calls":[{"tool":"read","params":{"file_path":"/project/a.go"}},{"tool":"grep","params":{"pattern":"abc"}}]}`,
@@ -79,12 +89,13 @@ func TestRenderToolTrail_BatchOrderAndFallback(t *testing.T) {
 			t.Parallel()
 			assert.Equal(t, tt.want+"\n→ sleep", renderToolTrail([]llmwire.ToolCall{
 				{Name: "batch", Arguments: []byte(tt.args)}, {Name: "sleep", Arguments: []byte(`{}`)},
-			}, "/project"))
+			}, reg, "/project"))
 		})
 	}
 }
 
 func TestRenderToolTrail_ClipsRunesAfterRedaction(t *testing.T) {
+	reg := trailRegistry(t)
 	secret := "trail-test-registered-secret"
 	logger.SetRedactedValues([]string{secret})
 	t.Cleanup(func() { logger.SetRedactedValues(nil) })
@@ -101,7 +112,50 @@ func TestRenderToolTrail_ClipsRunesAfterRedaction(t *testing.T) {
 		assert.Equal(
 			t,
 			"→ bash: `"+want+"`",
-			renderToolTrail([]llmwire.ToolCall{{Name: "bash", Arguments: args}}, "/project"),
+			renderToolTrail([]llmwire.ToolCall{{Name: "bash", Arguments: args}}, reg, "/project"),
 		)
 	}
+}
+
+func TestRenderToolTrail_UnregisteredToolShowsOnlyItsName(t *testing.T) {
+	t.Parallel()
+	for _, tt := range []struct{ name, args, want string }{
+		{"read", `{"file_path":"/project/main.go"}`, "→ read"},
+		{"websearch", `{"query":"Go context"}`, "→ websearch"},
+		{"task", `{"description":"inspect store"}`, "→ task: `inspect store`"},
+		{"batch", `{"calls":[{"tool":"grep","params":{"pattern":"abc"}}]}`, "→ grep"},
+	} {
+		assert.Equal(
+			t,
+			tt.want,
+			renderToolTrail(
+				[]llmwire.ToolCall{{Name: tt.name, Arguments: []byte(tt.args)}},
+				tool.NewRegistry(),
+				"/project",
+			),
+		)
+	}
+}
+
+func TestRenderToolTrail_NilRegistryShowsOnlyItsName(t *testing.T) {
+	t.Parallel()
+	assert.Equal(t, "→ read", renderToolTrail(
+		[]llmwire.ToolCall{{Name: "read", Arguments: []byte(`{"file_path":"/project/main.go"}`)}},
+		nil,
+		"/project",
+	))
+}
+
+func trailRegistry(t *testing.T) *tool.Registry {
+	t.Helper()
+	unified := &config.UnifiedConfig{}
+	unified.Tools.Search = config.SearchToolConfig{Provider: config.SearchProviderTavily, APIKey: "tvly-test"}
+	stack, err := builtin.BuildStack(t.Context(), builtin.StackConfig{
+		WorkDir: t.TempDir(), Loader: loader.New(), Todo: todo.New(), Unified: unified,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = stack.Close() })
+	stack.Registry.Register(builtin.NewMemorySaveTool(nil, 1))
+
+	return stack.Registry
 }

@@ -71,6 +71,15 @@ func TestMCPToolDeclaresUntrustedSource(t *testing.T) {
 	}
 }
 
+func TestMCPToolDeclaresNoTrailArgument(t *testing.T) {
+	t.Parallel()
+
+	var candidate tool.Tool = newLiveMCPTool("test_server", "test_tool", &Client{}, nil, nil)
+	if _, declared := candidate.(tool.TrailDeclarer); declared {
+		t.Fatal("MCP arguments must stay out of the tool trail")
+	}
+}
+
 func TestMCPTool_ID(t *testing.T) {
 	client := newMockMCPClient()
 	mcpTool := newLiveMCPTool("test_server", "test_tool", &Client{

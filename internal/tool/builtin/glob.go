@@ -33,7 +33,10 @@ Usage:
 Group independent searches in one response. Narrow the pattern or path when results reach the limit.`
 )
 
-var _ tool.Tool = (*globTool)(nil)
+var (
+	_ tool.Tool          = (*globTool)(nil)
+	_ tool.TrailDeclarer = (*globTool)(nil)
+)
 
 type globParams struct {
 	Pattern string `json:"pattern"`
@@ -57,6 +60,10 @@ func newGlobToolWithAccess(workDir string, access *safefile.Access) *globTool {
 func (t *globTool) ID() string          { return "glob" }
 func (t *globTool) ParallelSafe() bool  { return true }
 func (t *globTool) Description() string { return globDescription }
+
+func (t *globTool) TrailArgument() tool.TrailArgument {
+	return tool.TrailArgument{Param: patternParam}
+}
 
 func (t *globTool) Parameters() json.RawMessage {
 	return json.RawMessage(`{

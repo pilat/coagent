@@ -46,7 +46,10 @@ Limits:
 - Skips binary files`
 )
 
-var _ tool.Tool = (*grepTool)(nil)
+var (
+	_ tool.Tool          = (*grepTool)(nil)
+	_ tool.TrailDeclarer = (*grepTool)(nil)
+)
 
 type grepParams struct {
 	Pattern    string `json:"pattern"`
@@ -76,6 +79,10 @@ func newGrepToolWithAccess(workDir string, access *safefile.Access) *grepTool {
 func (t *grepTool) ID() string          { return "grep" }
 func (t *grepTool) ParallelSafe() bool  { return true }
 func (t *grepTool) Description() string { return grepDescription }
+
+func (t *grepTool) TrailArgument() tool.TrailArgument {
+	return tool.TrailArgument{Param: patternParam}
+}
 
 func (t *grepTool) Parameters() json.RawMessage {
 	return json.RawMessage(`{

@@ -30,6 +30,7 @@ Note: Results are search snippets only. Use webfetch to read a page's full conte
 
 var (
 	_ tool.Tool            = (*webSearchTool)(nil)
+	_ tool.TrailDeclarer   = (*webSearchTool)(nil)
 	_ tool.UntrustedSource = (*webSearchTool)(nil)
 )
 
@@ -65,6 +66,10 @@ func clampSearchResults(n int) int {
 func (t *webSearchTool) ID() string          { return websearchToolID }
 func (t *webSearchTool) ParallelSafe() bool  { return true } // stateless HTTP
 func (t *webSearchTool) Description() string { return websearchDescription }
+
+func (t *webSearchTool) TrailArgument() tool.TrailArgument {
+	return tool.TrailArgument{Param: queryParam}
+}
 
 func (t *webSearchTool) UntrustedSource() {}
 
