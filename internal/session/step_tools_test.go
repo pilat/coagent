@@ -120,7 +120,7 @@ func TestBrowserFrameBudgetAndCutHint(t *testing.T) {
 
 func TestBrowserFrameStoresFiftyThousandCharactersWhole(t *testing.T) {
 	ctx := t.Context()
-	name := tool.PlaywrightToolPrefix + "view"
+	name := "mcp__playwright__" + "view"
 	stub := &imageStubTool{id: name, result: &tool.Result{Output: strings.Repeat("x", 50000), Untrusted: true}}
 	agent := newTestAgent(stub)
 	agent.ms.frames = testFrameRule{}
@@ -134,7 +134,7 @@ func TestBrowserFrameStoresFiftyThousandCharactersWhole(t *testing.T) {
 }
 
 func TestBrowserExtraActionsSkippedBeforeScheduling(t *testing.T) {
-	name := tool.PlaywrightToolPrefix + "click"
+	name := "mcp__playwright__" + "click"
 	stub := newGateTool(name, false)
 	agent := newTestAgent(stub)
 	agent.ms.frames = testFrameRule{}
@@ -158,11 +158,11 @@ func TestBrowserExtraActionsSkippedBeforeScheduling(t *testing.T) {
 }
 
 func TestBrowserUnknownCallStillTakesTheTurnsAction(t *testing.T) {
-	name := tool.PlaywrightToolPrefix + "click"
+	name := "mcp__playwright__" + "click"
 	stub := newGateTool(name, false)
 	agent := newTestAgent(stub)
 	agent.ms.frames = testFrameRule{}
-	calls := []llmwire.ToolCall{gateCall(tool.PlaywrightToolPrefix+"missing", "1"), gateCall(name, "2")}
+	calls := []llmwire.ToolCall{gateCall("mcp__playwright__"+"missing", "1"), gateCall(name, "2")}
 	items := executeToolCallsInternal(t.Context(), agent, calls)
 
 	require.Len(t, items, 2)
@@ -174,7 +174,7 @@ func TestBrowserUnknownCallStillTakesTheTurnsAction(t *testing.T) {
 
 func TestBrowserExtraActionsPersistWithoutLoopRecords(t *testing.T) {
 	ctx := t.Context()
-	name := tool.PlaywrightToolPrefix + "click"
+	name := "mcp__playwright__" + "click"
 	stub := newGateTool(name, false)
 	agent := newTestAgent(stub)
 	agent.ms.frames = testFrameRule{}
@@ -204,7 +204,7 @@ func TestBrowserExtraActionsPersistWithoutLoopRecords(t *testing.T) {
 
 func TestBrowserLoopWarningStaysOnExecutedCall(t *testing.T) {
 	ctx := t.Context()
-	name := tool.PlaywrightToolPrefix + "click"
+	name := "mcp__playwright__" + "click"
 	agent := newTestAgent(newGateTool(name, false))
 	agent.ms.frames = testFrameRule{}
 	for turn := range loopDetectorConsecutiveWarn {

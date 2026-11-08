@@ -118,8 +118,8 @@ func TestRegisterToolsUsesActivationSinkAndSkipsTaskStateCollision(t *testing.T)
 	for _, note := range []string{"first activation", "second activation"} {
 		registry := tool.NewRegistry()
 		assert.Equal(t, 1, service.RegisterTools(registry, fixedAttachmentSink{note: note}))
-		assert.Nil(t, registry.Get(tool.PlaywrightToolPrefix+"collision"))
-		result, err := registry.Get(tool.PlaywrightToolPrefix+"safe").
+		assert.Nil(t, registry.Get("mcp__playwright__"+"collision"))
+		result, err := registry.Get("mcp__playwright__"+"safe").
 			Execute(t.Context(), json.RawMessage(`{"task_state":"continue"}`))
 		require.NoError(t, err)
 		assert.Contains(t, result.Output, note)

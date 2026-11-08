@@ -6,14 +6,13 @@ import (
 	"strings"
 
 	"github.com/pilat/coagent/internal/sessionprompt"
-	"github.com/pilat/coagent/internal/tool"
 )
 
 const (
 	AgentTypeBuild      AgentType = "build"
 	AgentTypeGeneral    AgentType = "general"
 	AgentTypeExplore    AgentType = "explore"
-	AgentTypeBrowser    AgentType = tool.BrowserAgentType
+	AgentTypeBrowser    AgentType = "browser"
 	AgentTypeCompaction AgentType = "compaction"
 )
 
@@ -29,14 +28,14 @@ var builtinAgentTypes = map[AgentType]AgentTypeConfig{
 		Name:        AgentTypeBuild,
 		Description: "Primary build agent with full tool access",
 		Mode:        ModePrimary,
-		Tools:       []string{"*", "-" + tool.PlaywrightToolPrefix + "*"},
+		Tools:       []string{"*"},
 		Prompt:      BuildAgentPrompt,
 	},
 	AgentTypeGeneral: {
 		Name:        AgentTypeGeneral,
 		Description: "General subagent for bounded implementation, testing, or research requiring commands or web access. Can modify files. Give a self-contained assignment and verification requirements; use the same session for related follow-up work.",
 		Mode:        ModeSubagent,
-		Tools:       []string{"*", "-todoread", "-todowrite", "-" + tool.PlaywrightToolPrefix + "*"},
+		Tools:       []string{"*", "-todoread", "-todowrite"},
 		Prompt:      GeneralAgentPrompt,
 	},
 	AgentTypeExplore: {
@@ -51,7 +50,7 @@ var builtinAgentTypes = map[AgentType]AgentTypeConfig{
 		Name:                    AgentTypeBrowser,
 		Description:             "Drive the project's Playwright browser with browser tools only. Receives no project context; supply a self-contained goal, constraints, starting URL or site, and the facts to return.",
 		Mode:                    ModeSubagent,
-		Tools:                   []string{tool.PlaywrightToolPrefix + "*"},
+		Tools:                   []string{"*"},
 		Prompt:                  BrowserAgentPrompt,
 		OmitProjectContext:      true,
 		DisableIntegratedSearch: true,
@@ -83,6 +82,7 @@ type (
 		OmitProjectContext      bool
 		DisableIntegratedSearch bool
 		// FrameSession applies the tool stack's frame rule to sessions of this type.
+		// Such a type sees only the rule's tools; every other type never sees them.
 		FrameSession bool
 	}
 )
@@ -104,7 +104,7 @@ func NewSet(projectSubagents []AgentTypeConfig) *Set {
 	}
 
 	for _, cfg := range projectSubagents {
-		if cfg.Name == AgentTypeBrowser {
+		if Reserved(string(cfg.Name)) {
 			continue
 		}
 
@@ -113,6 +113,11 @@ func NewSet(projectSubagents []AgentTypeConfig) *Set {
 	}
 
 	return &Set{types: types}
+}
+
+// Reserved reports which names project subagents may not take.
+func Reserved(name string) bool {
+	return name == string(AgentTypeBrowser)
 }
 
 // Get returns the configuration for an agent type.
@@ -146,7 +151,7 @@ func (s *Set) ListSubagents() []AgentTypeConfig {
 
 // FilterTools filters a tool list by the agent type's restrictions: "*" includes
 // all, "-name" excludes, a bare name includes only that tool.
-func (s *Set) FilterTools(allTools []string, t AgentType) []string {
+func (s *Set) FilterTools(allTools []string, t AgentType, isFrame func(toolID string) bool) []string {
 	config, ok := s.types[t]
 	if !ok {
 		return nil
@@ -173,6 +178,10 @@ func (s *Set) FilterTools(allTools []string, t AgentType) []string {
 	var result []string
 
 	for _, tl := range allTools {
+		if isFrame(tl) != config.FrameSession {
+			continue
+		}
+
 		if slices.ContainsFunc(excludes, func(pattern string) bool { return toolPatternMatches(pattern, tl) }) {
 			continue
 		}
@@ -211,8 +220,6 @@ func normalizeSubagent(config AgentTypeConfig) AgentTypeConfig {
 	if config.Mode == ModeSubagent {
 		config.Tools = excludeTodoTools(config.Tools)
 	}
-
-	config.Tools = append(config.Tools, "-"+tool.PlaywrightToolPrefix+"*")
 
 	return config
 }

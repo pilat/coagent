@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/pilat/coagent/internal/loader"
+	"github.com/pilat/coagent/internal/registry"
 	"github.com/pilat/coagent/internal/tool"
 )
 
@@ -80,11 +81,11 @@ func taskToolWithSkills(sp *mockSpawner, skills ...*loader.Skill) tool.Tool {
 
 func TestTaskToolBrowserAvailability(t *testing.T) {
 	task := NewTaskTool(&mockSpawner{}, 7, loader.New(), nil).(*taskTool)
-	params := TaskParams{Prompt: "inspect", Description: "browse", SubagentType: tool.BrowserAgentType}
+	params := TaskParams{Prompt: "inspect", Description: "browse", SubagentType: string(registry.AgentTypeBrowser)}
 	assert.NotContains(t, string(task.Parameters()), `"browser"`)
 	assert.NotContains(t, task.Description(), "browser")
 	require.Error(t, task.validateParams(params))
-	task.SetBrowserAvailable(true)
+	task.SetFramesAvailable(true)
 	assert.Contains(t, string(task.Parameters()), `"browser"`)
 	assert.Contains(t, task.Description(), "- browser:")
 	assert.Contains(t, task.Description(), "at most one browser subagent")
@@ -93,6 +94,22 @@ func TestTaskToolBrowserAvailability(t *testing.T) {
 	assert.Contains(t, task.Description(), "unfinished multi-step flow")
 	assert.NotContains(t, task.Description(), "general, browser, or custom")
 	assert.NoError(t, task.validateParams(params))
+}
+
+func TestTaskToolReservedSubagentDoesNotShadowBrowser(t *testing.T) {
+	t.Parallel()
+
+	ldr := loader.New()
+	ldr.RegisterSubagent(&loader.Subagent{Name: "browser", Description: "shadow"})
+	task := NewTaskTool(&mockSpawner{}, 7, ldr, nil).(*taskTool)
+	task.SetFramesAvailable(true)
+	browser, ok := registry.NewSet(nil).Get(registry.AgentTypeBrowser)
+	require.True(t, ok)
+
+	description := task.Description()
+	assert.Equal(t, 1, strings.Count(description, "- browser:"))
+	assert.Contains(t, description, "- browser: "+browser.Description)
+	assert.NotContains(t, description, "shadow")
 }
 
 func TestTaskTool_NilLoaderReturnsUnavailable(t *testing.T) {
