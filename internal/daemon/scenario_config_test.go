@@ -1111,6 +1111,13 @@ func testAbandonedApply(t *testing.T, failure string) {
 	id, err := d.mgr.Send(d.ctx, d.projectID, "hello", "fake-model", nil)
 	require.NoError(t, err)
 	d.waitUntil("session idle", func() bool { return !d.mgr.HasActiveLoop(id) })
+	if failure == "stop" || failure == "kill" {
+		// Keep the queued input from starting a failed activation before the lifecycle command.
+		for range maxTotal {
+			require.True(t, d.mgr.runners.tryAdmit(false, 0))
+			defer d.mgr.runners.release(false, 0)
+		}
+	}
 	calls, err := json.Marshal([]llmwire.ToolCall{{ID: configEditCallID, Name: tool.IDConfigEdit}})
 	require.NoError(t, err)
 	_, err = d.store.Commit(d.ctx, sessionstore.Commit{SessionID: id, Messages: []*transcript.Message{{
@@ -1132,6 +1139,14 @@ func testAbandonedApply(t *testing.T, failure string) {
 	}
 	require.NoError(t, d.mgr.sendToSession(d.ctx, id, "keep this input"))
 	if failure == "stop" || failure == "kill" {
+		require.False(t, d.mgr.HasActiveLoop(id))
+		pending, err := d.store.PeekPending(d.ctx, id)
+		require.NoError(t, err)
+		require.Equal(t, "keep this input", pending.RawContent)
+		require.Equal(t, tool.IDConfigEdit, d.mgr.applier.Calls(id)[configEditCallID])
+		callPending, err := d.store.CallPending(d.ctx, id, configEditCallID)
+		require.NoError(t, err)
+		require.True(t, callPending)
 		if failure == "stop" {
 			require.NoError(t, d.mgr.sendToSession(d.ctx, id, "/stop"))
 			assert.Contains(t, configLastToolResultContent(d.messages(id), tool.IDConfigEdit), "Stopped by user")
