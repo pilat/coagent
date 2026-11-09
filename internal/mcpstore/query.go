@@ -84,7 +84,7 @@ func (s *store) query(ctx context.Context, sqlText string, args ...any) ([]Serve
 			enabledFlag int
 		)
 
-		if err := rows.Scan(&def.Name, &def.Command, &argsJSON, &envJSON, &enabledFlag); err != nil {
+		if err := rows.Scan(&def.Name, &def.Command, &argsJSON, &envJSON, &enabledFlag, &def.Revision); err != nil {
 			return nil, fmt.Errorf("scan mcp server: %w", err)
 		}
 

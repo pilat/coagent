@@ -44,9 +44,10 @@ func resolveMCPServers(
 		}
 
 		servers[def.Name] = mcp.ServerConfig{
-			Command: def.Command,
-			Args:    def.Args,
-			Env:     env,
+			Revision: def.Revision,
+			Command:  def.Command,
+			Args:     def.Args,
+			Env:      env,
 		}
 	}
 

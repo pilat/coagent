@@ -5,6 +5,7 @@ type Config struct {
 }
 
 type ServerConfig struct {
+	Revision string            `json:"revision,omitempty"`
 	Command  string            `json:"command"`
 	Args     []string          `json:"args,omitempty"`
 	Env      map[string]string `json:"env,omitempty"`
