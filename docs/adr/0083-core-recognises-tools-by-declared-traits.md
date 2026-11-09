@@ -3,6 +3,7 @@
 - **Status:** Accepted
 - **Date:** 2026-11-08
 - **Amends:** [ADR-0064](0064-untrusted-tool-output-is-data.md)
+- **Amended by:** [ADR-0085](0085-core-names-no-extensible-tool-by-literal.md) — the extensible-tool literals this ADR left in the core moved to tool declarations, and a trail line for an unregistered tool shows only its name
 
 ## Context
 
