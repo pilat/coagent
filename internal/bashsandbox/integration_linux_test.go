@@ -82,9 +82,10 @@ func TestSandboxSocketCarveOut(t *testing.T) {
 			access, err := safefile.New(policy, project)
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, access.Close()) })
+			// Coverage teardown needs temporary storage inside the writable project.
 			cmd, err := runner.Command(t.Context(), procexec.Request{
 				Path: os.Args[0], Args: []string{"-test.run=^TestSandboxSocketClient$"}, WorkDir: project,
-				Env: []string{"COAGENT_TEST_SOCKET=" + socket},
+				Env: []string{"COAGENT_TEST_SOCKET=" + socket, "TMPDIR=" + project},
 			})
 			require.NoError(t, err)
 			defer procexec.CloseExtraFiles(cmd)
