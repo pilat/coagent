@@ -2,6 +2,7 @@ package llm
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"maps"
 	"slices"
@@ -94,8 +95,10 @@ func enrichProvider(
 	// A dead catalog is reported, not returned: startup fails either way, and the
 	// operator should see every broken provider in one run rather than one per fix.
 	models, err := driver.ListModels(ctx, providerKey, entry)
-	if err != nil {
-		return []string{fmt.Sprintf("provider %q: catalog unavailable: %v", providerKey, err)}, nil
+
+	sectionMissing := errors.Is(err, errSectionMissing)
+	if err != nil && !sectionMissing {
+		return []string{catalogUnavailable(providerKey, err)}, nil
 	}
 
 	var problems []string
@@ -111,7 +114,17 @@ func enrichProvider(
 		resolved[idx] = true
 	}
 
+	// Preserve today's provider error for a typo'd section or a model that never
+	// resolved; both must keep the missing-section diagnosis.
+	if sectionMissing && len(problems) > 0 {
+		return []string{catalogUnavailable(providerKey, err)}, nil
+	}
+
 	return problems, nil
+}
+
+func catalogUnavailable(providerKey string, err error) string {
+	return fmt.Sprintf("provider %q: catalog unavailable: %v", providerKey, err)
 }
 
 // resolveModel fills one model from the catalog, else from its last resolution,
