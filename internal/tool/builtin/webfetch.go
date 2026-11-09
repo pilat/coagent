@@ -40,6 +40,7 @@ Note: Some sites may block automated requests.`
 var (
 	_ tool.Tool            = (*webFetchTool)(nil)
 	_ tool.TrailDeclarer   = (*webFetchTool)(nil)
+	_ tool.PromptDeclarer  = (*webFetchTool)(nil)
 	_ tool.UntrustedSource = (*webFetchTool)(nil)
 )
 
@@ -70,6 +71,10 @@ func (t *webFetchTool) Description() string { return webfetchDescription }
 
 func (t *webFetchTool) TrailArgument() tool.TrailArgument {
 	return tool.TrailArgument{Param: "url"}
+}
+
+func (t *webFetchTool) PromptDeclaration() tool.PromptDeclaration {
+	return tool.PromptDeclaration{Group: tool.PromptGroupWeb, Order: 1, Description: "fetch known URL"}
 }
 
 func (t *webFetchTool) UntrustedSource() {}

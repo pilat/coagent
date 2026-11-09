@@ -24,8 +24,9 @@ Usage:
 - Files show their size in human-readable format (B, KB, MB, GB)`
 
 var (
-	_ tool.Tool          = (*LsTool)(nil)
-	_ tool.TrailDeclarer = (*LsTool)(nil)
+	_ tool.Tool           = (*LsTool)(nil)
+	_ tool.TrailDeclarer  = (*LsTool)(nil)
+	_ tool.PromptDeclarer = (*LsTool)(nil)
 )
 
 type LsParams struct {
@@ -53,6 +54,10 @@ func (t *LsTool) Description() string { return lsDescription }
 
 func (t *LsTool) TrailArgument() tool.TrailArgument {
 	return tool.TrailArgument{Param: "path", Path: true}
+}
+
+func (t *LsTool) PromptDeclaration() tool.PromptDeclaration {
+	return tool.PromptDeclaration{Group: tool.PromptGroupFiles, Order: 7, Description: "list directory"}
 }
 
 func (t *LsTool) Parameters() json.RawMessage {

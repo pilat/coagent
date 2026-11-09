@@ -34,8 +34,9 @@ const (
 )
 
 var (
-	_ tool.Tool          = (*bashTool)(nil)
-	_ tool.TrailDeclarer = (*bashTool)(nil)
+	_ tool.Tool           = (*bashTool)(nil)
+	_ tool.TrailDeclarer  = (*bashTool)(nil)
+	_ tool.PromptDeclarer = (*bashTool)(nil)
 )
 
 // bashParams are the parameters for the bash tool.
@@ -81,6 +82,10 @@ func (t *bashTool) Description() string { return bashDescription + backgroundDes
 
 func (t *bashTool) TrailArgument() tool.TrailArgument {
 	return tool.TrailArgument{Param: "command"}
+}
+
+func (t *bashTool) PromptDeclaration() tool.PromptDeclaration {
+	return tool.PromptDeclaration{Group: tool.PromptGroupShell, Order: 1}
 }
 
 func (t *bashTool) Parameters() json.RawMessage {

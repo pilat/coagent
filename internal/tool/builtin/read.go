@@ -36,8 +36,9 @@ Read the ranges needed for the current question. Group independent reads in one 
 )
 
 var (
-	_ tool.Tool          = (*readTool)(nil)
-	_ tool.TrailDeclarer = (*readTool)(nil)
+	_ tool.Tool           = (*readTool)(nil)
+	_ tool.TrailDeclarer  = (*readTool)(nil)
+	_ tool.PromptDeclarer = (*readTool)(nil)
 )
 
 type readParams struct {
@@ -62,6 +63,10 @@ func (t *readTool) Description() string { return readDescription }
 
 func (t *readTool) TrailArgument() tool.TrailArgument {
 	return tool.TrailArgument{Param: filePathParam, Path: true}
+}
+
+func (t *readTool) PromptDeclaration() tool.PromptDeclaration {
+	return tool.PromptDeclaration{Group: tool.PromptGroupFiles, Order: 1, Description: "view file"}
 }
 
 func (t *readTool) Parameters() json.RawMessage {

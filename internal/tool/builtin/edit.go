@@ -36,8 +36,9 @@ Examples:
 Editing a file also counts as having read it for a later write.`
 
 var (
-	_ tool.Tool          = (*editTool)(nil)
-	_ tool.TrailDeclarer = (*editTool)(nil)
+	_ tool.Tool           = (*editTool)(nil)
+	_ tool.TrailDeclarer  = (*editTool)(nil)
+	_ tool.PromptDeclarer = (*editTool)(nil)
 )
 
 type editParams struct {
@@ -71,6 +72,10 @@ func (t *editTool) Description() string { return editDescription }
 
 func (t *editTool) TrailArgument() tool.TrailArgument {
 	return tool.TrailArgument{Param: filePathParam, Path: true}
+}
+
+func (t *editTool) PromptDeclaration() tool.PromptDeclaration {
+	return tool.PromptDeclaration{Group: tool.PromptGroupFiles, Order: 3, Description: "find-replace"}
 }
 
 func (t *editTool) Parameters() json.RawMessage {

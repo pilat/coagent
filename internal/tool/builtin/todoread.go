@@ -15,7 +15,10 @@ Returns:
 - List of todos sorted by priority (high first), then creation time
 - Each item has: id, content, status, priority, created_at, updated_at`
 
-var _ tool.Tool = (*todoReadTool)(nil)
+var (
+	_ tool.Tool           = (*todoReadTool)(nil)
+	_ tool.PromptDeclarer = (*todoReadTool)(nil)
+)
 
 type todoReadTool struct {
 	store *todo.Service
@@ -28,6 +31,10 @@ func newTodoReadTool(store *todo.Service) *todoReadTool {
 func (t *todoReadTool) ID() string          { return "todoread" }
 func (t *todoReadTool) ParallelSafe() bool  { return true }
 func (t *todoReadTool) Description() string { return todoReadDescription }
+
+func (t *todoReadTool) PromptDeclaration() tool.PromptDeclaration {
+	return tool.PromptDeclaration{Group: tool.PromptGroupTaskTracking, Order: 1}
+}
 
 func (t *todoReadTool) Parameters() json.RawMessage {
 	return json.RawMessage(`{

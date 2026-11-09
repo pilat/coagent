@@ -39,7 +39,10 @@ Format example:
 Editing a file also counts as having read it for a later write.`
 )
 
-var _ tool.Tool = (*applyPatchTool)(nil)
+var (
+	_ tool.Tool           = (*applyPatchTool)(nil)
+	_ tool.PromptDeclarer = (*applyPatchTool)(nil)
+)
 
 type applyPatchParams struct {
 	Patch string `json:"patch"`
@@ -82,6 +85,10 @@ type patchLine struct {
 func (t *applyPatchTool) ID() string          { return "apply_patch" }
 func (t *applyPatchTool) ParallelSafe() bool  { return false }
 func (t *applyPatchTool) Description() string { return applyPatchDescription }
+
+func (t *applyPatchTool) PromptDeclaration() tool.PromptDeclaration {
+	return tool.PromptDeclaration{Group: tool.PromptGroupFiles, Order: 4, Description: "unified diff"}
+}
 
 func (t *applyPatchTool) Parameters() json.RawMessage {
 	return json.RawMessage(`{

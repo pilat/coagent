@@ -11,7 +11,10 @@ import (
 	"github.com/pilat/coagent/internal/tool"
 )
 
-var _ tool.Tool = (*memoryDeleteTool)(nil)
+var (
+	_ tool.Tool           = (*memoryDeleteTool)(nil)
+	_ tool.PromptDeclarer = (*memoryDeleteTool)(nil)
+)
 
 // memoryDeleteParams are the parameters for the memory_delete tool.
 type memoryDeleteParams struct {
@@ -34,6 +37,10 @@ func (t *memoryDeleteTool) Description() string {
 	return `Delete a curated memory by ID.
 
 Use when a memory is outdated or needs to be replaced. The change is loaded into new opening turns; the current session retains its opening snapshot.`
+}
+
+func (t *memoryDeleteTool) PromptDeclaration() tool.PromptDeclaration {
+	return tool.PromptDeclaration{Group: tool.PromptGroupMemory, Order: 2}
 }
 
 func (t *memoryDeleteTool) Parameters() json.RawMessage {

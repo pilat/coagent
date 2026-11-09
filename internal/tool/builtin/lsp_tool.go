@@ -44,7 +44,10 @@ LSP servers must be configured for the file type. If the server or operation is 
 This tool has no diagnostics operation. The edit and write tools include LSP diagnostics in their results when available. Address relevant errors they report; missing diagnostics do not prove the code is correct or replace required tests.`
 )
 
-var _ tool.Tool = (*lspTool)(nil)
+var (
+	_ tool.Tool           = (*lspTool)(nil)
+	_ tool.PromptDeclarer = (*lspTool)(nil)
+)
 
 type lspTool struct {
 	workDir string
@@ -66,6 +69,13 @@ func newLspTool(workDir string, manager lsp.Manager) *lspTool {
 func (t *lspTool) ID() string          { return "lsp" }
 func (t *lspTool) ParallelSafe() bool  { return false }
 func (t *lspTool) Description() string { return lspDescription }
+
+func (t *lspTool) PromptDeclaration() tool.PromptDeclaration {
+	return tool.PromptDeclaration{
+		Group: tool.PromptGroupCodeIntelligence, Order: 1,
+		Description: "definitions, references, types, call hierarchy",
+	}
+}
 
 func (t *lspTool) Parameters() json.RawMessage {
 	return json.RawMessage(`{
