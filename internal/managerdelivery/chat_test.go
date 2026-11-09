@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -17,6 +18,7 @@ import (
 )
 
 type chatFake struct {
+	mu         sync.Mutex
 	focus      int64
 	rows       map[int64][]ChatRow
 	cursor     int64
@@ -288,25 +290,25 @@ func TestChatLoop_WakeFallbackAndRetryDeadline(t *testing.T) {
 		w := NewChat(fake, fake)
 		w.Start(t.Context())
 		synctest.Wait()
-		require.Len(t, fake.sent, 1)
+		require.Len(t, fake.sentTexts(), 1)
 		for range 1000 {
 			w.Wake()
 		}
 
 		time.Sleep(10*time.Second - time.Nanosecond)
 		synctest.Wait()
-		assert.Len(t, fake.sent, 1)
+		assert.Len(t, fake.sentTexts(), 1)
 		time.Sleep(time.Nanosecond)
 		synctest.Wait()
-		assert.Equal(t, int64(1), fake.cursor)
-		fake.rows[7] = append(fake.rows[7], ChatRow{ID: 2, Type: "message", Content: "fallback"})
+		assert.Equal(t, int64(1), fake.sentCursor())
+		fake.appendRows(7, ChatRow{ID: 2, Type: "message", Content: "fallback"})
 		time.Sleep(5 * time.Second)
 		synctest.Wait()
-		assert.Equal(t, int64(2), fake.cursor)
-		fake.rows[7] = append(fake.rows[7], ChatRow{ID: 3, Type: "message", Content: "woken"})
+		assert.Equal(t, int64(2), fake.sentCursor())
+		fake.appendRows(7, ChatRow{ID: 3, Type: "message", Content: "woken"})
 		w.Wake()
 		synctest.Wait()
-		assert.Equal(t, int64(3), fake.cursor)
+		assert.Equal(t, int64(3), fake.sentCursor())
 		require.NoError(t, w.Stop(t.Context()))
 	})
 }
@@ -410,24 +412,31 @@ func newChatFake() *chatFake {
 }
 
 func (f *chatFake) boundary(name string) {
-	if f.onBoundary != nil {
-		f.onBoundary(name)
+	f.mu.Lock()
+	onBoundary := f.onBoundary
+	f.mu.Unlock()
+	if onBoundary != nil {
+		onBoundary(name)
 	}
 }
 
 func (f *chatFake) Focus(context.Context) (FocusState, error) {
 	f.boundary("before focus")
+	f.mu.Lock()
 	state := FocusState{Session: f.focus, Cursor: f.cursor, Entered: f.entered}
+	f.mu.Unlock()
 	f.boundary("after focus")
 	return state, nil
 }
 
 func (f *chatFake) ResetFocus(_ context.Context, from int64) (bool, error) {
 	f.boundary("before reset")
+	f.mu.Lock()
 	reset := f.focus == from
 	if reset {
-		f.selectFocus(0)
+		f.focus, f.cursor, f.entered = 0, 0, false
 	}
+	f.mu.Unlock()
 
 	f.boundary("after reset")
 
@@ -436,10 +445,11 @@ func (f *chatFake) ResetFocus(_ context.Context, from int64) (bool, error) {
 
 func (f *chatFake) Outputs(_ context.Context, sessionID, after int64, limit int) ([]ChatRow, error) {
 	f.boundary("before outputs")
+	f.mu.Lock()
 	f.reads = append(f.reads, sessionID)
 
 	var rows []ChatRow
-	name := f.rowName(sessionID)
+	name := f.rowNameLocked(sessionID)
 
 	for _, row := range f.rows[sessionID] {
 		if row.ID > after {
@@ -450,6 +460,7 @@ func (f *chatFake) Outputs(_ context.Context, sessionID, after int64, limit int)
 			}
 		}
 	}
+	f.mu.Unlock()
 
 	f.boundary("after outputs")
 
@@ -458,50 +469,59 @@ func (f *chatFake) Outputs(_ context.Context, sessionID, after int64, limit int)
 
 func (f *chatFake) Advance(_ context.Context, sessionID, id int64) (bool, error) {
 	f.boundary("before mark")
-	if f.markErr != nil {
-		return false, f.markErr
+	f.mu.Lock()
+	if err := f.markErr; err != nil {
+		f.mu.Unlock()
+		return false, err
 	}
 	advanced := f.focus == sessionID && f.entered && f.cursor < id
 	if advanced {
 		f.cursor = id
 	}
+	f.mu.Unlock()
 	f.boundary("after mark")
 	return advanced, nil
 }
 
 func (f *chatFake) Entry(_ context.Context, sessionID int64, limit int) ([]ChatRow, int64, error) {
 	f.boundary("before entry")
+	f.mu.Lock()
 	var rows []ChatRow
 	var newest int64
 	for _, row := range f.rows[sessionID] {
 		newest = max(newest, row.ID)
 		if row.Type != "session_opened" && row.Type != "session_replaced" {
-			row.Name = f.rowName(sessionID)
+			row.Name = f.rowNameLocked(sessionID)
 			rows = append(rows, row)
 		}
 	}
 	if len(rows) > limit {
 		rows = rows[len(rows)-limit:]
 	}
+	f.mu.Unlock()
 	f.boundary("after entry")
 	return rows, newest, nil
 }
 
 func (f *chatFake) Enter(_ context.Context, sessionID, newest int64) (bool, error) {
 	f.boundary("before enter")
+	f.mu.Lock()
 	entered := f.focus == sessionID && !f.entered
 	if entered {
 		f.entered, f.cursor = true, newest
 	}
+	f.mu.Unlock()
 	f.boundary("after enter")
 	return entered, nil
 }
 
 func (f *chatFake) selectFocus(sessionID int64) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.focus, f.cursor, f.entered = sessionID, 0, false
 }
 
-func (f *chatFake) rowName(sessionID int64) string {
+func (f *chatFake) rowNameLocked(sessionID int64) string {
 	for _, session := range f.sessions {
 		if session.ID == sessionID {
 			return session.Name
@@ -512,7 +532,9 @@ func (f *chatFake) rowName(sessionID int64) string {
 
 func (f *chatFake) Sessions(context.Context) ([]ChatSession, error) {
 	f.boundary("before sessions")
+	f.mu.Lock()
 	rows := append([]ChatSession(nil), f.sessions...)
+	f.mu.Unlock()
 	f.boundary("after sessions")
 
 	return rows, nil
@@ -520,7 +542,9 @@ func (f *chatFake) Sessions(context.Context) ([]ChatSession, error) {
 
 func (f *chatFake) Killed(_ context.Context, sessionID int64) (bool, error) {
 	f.boundary("before killed")
+	f.mu.Lock()
 	killed := f.killed[sessionID]
+	f.mu.Unlock()
 	f.boundary("after killed")
 
 	return killed, nil
@@ -528,18 +552,41 @@ func (f *chatFake) Killed(_ context.Context, sessionID int64) (bool, error) {
 
 func (f *chatFake) Send(_ context.Context, text string) SendResult {
 	f.boundary("before send")
+	f.mu.Lock()
 	f.sent = append(f.sent, text)
-	if f.onSend != nil {
-		f.onSend(text)
+	onSend := f.onSend
+	f.mu.Unlock()
+	if onSend != nil {
+		onSend(text)
 	}
 
 	var result SendResult
 
+	f.mu.Lock()
 	if len(f.results) > 0 {
 		result, f.results = f.results[0], f.results[1:]
 	}
+	f.mu.Unlock()
 
 	f.boundary("after send")
 
 	return result
+}
+
+func (f *chatFake) appendRows(sessionID int64, rows ...ChatRow) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.rows[sessionID] = append(f.rows[sessionID], rows...)
+}
+
+func (f *chatFake) sentTexts() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.sent...)
+}
+
+func (f *chatFake) sentCursor() int64 {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.cursor
 }

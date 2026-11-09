@@ -1546,7 +1546,6 @@ func TestStopRejectsSpawnQueuedBehindDurableBoundary(t *testing.T) {
 	h.mgr.store = store
 	t.Cleanup(func() {
 		store.releaseOnce.Do(func() { close(store.release) })
-		h.mgr.store = store.Store
 	})
 	stopDone := make(chan error, 1)
 	go func() { stopDone <- h.mgr.sendToSession(context.Background(), root, "/stop") }()
