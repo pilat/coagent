@@ -1,5 +1,16 @@
 package tool
 
+const (
+	PromptGroupNone PromptGroup = iota
+	PromptGroupFiles
+	PromptGroupShell
+	PromptGroupCodeIntelligence
+	PromptGroupTaskTracking
+	PromptGroupMemory
+	PromptGroupSkills
+	PromptGroupWeb
+)
+
 // TrailArgument names the call parameter a tool trail line shows.
 type TrailArgument struct {
 	Param string
@@ -11,4 +22,23 @@ type TrailArgument struct {
 type TrailDeclarer interface { //nolint:iface // Declared by tools elsewhere, consulted by the core.
 	Tool
 	TrailArgument() TrailArgument
+}
+
+// PromptGroup names one line of the prompt's tool inventory. The core owns each
+// group's title and position; a group needs a title there to render.
+type PromptGroup int
+
+// PromptDeclaration is what the system prompt needs to know about a tool. Its
+// bytes form part of the prompt-cache key, so every field must be deterministic.
+type PromptDeclaration struct {
+	Group PromptGroup
+	// Order positions the tool within its group; equal values fall back to ID order.
+	Order       int
+	Description string
+}
+
+// PromptDeclarer is a tool the system prompt describes.
+type PromptDeclarer interface { //nolint:iface // Declared by tools elsewhere, consulted by the core.
+	Tool
+	PromptDeclaration() PromptDeclaration
 }

@@ -30,8 +30,9 @@ Usage:
 - Use for creating new files; prefer Edit tool for modifying existing files`
 
 var (
-	_ tool.Tool          = (*writeTool)(nil)
-	_ tool.TrailDeclarer = (*writeTool)(nil)
+	_ tool.Tool           = (*writeTool)(nil)
+	_ tool.TrailDeclarer  = (*writeTool)(nil)
+	_ tool.PromptDeclarer = (*writeTool)(nil)
 )
 
 type writeParams struct {
@@ -63,6 +64,10 @@ func (t *writeTool) Description() string { return writeDescription }
 
 func (t *writeTool) TrailArgument() tool.TrailArgument {
 	return tool.TrailArgument{Param: filePathParam, Path: true}
+}
+
+func (t *writeTool) PromptDeclaration() tool.PromptDeclaration {
+	return tool.PromptDeclaration{Group: tool.PromptGroupFiles, Order: 2, Description: "create/overwrite"}
 }
 
 func (t *writeTool) Parameters() json.RawMessage {

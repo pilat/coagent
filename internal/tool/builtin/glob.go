@@ -34,8 +34,9 @@ Group independent searches in one response. Narrow the pattern or path when resu
 )
 
 var (
-	_ tool.Tool          = (*globTool)(nil)
-	_ tool.TrailDeclarer = (*globTool)(nil)
+	_ tool.Tool           = (*globTool)(nil)
+	_ tool.TrailDeclarer  = (*globTool)(nil)
+	_ tool.PromptDeclarer = (*globTool)(nil)
 )
 
 type globParams struct {
@@ -63,6 +64,10 @@ func (t *globTool) Description() string { return globDescription }
 
 func (t *globTool) TrailArgument() tool.TrailArgument {
 	return tool.TrailArgument{Param: patternParam}
+}
+
+func (t *globTool) PromptDeclaration() tool.PromptDeclaration {
+	return tool.PromptDeclaration{Group: tool.PromptGroupFiles, Order: 5, Description: "find by pattern"}
 }
 
 func (t *globTool) Parameters() json.RawMessage {

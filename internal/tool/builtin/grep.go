@@ -47,8 +47,9 @@ Limits:
 )
 
 var (
-	_ tool.Tool          = (*grepTool)(nil)
-	_ tool.TrailDeclarer = (*grepTool)(nil)
+	_ tool.Tool           = (*grepTool)(nil)
+	_ tool.TrailDeclarer  = (*grepTool)(nil)
+	_ tool.PromptDeclarer = (*grepTool)(nil)
 )
 
 type grepParams struct {
@@ -82,6 +83,10 @@ func (t *grepTool) Description() string { return grepDescription }
 
 func (t *grepTool) TrailArgument() tool.TrailArgument {
 	return tool.TrailArgument{Param: patternParam}
+}
+
+func (t *grepTool) PromptDeclaration() tool.PromptDeclaration {
+	return tool.PromptDeclaration{Group: tool.PromptGroupFiles, Order: 6, Description: "search contents"}
 }
 
 func (t *grepTool) Parameters() json.RawMessage {

@@ -1,8 +1,10 @@
 package sessionprompt
 
 import (
+	"cmp"
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 
@@ -15,49 +17,32 @@ import (
 
 const (
 	batchToolName     = "batch"
-	readToolName      = "read"
-	writeToolName     = "write"
-	editToolName      = "edit"
-	grepToolName      = "grep"
-	globToolName      = "glob"
 	websearchToolName = "websearch"
 )
 
-var toolCategories = []struct {
-	Name  string
-	Tools []string
+// toolGroups fixes the inventory's lines. Core-forever tools follow a group's declared tools.
+var toolGroups = []struct {
+	Group tool.PromptGroup
+	Title string
+	Core  []string
 }{
-	{
-		"File operations",
-		[]string{readToolName, writeToolName, editToolName, "apply_patch", globToolName, grepToolName, "ls"},
-	},
-	{"Shell", []string{"bash", tool.IDCancelProcess}},
-	{"Code intelligence", []string{"lsp"}},
-	{"Task tracking", []string{"todoread", "todowrite"}},
-	{"Memory", []string{"memory_save", "memory_delete"}},
-	{"Sub-agents", []string{"task", "send_to_subagent", "get_subagent_result"}},
-	{"Parallel execution", []string{batchToolName}},
-	{"Skills", []string{"skill"}},
-	{"Web", []string{"webfetch", websearchToolName}},
-	{"Scheduling", []string{"schedule", "sleep"}},
+	{tool.PromptGroupFiles, "File operations", nil},
+	{tool.PromptGroupShell, "Shell", []string{tool.IDCancelProcess}},
+	{tool.PromptGroupCodeIntelligence, "Code intelligence", nil},
+	{tool.PromptGroupTaskTracking, "Task tracking", nil},
+	{tool.PromptGroupMemory, "Memory", nil},
+	{tool.PromptGroupNone, "Sub-agents", []string{tool.IDTask, "send_to_subagent", "get_subagent_result"}},
+	{tool.PromptGroupNone, "Parallel execution", []string{batchToolName}},
+	{tool.PromptGroupSkills, "Skills", nil},
+	{tool.PromptGroupWeb, "Web", nil},
+	{tool.PromptGroupNone, "Scheduling", []string{"schedule", "sleep"}},
 }
 
-var toolDescriptions = map[string]string{
-	readToolName:          "view file",
-	writeToolName:         "create/overwrite",
-	editToolName:          "find-replace",
-	"apply_patch":         "unified diff",
-	globToolName:          "find by pattern",
-	grepToolName:          "search contents",
-	"ls":                  "list directory",
-	"lsp":                 "definitions, references, types, call hierarchy",
-	"task":                "start a subagent assignment",
+var coreToolDescriptions = map[string]string{
+	tool.IDTask:           "start a subagent assignment",
 	"send_to_subagent":    "continue/resume an existing subagent",
 	"get_subagent_result": "diagnostic snapshot",
 	batchToolName:         "group tool calls (fallback)",
-	"skill":               "load domain knowledge",
-	"webfetch":            "fetch known URL",
-	websearchToolName:     "web search",
 	"schedule":            "wake-up timer",
 	"sleep":               "fixed delay",
 	tool.IDCancelProcess:  "stop an owned background process",
@@ -73,6 +58,13 @@ var knownSearchMCPs = []string{
 	"duckduckgo",
 	"perplexity",
 	"firecrawl",
+}
+
+// promptTools is the registry as the prompt's sections consult it.
+type promptTools struct {
+	ids        []string
+	registered map[string]bool
+	groups     map[tool.PromptGroup][]string
 }
 
 // Builder synchronizes prompt reads with model and tool-inventory updates.
@@ -305,43 +297,77 @@ func buildActiveSkillsSection(skills []*loader.Skill) string {
 }
 
 func buildToolsSection(reg *tool.Registry, nativeSearch bool) string {
-	ids := reg.IDs()
-	registered := make(map[string]bool, len(ids))
-
-	for _, id := range ids {
-		registered[id] = true
-	}
+	tools := scanPromptTools(reg.List())
 
 	var sb strings.Builder
 	sb.WriteString("\n\n# TOOLS\n\nAvailable tools for this session:\n")
 
-	for _, cat := range toolCategories {
-		var tools []string
+	for _, group := range toolGroups {
+		listed := tools.groups[group.Group]
 
-		for _, t := range cat.Tools {
-			if !registered[t] {
+		for _, id := range group.Core {
+			if !tools.registered[id] {
 				continue
 			}
 
-			if desc, ok := toolDescriptions[t]; ok {
-				tools = append(tools, t+" ("+desc+")")
-			} else {
-				tools = append(tools, t)
-			}
+			listed = append(listed, listedTool(id, coreToolDescriptions[id]))
 		}
 
-		if len(tools) > 0 {
-			sb.WriteString("- " + cat.Name + ": " + strings.Join(tools, ", ") + "\n")
+		if len(listed) > 0 {
+			sb.WriteString("- " + group.Title + ": " + strings.Join(listed, ", ") + "\n")
 		}
 	}
 
-	appendMemorySection(&sb, registered)
-	appendParallelSection(&sb, registered)
-	appendScheduleSection(&sb, registered)
-	appendWebSearchSection(&sb, ids, registered, nativeSearch)
-	appendUntrustedContentSection(&sb, ids, registered, nativeSearch)
+	appendMemorySection(&sb, tools.registered)
+	appendParallelSection(&sb, tools.registered)
+	appendScheduleSection(&sb, tools.registered)
+	appendWebSearchSection(&sb, tools.ids, tools.registered, nativeSearch)
+	appendUntrustedContentSection(&sb, tools.ids, tools.registered, nativeSearch)
 
 	return sb.String()
+}
+
+func scanPromptTools(registered []tool.Tool) promptTools {
+	type declared struct {
+		id   string
+		spec tool.PromptDeclaration
+	}
+
+	scan := promptTools{registered: make(map[string]bool, len(registered))}
+
+	var inventory []declared
+
+	for _, candidate := range registered {
+		id := candidate.ID()
+		scan.ids = append(scan.ids, id)
+		scan.registered[id] = true
+
+		declarer, ok := candidate.(tool.PromptDeclarer)
+		if !ok {
+			continue
+		}
+
+		if spec := declarer.PromptDeclaration(); spec.Group != tool.PromptGroupNone {
+			inventory = append(inventory, declared{id, spec})
+		}
+	}
+
+	slices.SortStableFunc(inventory, func(a, b declared) int { return cmp.Compare(a.spec.Order, b.spec.Order) })
+
+	scan.groups = make(map[tool.PromptGroup][]string)
+	for _, item := range inventory {
+		scan.groups[item.spec.Group] = append(scan.groups[item.spec.Group], listedTool(item.id, item.spec.Description))
+	}
+
+	return scan
+}
+
+func listedTool(id, description string) string {
+	if description == "" {
+		return id
+	}
+
+	return id + " (" + description + ")"
 }
 
 func appendMemorySection(sb *strings.Builder, registered map[string]bool) {

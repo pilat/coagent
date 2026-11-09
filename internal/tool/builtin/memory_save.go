@@ -17,7 +17,10 @@ const (
 	memorySaveTitle = "Memory save"
 )
 
-var _ tool.Tool = (*memorySaveTool)(nil)
+var (
+	_ tool.Tool           = (*memorySaveTool)(nil)
+	_ tool.PromptDeclarer = (*memorySaveTool)(nil)
+)
 
 // memorySaveParams are the parameters for the memory_save tool.
 type memorySaveParams struct {
@@ -40,6 +43,10 @@ func (t *memorySaveTool) Description() string {
 	return fmt.Sprintf(`Save a short per-project memory (max %d chars, max %d per project).
 
 Use when the user asks you to remember something. Saved memories are loaded into new opening turns; the current session retains its opening snapshot.`, memoryMaxTextLen, memoryMaxCount)
+}
+
+func (t *memorySaveTool) PromptDeclaration() tool.PromptDeclaration {
+	return tool.PromptDeclaration{Group: tool.PromptGroupMemory, Order: 1}
 }
 
 func (t *memorySaveTool) Parameters() json.RawMessage {

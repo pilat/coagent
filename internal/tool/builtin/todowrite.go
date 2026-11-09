@@ -23,7 +23,10 @@ Task states:
 
 Mark the current item in_progress before starting it. Mark it completed immediately after the outcome and required verification are done, then choose the next pending item. Delegated work stays unfinished until its result is received and reviewed. Revise the list when requirements, findings, or blockers change the plan. Before the final response, reconcile the list with the actual result; keep unresolved work visible. Do not invent follow-up work merely to keep the list populated.`
 
-var _ tool.Tool = (*todoWriteTool)(nil)
+var (
+	_ tool.Tool           = (*todoWriteTool)(nil)
+	_ tool.PromptDeclarer = (*todoWriteTool)(nil)
+)
 
 type todoWriteParams struct {
 	Items []todoItem `json:"items"`
@@ -52,6 +55,10 @@ func newTodoWriteTool(store *todo.Service, replace TodoReplacement) *todoWriteTo
 func (t *todoWriteTool) ID() string          { return "todowrite" }
 func (t *todoWriteTool) ParallelSafe() bool  { return false }
 func (t *todoWriteTool) Description() string { return todoWriteDescription }
+
+func (t *todoWriteTool) PromptDeclaration() tool.PromptDeclaration {
+	return tool.PromptDeclaration{Group: tool.PromptGroupTaskTracking, Order: 2}
+}
 
 func (t *todoWriteTool) Parameters() json.RawMessage {
 	return json.RawMessage(`{

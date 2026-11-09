@@ -31,6 +31,7 @@ Note: Results are search snippets only. Use webfetch to read a page's full conte
 var (
 	_ tool.Tool            = (*webSearchTool)(nil)
 	_ tool.TrailDeclarer   = (*webSearchTool)(nil)
+	_ tool.PromptDeclarer  = (*webSearchTool)(nil)
 	_ tool.UntrustedSource = (*webSearchTool)(nil)
 )
 
@@ -69,6 +70,10 @@ func (t *webSearchTool) Description() string { return websearchDescription }
 
 func (t *webSearchTool) TrailArgument() tool.TrailArgument {
 	return tool.TrailArgument{Param: queryParam}
+}
+
+func (t *webSearchTool) PromptDeclaration() tool.PromptDeclaration {
+	return tool.PromptDeclaration{Group: tool.PromptGroupWeb, Order: 2, Description: "web search"}
 }
 
 func (t *webSearchTool) UntrustedSource() {}

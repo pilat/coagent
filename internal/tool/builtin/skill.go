@@ -12,9 +12,10 @@ import (
 )
 
 var (
-	_ tool.Tool          = (*skillTool)(nil)
-	_ tool.TrailDeclarer = (*skillTool)(nil)
-	_ tool.SkillLoader   = (*skillTool)(nil)
+	_ tool.Tool           = (*skillTool)(nil)
+	_ tool.TrailDeclarer  = (*skillTool)(nil)
+	_ tool.PromptDeclarer = (*skillTool)(nil)
+	_ tool.SkillLoader    = (*skillTool)(nil)
 )
 
 type skillParams struct {
@@ -44,6 +45,10 @@ func (t *skillTool) Description() string { return t.buildDescription() }
 
 func (t *skillTool) TrailArgument() tool.TrailArgument {
 	return tool.TrailArgument{Param: "name"}
+}
+
+func (t *skillTool) PromptDeclaration() tool.PromptDeclaration {
+	return tool.PromptDeclaration{Group: tool.PromptGroupSkills, Order: 1, Description: "load domain knowledge"}
 }
 
 func (t *skillTool) Parameters() json.RawMessage {
