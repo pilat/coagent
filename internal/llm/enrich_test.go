@@ -301,3 +301,8 @@ func testConfig(models []config.ModelEntry) *config.Config {
 		},
 	}
 }
+
+// enrichCatalog is enrichment with nothing remembered and no file.
+func enrichCatalog(ctx context.Context, cfg *config.Config, drivers map[string]driverProtocol) error {
+	return enrichWithResolutions(ctx, cfg, drivers, &catalog.Resolutions{})
+}

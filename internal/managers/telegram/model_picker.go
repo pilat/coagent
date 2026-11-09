@@ -103,7 +103,7 @@ func (m *Manager) listModels(ctx context.Context, sessionID int64, models []cont
 	lines := []string{modelHeader(currentInfo, effort), "Use /model N [effort]:"}
 
 	for i, model := range models {
-		line := fmt.Sprintf("%d. %s · %s", i+1, escapeHTML(modelDisplayName(model)), modelPriceTag(model))
+		line := fmt.Sprintf("%d. %s · %s", i+1, escapeHTML(modelMarkedName(model)), modelPriceTag(model))
 		if model.DefaultEffort != "" {
 			line += " · default effort: " + escapeHTML(model.DefaultEffort)
 		}
@@ -119,7 +119,7 @@ func (m *Manager) listModels(ctx context.Context, sessionID int64, models []cont
 }
 
 func modelHeader(model controllerapi.ConfigModelInfo, effort string) string {
-	name := modelDisplayName(model)
+	name := modelMarkedName(model)
 	if name == "" {
 		name = "unknown"
 	}
@@ -142,6 +142,15 @@ func modelDisplayName(model controllerapi.ConfigModelInfo) string {
 	}
 
 	return model.ID
+}
+
+func modelMarkedName(model controllerapi.ConfigModelInfo) string {
+	name := modelDisplayName(model)
+	if model.CatalogStale {
+		name += " (stale catalog)"
+	}
+
+	return name
 }
 
 func modelPriceTag(model controllerapi.ConfigModelInfo) string {

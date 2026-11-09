@@ -334,7 +334,9 @@ native injection — while configured MCP search tools coexist alongside it.
   A binary built for any other OS refuses to run before it starts.
 - The first model-catalog lookup needs network access. Later starts try the
   network again but can fall back to the last valid disk snapshot. Arbitrary
-  local model IDs need a matching catalog entry.
+  local model IDs need a matching catalog entry. A model that
+  resolved before and later leaves its catalog keeps its last resolution: the daemon starts, warns, and
+  marks it `(stale catalog)` in `/model` and `coagent status`.
 - `/spawn <path>` selects an existing checkout in Telegram; `/gwt <name>` from
   a selected session forks its repository into a fresh worktree branched
   off the remote default branch.

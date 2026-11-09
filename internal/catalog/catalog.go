@@ -16,18 +16,18 @@ type (
 	// ModelSpec is one model's catalog-resolved metadata. Source names the
 	// catalog section it came from, which is what the enrichment log reports.
 	ModelSpec struct {
-		Name          string
-		Source        string
-		ContextWindow int
-		MaxTokens     int
-		Pricing       *config.ModelPricing
-		Reasoning     *config.ReasoningSpec
+		Name          string                `json:"name"`
+		Source        string                `json:"source"`
+		ContextWindow int                   `json:"context_window"`
+		MaxTokens     int                   `json:"max_tokens"`
+		Pricing       *config.ModelPricing  `json:"pricing"`
+		Reasoning     *config.ReasoningSpec `json:"reasoning"`
 		// InputModalities is the catalog's declared input types ("text",
 		// "image", ...). Nil means the catalog said nothing.
-		InputModalities []string
+		InputModalities []string `json:"input_modalities"`
 		// Shadowed names the sections that carry this id and lost the Flatten,
 		// so enrichment can tell the operator the metadata may be another host's.
-		Shadowed []string
+		Shadowed []string `json:"shadowed"`
 	}
 )
 

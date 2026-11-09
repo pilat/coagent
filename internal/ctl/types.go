@@ -34,6 +34,8 @@ type StatusResult struct {
 	Providers     []ProviderStatus `json:"providers,omitempty"`
 	ModelCount    int              `json:"model_count"`
 	DefaultModel  string           `json:"default_model,omitempty"`
+	// StaleModels names models their catalog no longer lists; additive, no protocol-version bump.
+	StaleModels []string `json:"stale_models,omitempty"`
 	// Search renders the integrated-search state: "tavily", "searxng
 	// (<base_url>)", "native (openrouter)", "disabled", or empty when
 	// unconfigured. Additive; no protocol-version bump.

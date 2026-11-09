@@ -55,19 +55,22 @@ type (
 		EffortLevels []string `json:"-" yaml:"-"`
 		// DefaultEffort is the level a switch to this model lands on.
 		DefaultEffort string `json:"-" yaml:"-"`
+		// CatalogStale means the catalog no longer lists this model: everything above
+		// is its last resolution.
+		CatalogStale bool `json:"-" yaml:"-"`
 	}
 
 	// ReasoningSpec is a model's catalog-declared reasoning capability.
 	ReasoningSpec struct {
-		Supported    bool // model reasons at all
-		NativeEffort bool // takes an effort level directly, rather than a token budget
-		BudgetMin    int  // minimum budget_tokens for budget-based models; 0 when N/A
+		Supported    bool `json:"supported"`     // model reasons at all
+		NativeEffort bool `json:"native_effort"` // takes an effort level directly, rather than a token budget
+		BudgetMin    int  `json:"budget_min"`    // minimum budget_tokens for budget-based models; 0 when N/A
 
 		// Efforts is the catalog's allowlist, highest-effort-first order not assumed.
 		// Nil with AnyEffort false means the model exposes no effort selector at all.
-		Efforts   []string
-		AnyEffort bool   // catalog declares no allowlist: every gateway level is accepted
-		Default   string // catalog's preferred level; empty when it declares none
+		Efforts   []string `json:"efforts"`
+		AnyEffort bool     `json:"any_effort"` // catalog declares no allowlist: every gateway level is accepted
+		Default   string   `json:"default"`    // catalog's preferred level; empty when it declares none
 	}
 
 	// OpenRouterConfig holds OpenRouter-specific provider configuration.

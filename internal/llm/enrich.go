@@ -6,6 +6,7 @@ import (
 	"maps"
 	"slices"
 	"strings"
+	"time"
 
 	"go.uber.org/zap"
 
@@ -26,13 +27,15 @@ var budgetEffortLevels = []string{
 	string(ReasoningHigh),
 }
 
-// EnrichCatalog fills every configured model from its driver's catalog. The catalog
-// is the only source, so an unresolvable model fails startup rather than lying.
+// EnrichCatalog fills every configured model from its driver's catalog. A model the
+// catalog lost keeps its last resolution; one that never resolved fails startup.
 func EnrichCatalog(ctx context.Context, cfg *config.Config) error {
-	return enrichCatalog(ctx, cfg, defaultDrivers)
+	return enrichWithResolutions(ctx, cfg, defaultDrivers, catalog.LoadResolutions(ctx))
 }
 
-func enrichCatalog(ctx context.Context, cfg *config.Config, drivers map[string]driverProtocol) error {
+func enrichWithResolutions(
+	ctx context.Context, cfg *config.Config, drivers map[string]driverProtocol, memory *catalog.Resolutions,
+) error {
 	uc := cfg.UnifiedConfig
 	if uc == nil || len(uc.Models) == 0 {
 		return nil
@@ -48,7 +51,7 @@ func enrichCatalog(ctx context.Context, cfg *config.Config, drivers map[string]d
 	resolved := make([]bool, len(uc.Models))
 
 	for _, providerKey := range slices.Sorted(maps.Keys(byProvider)) {
-		unresolved, err := enrichProvider(ctx, uc, drivers, providerKey, byProvider[providerKey], resolved)
+		unresolved, err := enrichProvider(ctx, uc, drivers, providerKey, byProvider[providerKey], resolved, memory)
 		if err != nil {
 			return err
 		}
@@ -61,13 +64,14 @@ func enrichCatalog(ctx context.Context, cfg *config.Config, drivers map[string]d
 		return fmt.Errorf("model catalog resolution failed:\n  - %s", strings.Join(problems, "\n  - "))
 	}
 
+	memory.Save(ctx)
 	logEnriched(uc)
 
 	return nil
 }
 
 // enrichProvider fills every model of one provider from a single ListModels call,
-// returning the ids the catalog did not know.
+// returning the ids neither the catalog nor a last resolution knew.
 func enrichProvider(
 	ctx context.Context,
 	uc *config.UnifiedConfig,
@@ -75,6 +79,7 @@ func enrichProvider(
 	providerKey string,
 	indices []int,
 	resolved []bool,
+	memory *catalog.Resolutions,
 ) ([]string, error) {
 	entry, ok := uc.Providers[providerKey]
 	if !ok {
@@ -96,21 +101,52 @@ func enrichProvider(
 	var problems []string
 
 	for _, idx := range indices {
-		spec, found := catalog.Lookup(models, uc.Models[idx].ID)
-		if !found {
-			problems = append(problems, fmt.Sprintf(
-				"%s (provider %q): not present in its catalog", uc.Models[idx].ID, providerKey))
+		problem := resolveModel(ctx, &uc.Models[idx], providerKey, entry, models, memory)
+		if problem != "" {
+			problems = append(problems, problem)
 
 			continue
 		}
-
-		warnAmbiguousSection(providerKey, uc.Models[idx].ID, spec)
-		applySpec(&uc.Models[idx], providerKey, entry.Driver, spec)
 
 		resolved[idx] = true
 	}
 
 	return problems, nil
+}
+
+// resolveModel fills one model from the catalog, else from its last resolution,
+// and returns the problem when neither knows it.
+func resolveModel(
+	ctx context.Context,
+	m *config.ModelEntry,
+	providerKey string,
+	entry config.ProviderEntry,
+	models map[string]catalog.ModelSpec,
+	memory *catalog.Resolutions,
+) string {
+	spec, found := catalog.Lookup(models, m.ID)
+	if found {
+		warnAmbiguousSection(providerKey, m.ID, spec)
+		applySpec(m, providerKey, entry.Driver, spec)
+		memory.Remember(m.ID, entry, spec)
+
+		return ""
+	}
+
+	last, known := memory.Recall(m.ID, entry)
+	if !known {
+		return fmt.Sprintf("%s (provider %q): not present in its catalog", m.ID, providerKey)
+	}
+
+	logger.Ctx(ctx).Named("llm.catalog").Warn("catalog_model_missing_upstream",
+		zap.String("id", m.ID),
+		zap.String("provider", providerKey),
+		zap.Duration("age", time.Since(last.ResolvedAt)))
+
+	applySpec(m, providerKey, entry.Driver, last.Spec)
+	m.CatalogStale = true
+
+	return ""
 }
 
 // warnAmbiguousSection reports a duplicated id a bare provider's flatten resolved

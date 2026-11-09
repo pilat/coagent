@@ -276,6 +276,10 @@ func loadStartupState(ctx context.Context) (startupState, error) {
 
 	logConfigStatus(cfg)
 
+	if err := probeBashSandbox(cfg); err != nil {
+		return startupState{}, fmt.Errorf("bash sandbox: %w", err)
+	}
+
 	// Model metadata comes from external catalogs, so a model whose limits cannot
 	// be resolved is a config error — there is no override to fall back on.
 	enrichCtx, cancelEnrich := context.WithTimeout(ctx, catalogEnrichTimeout)
@@ -285,10 +289,6 @@ func loadStartupState(ctx context.Context) (startupState, error) {
 
 	if err != nil {
 		return startupState{}, fmt.Errorf("model catalog: %w", err)
-	}
-
-	if err := probeBashSandbox(cfg); err != nil {
-		return startupState{}, fmt.Errorf("bash sandbox: %w", err)
 	}
 
 	return startupState{cfg: cfg, secrets: secrets}, nil
