@@ -144,6 +144,8 @@ func TestAddAndListRoundTripsJSON(t *testing.T) {
 	got, err := store.ListForProject(ctx, projectID)
 	require.NoError(t, err)
 	require.Len(t, got, 1)
+	assert.NotEmpty(t, got[0].Revision)
+	got[0].Revision = ""
 	assert.Equal(t, want, got[0])
 }
 

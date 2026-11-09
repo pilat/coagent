@@ -17,11 +17,12 @@ var (
 
 // ServerDef is one registry row. Env values are stored verbatim, references included.
 type ServerDef struct {
-	Name    string
-	Command string
-	Args    []string
-	Env     map[string]string
-	Enabled bool
+	Name     string
+	Command  string
+	Args     []string
+	Env      map[string]string
+	Enabled  bool
+	Revision string
 }
 
 // Store is CRUD over the registry. A nil projectID addresses the global scope.
@@ -107,12 +108,14 @@ func (s *store) SetEnabled(ctx context.Context, projectID *int64, name string, e
 
 	if projectID == nil {
 		result, err = s.db.ExecContext(ctx,
-			`UPDATE mcp_servers SET enabled = ?, updated_at = ? WHERE name = ? AND project_id IS NULL`,
-			boolToInt(enabled), now, name)
+			`UPDATE mcp_servers SET enabled = ?, updated_at = CASE WHEN enabled = ? THEN updated_at ELSE ? END
+			 WHERE name = ? AND project_id IS NULL`,
+			boolToInt(enabled), boolToInt(enabled), now, name)
 	} else {
 		result, err = s.db.ExecContext(ctx,
-			`UPDATE mcp_servers SET enabled = ?, updated_at = ? WHERE name = ? AND project_id = ?`,
-			boolToInt(enabled), now, name, *projectID)
+			`UPDATE mcp_servers SET enabled = ?, updated_at = CASE WHEN enabled = ? THEN updated_at ELSE ? END
+			 WHERE name = ? AND project_id = ?`,
+			boolToInt(enabled), boolToInt(enabled), now, name, *projectID)
 	}
 
 	if err != nil {
@@ -152,13 +155,13 @@ func (s *store) ListForProject(ctx context.Context, projectID int64) ([]ServerDe
 }
 
 func (s *store) ListAll(ctx context.Context, projectID int64) ([]ServerDef, []ServerDef, error) {
-	globals, err := s.query(ctx, `SELECT name, command, args, env, enabled FROM mcp_servers
+	globals, err := s.query(ctx, `SELECT name, command, args, env, enabled, CAST(updated_at AS TEXT) FROM mcp_servers
 		WHERE project_id IS NULL ORDER BY name`)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	project, err := s.query(ctx, `SELECT name, command, args, env, enabled FROM mcp_servers
+	project, err := s.query(ctx, `SELECT name, command, args, env, enabled, CAST(updated_at AS TEXT) FROM mcp_servers
 		WHERE project_id = ? ORDER BY name`, projectID)
 	if err != nil {
 		return nil, nil, err

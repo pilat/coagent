@@ -71,8 +71,8 @@ lines internal/managerdelivery 451
 lines internal/managerdiscovery 240
 lines internal/managers 195
 lines internal/managers/telegram 2899
-lines internal/mcp 1072
-lines internal/mcpstore 677
+lines internal/mcp 1073
+lines internal/mcpstore 680
 lines internal/memory 139
 lines internal/migrate 695
 lines internal/procexec 277
@@ -84,7 +84,7 @@ lines internal/safefile 926
 lines internal/sandboxpolicy 785
 lines internal/schedule 1347
 lines internal/session 5200
-lines internal/sessionbuild 775
+lines internal/sessionbuild 776
 lines internal/sessionbus 171
 lines internal/sessionevent 263
 lines internal/sessionprompt 1038

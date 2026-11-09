@@ -2,6 +2,7 @@ package sessionbuild
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 
@@ -91,4 +92,17 @@ func TestResolveMCPServersLeavesEnvNilWhenEmpty(t *testing.T) {
 	got := resolveMCPServers(context.Background(), store, nil, 1)
 	require.Len(t, got, 1)
 	assert.Empty(t, got["bare"].Env)
+}
+
+func TestResolveMCPServersCarriesTheRevision(t *testing.T) {
+	t.Parallel()
+	store := &fakeMCPStore{defs: []mcpstore.ServerDef{{
+		Name: "alpha", Command: "run", Enabled: true, Revision: "row-revision",
+	}}}
+	got := resolveMCPServers(context.Background(), store, nil, 1)
+	require.Contains(t, got, "alpha")
+	assert.Equal(t, "row-revision", got["alpha"].Revision)
+	encoded, err := json.Marshal(got)
+	require.NoError(t, err)
+	assert.Contains(t, string(encoded), `"revision":"row-revision"`)
 }
