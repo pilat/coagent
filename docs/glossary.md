@@ -200,7 +200,7 @@ A tool whose Execute may run concurrently with its siblings in one assistant res
 _Avoid_: thread-safe (an implementation property, not the declared scheduling policy), batch-able.
 
 **tool trait**:
-A property the core consults instead of a tool's ID, declared by the tool as an optional interface (`tool.UntrustedSource`, `tool.SkillLoader`) or, where stored rows must be classified after their tool is gone, by the tool stack as an ID rule (the **frame rule**) ([ADR-0083](adr/0083-core-recognises-tools-by-declared-traits.md)).
+A property the core consults instead of a tool's ID, declared by the tool as an optional interface (`tool.UntrustedSource`, `tool.SkillLoader`, `tool.TrailDeclarer`, `tool.PromptDeclarer`) or, where stored rows must be classified after their tool is gone, by the tool stack as an ID rule (the **frame rule**) ([ADR-0083](adr/0083-core-recognises-tools-by-declared-traits.md), [ADR-0085](adr/0085-core-names-no-extensible-tool-by-literal.md)).
 _Avoid_: tool kind.
 
 **frame rule** (`tool.FrameRule`):

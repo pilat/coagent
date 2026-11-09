@@ -944,7 +944,11 @@ after the loop exits.
 
 The core recognises tools by declared traits, not tool ID ([ADR-0083](docs/adr/0083-core-recognises-tools-by-declared-traits.md)).
 A live-call property is an optional tool interface; the tool stack declares the browser
-frame rule by ID because stored frames outlive their tools.
+frame rule by ID because stored frames outlive their tools. A tool also declares its trail
+argument, prompt group, description and prompt capabilities, and the tool stack marks MCP
+search tools ([ADR-0085](docs/adr/0085-core-names-no-extensible-tool-by-literal.md)). The
+core keeps group titles and order, and consults by name only the tools that are part of
+it for good; prompt prose and agent allowlists may still name others.
 
 Session assembly uses a shared tool-resource cache keyed by session ID, canonical workdir,
 policy and MCP configuration. It retains shell snapshots and MCP clients across

@@ -266,3 +266,28 @@ rules:
       - metavariable-regex:
           metavariable: $NAME
           regex: '^IDMCP(Add|Remove|Enable|Disable|List)$'
+
+  # Bare $LITERAL does not bind case clauses, so a switch needs its own pattern.
+  - id: coagent-tool-literals-via-declarations
+    languages: [go]
+    severity: ERROR
+    paths:
+      include: ["/internal/session/**", "/internal/sessionprompt/**", "/internal/sessionbuild/**"]
+      exclude: ["*_test.go"]
+    message: >-
+      The core must not recognise an extensible tool by its string literal, or
+      every new tool has to edit the core. Declare what the core needs on the
+      tool instead (tool.TrailDeclarer, tool.PromptDeclarer or another optional
+      interface in internal/tool; for MCP search tools, the tool stack's search
+      order) and consult that declaration.
+    patterns:
+      - pattern-either:
+          - pattern: $LITERAL
+          - pattern: |
+              switch $X {
+              case ..., $LITERAL, ...:
+                ...
+              }
+      - metavariable-regex:
+          metavariable: $LITERAL
+          regex: '(?s)^["`](read|write|edit|apply_patch|glob|grep|ls|lsp|tail|bash|todoread|todowrite|memory_save|memory_delete|skill|webfetch|websearch|set_budget|mcp_add|mcp_remove|mcp_enable|mcp_disable|mcp_list|tavily|brave-search|exa|kagi|searxng|duckduckgo|perplexity|firecrawl|mcp__.*)["`]$'
