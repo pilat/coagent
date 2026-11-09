@@ -22,6 +22,8 @@ jobs:
         with:
           install: true
           cache: true
+      - name: Install Linux sandbox runtime
+        uses: ./.github/actions/setup-sandbox
       - name: Bootstrap pinned tools
         run: make tools
       - name: Verify source
