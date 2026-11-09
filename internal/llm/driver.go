@@ -220,7 +220,7 @@ func sectionOrError(
 ) (map[string]catalog.ModelSpec, error) {
 	models, ok := sections[name]
 	if !ok {
-		return nil, fmt.Errorf("models.dev has no section %q", name)
+		return nil, fmt.Errorf("%w %q", errSectionMissing, name)
 	}
 
 	return models, nil

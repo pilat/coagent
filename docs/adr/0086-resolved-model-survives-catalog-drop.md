@@ -3,6 +3,7 @@
 - **Status:** Accepted
 - **Date:** 2026-11-09
 - **Amends:** [ADR-0003](0003-external-model-catalogs.md)
+- **Amended by:** [ADR-0087](0087-lost-catalog-section-keeps-last-resolution.md) — a section its catalog no longer serves is a lost entry for each of its models
 
 ## Context
 
