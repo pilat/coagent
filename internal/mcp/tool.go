@@ -10,7 +10,10 @@ import (
 	"github.com/pilat/coagent/internal/tool"
 )
 
-var _ tool.UntrustedSource = (*mcpTool)(nil)
+var (
+	_ tool.UntrustedSource = (*mcpTool)(nil)
+	_ tool.PromptDeclarer  = (*mcpTool)(nil)
+)
 
 type Attachment struct {
 	Note  string
@@ -36,13 +39,19 @@ type Profile interface {
 	Gate(args map[string]any, decodeErr error) *tool.Result
 }
 
+// SearchOrder reports whether the stack's owner treats a tool as a web search
+// tool, and its position among them.
+type SearchOrder func(toolID string) (int, bool)
+
 // mcpTool keeps the metadata discovered for one stack and calls its live client.
 type mcpTool struct {
-	serverName string
-	meta       ToolMeta
-	clientFor  func(ctx context.Context) (*Client, error)
-	sink       AttachmentSink
-	profile    Profile
+	serverName  string
+	meta        ToolMeta
+	clientFor   func(ctx context.Context) (*Client, error)
+	sink        AttachmentSink
+	profile     Profile
+	search      bool
+	searchOrder int
 }
 
 // newMCPTool builds a direct MCP tool from discovered metadata.
@@ -99,6 +108,10 @@ func (t *mcpTool) UntrustedSource() {}
 
 func (t *mcpTool) Description() string {
 	return t.meta.Description
+}
+
+func (t *mcpTool) PromptDeclaration() tool.PromptDeclaration {
+	return tool.PromptDeclaration{Search: t.search, SearchOrder: t.searchOrder}
 }
 
 func (t *mcpTool) Parameters() json.RawMessage {

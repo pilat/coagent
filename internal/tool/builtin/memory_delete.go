@@ -40,7 +40,7 @@ Use when a memory is outdated or needs to be replaced. The change is loaded into
 }
 
 func (t *memoryDeleteTool) PromptDeclaration() tool.PromptDeclaration {
-	return tool.PromptDeclaration{Group: tool.PromptGroupMemory, Order: 2}
+	return tool.PromptDeclaration{Group: tool.PromptGroupMemory, Order: 2, Memory: true}
 }
 
 func (t *memoryDeleteTool) Parameters() json.RawMessage {

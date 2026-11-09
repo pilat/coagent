@@ -16,14 +16,14 @@ import (
 
 func TestBuildToolsSection_TypicalSet(t *testing.T) {
 	reg := tool.NewRegistry()
-	reg.Register(&stubTool{id: "read"})
-	reg.Register(&stubTool{id: "write"})
-	reg.Register(&stubTool{id: "bash"})
-	reg.Register(&stubTool{id: "memory_save"})
-	reg.Register(&stubTool{id: "memory_delete"})
-	reg.Register(&stubTool{id: "batch"})
-	reg.Register(&stubTool{id: "send_to_subagent"})
-	reg.Register(&stubTool{id: "get_subagent_result"})
+	reg.Register(newStubTool("read"))
+	reg.Register(newStubTool("write"))
+	reg.Register(newStubTool("bash"))
+	reg.Register(newStubTool("memory_save"))
+	reg.Register(newStubTool("memory_delete"))
+	reg.Register(newStubTool("batch"))
+	reg.Register(newStubTool("send_to_subagent"))
+	reg.Register(newStubTool("get_subagent_result"))
 
 	result := buildToolsSection(reg, false)
 
@@ -44,9 +44,9 @@ func TestBuildToolsSection_TypicalSet(t *testing.T) {
 
 func TestBuildToolsSection_CuratedOnly(t *testing.T) {
 	reg := tool.NewRegistry()
-	reg.Register(&stubTool{id: "read"})
-	reg.Register(&stubTool{id: "memory_save"})
-	reg.Register(&stubTool{id: "memory_delete"})
+	reg.Register(newStubTool("read"))
+	reg.Register(newStubTool("memory_save"))
+	reg.Register(newStubTool("memory_delete"))
 
 	result := buildToolsSection(reg, false)
 
@@ -57,13 +57,13 @@ func TestBuildToolsSection_CuratedOnly(t *testing.T) {
 
 func TestBuildToolsSection_Deterministic(t *testing.T) {
 	reg := tool.NewRegistry()
-	reg.Register(&stubTool{id: "read"})
-	reg.Register(&stubTool{id: "write"})
-	reg.Register(&stubTool{id: "bash"})
-	reg.Register(&stubTool{id: "grep"})
-	reg.Register(&stubTool{id: "glob"})
-	reg.Register(&stubTool{id: "schedule"})
-	reg.Register(&stubTool{id: "sleep"})
+	reg.Register(newStubTool("read"))
+	reg.Register(newStubTool("write"))
+	reg.Register(newStubTool("bash"))
+	reg.Register(newStubTool("grep"))
+	reg.Register(newStubTool("glob"))
+	reg.Register(newStubTool("schedule"))
+	reg.Register(newStubTool("sleep"))
 
 	first := buildToolsSection(reg, false)
 	second := buildToolsSection(reg, false)
@@ -73,7 +73,7 @@ func TestBuildToolsSection_Deterministic(t *testing.T) {
 
 func TestBuildToolsSection_ScheduleOnly(t *testing.T) {
 	reg := tool.NewRegistry()
-	reg.Register(&stubTool{id: "schedule"})
+	reg.Register(newStubTool("schedule"))
 
 	result := buildToolsSection(reg, false)
 
@@ -86,7 +86,7 @@ func TestBuildToolsSection_ScheduleOnly(t *testing.T) {
 
 func TestBuildToolsSection_SleepOnly(t *testing.T) {
 	reg := tool.NewRegistry()
-	reg.Register(&stubTool{id: "sleep"})
+	reg.Register(newStubTool("sleep"))
 
 	result := buildToolsSection(reg, false)
 
@@ -96,8 +96,8 @@ func TestBuildToolsSection_SleepOnly(t *testing.T) {
 
 func TestBuildToolsSection_BothScheduleAndSleep(t *testing.T) {
 	reg := tool.NewRegistry()
-	reg.Register(&stubTool{id: "schedule"})
-	reg.Register(&stubTool{id: "sleep"})
+	reg.Register(newStubTool("schedule"))
+	reg.Register(newStubTool("sleep"))
 
 	result := buildToolsSection(reg, false)
 
@@ -109,10 +109,10 @@ func TestBuildToolsSection_BothScheduleAndSleep(t *testing.T) {
 
 func TestBuildToolsSection_SubagentsMustNotUseSleepOrPollingToWait(t *testing.T) {
 	reg := tool.NewRegistry()
-	reg.Register(&stubTool{id: "task"})
-	reg.Register(&stubTool{id: "get_subagent_result"})
-	reg.Register(&stubTool{id: "schedule"})
-	reg.Register(&stubTool{id: "sleep"})
+	reg.Register(newStubTool("task"))
+	reg.Register(newStubTool("get_subagent_result"))
+	reg.Register(newStubTool("schedule"))
+	reg.Register(newStubTool("sleep"))
 
 	result := buildToolsSection(reg, false)
 
@@ -144,10 +144,10 @@ func TestBuildActiveBackgroundSection_TeachesAutomaticWakeNotPolling(t *testing.
 
 func TestBuildToolsSection_WebSearchGuidance_Tavily(t *testing.T) {
 	reg := tool.NewRegistry()
-	reg.Register(&stubTool{id: "read"})
-	reg.Register(&stubTool{id: "webfetch"})
-	reg.Register(&stubTool{id: "mcp__tavily__tavily_search"})
-	reg.Register(&stubTool{id: "mcp__tavily__tavily_extract"})
+	reg.Register(newStubTool("read"))
+	reg.Register(newStubTool("webfetch"))
+	reg.Register(newStubTool("mcp__tavily__tavily_search"))
+	reg.Register(newStubTool("mcp__tavily__tavily_extract"))
 
 	result := buildToolsSection(reg, false)
 
@@ -160,9 +160,9 @@ func TestBuildToolsSection_WebSearchGuidance_Tavily(t *testing.T) {
 
 func TestBuildToolsSection_WebSearchGuidance_NoSearchMCP(t *testing.T) {
 	reg := tool.NewRegistry()
-	reg.Register(&stubTool{id: "read"})
-	reg.Register(&stubTool{id: "webfetch"})
-	reg.Register(&stubTool{id: "mcp__context7__query-docs"})
+	reg.Register(newStubTool("read"))
+	reg.Register(newStubTool("webfetch"))
+	reg.Register(newStubTool("mcp__context7__query-docs"))
 
 	result := buildToolsSection(reg, false)
 
@@ -171,7 +171,7 @@ func TestBuildToolsSection_WebSearchGuidance_NoSearchMCP(t *testing.T) {
 
 func TestBuildToolsSection_WebSearchGuidance_BraveSearch(t *testing.T) {
 	reg := tool.NewRegistry()
-	reg.Register(&stubTool{id: "mcp__brave-search__brave_web_search"})
+	reg.Register(newStubTool("mcp__brave-search__brave_web_search"))
 
 	result := buildToolsSection(reg, false)
 
@@ -242,7 +242,7 @@ func TestBuildToolsSection_UntrustedContentGuidance(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			reg := tool.NewRegistry()
 			for _, id := range tt.tools {
-				reg.Register(&stubTool{id: id})
+				reg.Register(newStubTool(id))
 			}
 
 			result := buildToolsSection(reg, tt.nativeSearch)
@@ -273,7 +273,7 @@ func TestBuildToolsSection_NativeSearchRequiresAClientSideTool(t *testing.T) {
 	assert.NotContains(t, empty, "# UNTRUSTED CONTENT")
 
 	populated := tool.NewRegistry()
-	populated.Register(&stubTool{id: "read"})
+	populated.Register(newStubTool("read"))
 	withTool := buildToolsSection(populated, true)
 	assert.Contains(t, withTool, "# WEB SEARCH")
 	assert.Contains(t, withTool, "provided natively by your model provider")
@@ -282,8 +282,8 @@ func TestBuildToolsSection_NativeSearchRequiresAClientSideTool(t *testing.T) {
 
 func TestBuildToolsSection_UntrustedGuidanceIsDeterministic(t *testing.T) {
 	reg := tool.NewRegistry()
-	reg.Register(&stubTool{id: "bash"})
-	reg.Register(&stubTool{id: "webfetch"})
+	reg.Register(newStubTool("bash"))
+	reg.Register(newStubTool("webfetch"))
 
 	first := buildToolsSection(reg, false)
 	second := buildToolsSection(reg, false)

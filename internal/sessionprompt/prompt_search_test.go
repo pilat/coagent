@@ -27,7 +27,7 @@ func searchGuidanceConfig() *config.UnifiedConfig {
 func registryWithTools(ids ...string) *tool.Registry {
 	reg := tool.NewRegistry()
 	for _, id := range ids {
-		reg.Register(&stubTool{id: id})
+		reg.Register(newStubTool(id))
 	}
 
 	return reg
@@ -36,7 +36,7 @@ func registryWithTools(ids ...string) *tool.Registry {
 func TestBuildToolsSection_WebSearchBuiltinToolRegistered(t *testing.T) {
 	t.Parallel()
 
-	reg := registryWithTools("read", "webfetch", websearchToolName)
+	reg := registryWithTools("read", "webfetch", "websearch")
 
 	result := buildToolsSection(reg, false)
 

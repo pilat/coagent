@@ -74,7 +74,7 @@ func (t *webFetchTool) TrailArgument() tool.TrailArgument {
 }
 
 func (t *webFetchTool) PromptDeclaration() tool.PromptDeclaration {
-	return tool.PromptDeclaration{Group: tool.PromptGroupWeb, Order: 1, Description: "fetch known URL"}
+	return tool.PromptDeclaration{Group: tool.PromptGroupWeb, Order: 1, Description: "fetch known URL", WebFetch: true}
 }
 
 func (t *webFetchTool) UntrustedSource() {}

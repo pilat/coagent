@@ -35,6 +35,13 @@ type PromptDeclaration struct {
 	// Order positions the tool within its group; equal values fall back to ID order.
 	Order       int
 	Description string
+	// Memory, Shell and WebFetch each switch on the prompt section that depends on them.
+	Memory   bool
+	Shell    bool
+	WebFetch bool
+	// Search lists the tool in the web search section, by ascending SearchOrder.
+	Search      bool
+	SearchOrder int
 }
 
 // PromptDeclarer is a tool the system prompt describes.
