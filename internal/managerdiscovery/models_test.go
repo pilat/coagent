@@ -10,6 +10,19 @@ import (
 	"github.com/pilat/coagent/internal/config"
 )
 
+func TestListModelsMarksStaleCatalog(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Config{UnifiedConfig: &config.UnifiedConfig{Models: []config.ModelEntry{
+		{ID: "stale", CatalogStale: true}, {ID: "fresh"},
+	}}}
+	result, err := New(nil, cfg, nil).ListModels(context.Background())
+	require.NoError(t, err)
+	require.Len(t, result.Models, 2)
+	assert.True(t, result.Models[0].CatalogStale)
+	assert.False(t, result.Models[1].CatalogStale)
+}
+
 func TestListModelsMapsEnrichedEntries(t *testing.T) {
 	cfg := &config.Config{UnifiedConfig: &config.UnifiedConfig{
 		Models: []config.ModelEntry{

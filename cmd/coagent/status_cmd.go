@@ -85,6 +85,10 @@ func printStatus(st ctl.StatusResult, g ctl.Greeting) {
 
 	fmt.Printf("models  %d · default %s\n", st.ModelCount, orNone(st.DefaultModel))
 
+	for _, id := range st.StaleModels {
+		fmt.Printf("model %s (stale catalog)\n", id)
+	}
+
 	for _, m := range st.Managers {
 		fmt.Println(managerLine(m))
 	}

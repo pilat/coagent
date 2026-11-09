@@ -2,6 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-08-07
+- **Amended by:** [ADR-0086](0086-resolved-model-survives-catalog-drop.md) — a lost entry keeps the model's last resolution; only a never-resolved model still fails startup
 
 ## Context
 

@@ -69,6 +69,7 @@ func (s *Server) status(ctx context.Context) StatusResult {
 	if out.ConfigPresent {
 		out.Providers = providerStatuses(cfg.UnifiedConfig.Providers)
 		out.ModelCount = len(cfg.UnifiedConfig.Models)
+		out.StaleModels = staleModels(cfg.UnifiedConfig.Models)
 		out.DefaultModel = cfg.DefaultModel()
 		out.Search = searchStatus(cfg.UnifiedConfig, cfg.DefaultModel())
 		out.Managers = s.managerStatuses(cfg.UnifiedConfig.Managers)
@@ -133,6 +134,18 @@ func providerStatuses(providers map[string]config.ProviderEntry) []ProviderStatu
 	out := make([]ProviderStatus, 0, len(names))
 	for _, name := range names {
 		out = append(out, ProviderStatus{Name: name, Driver: providers[name].Driver})
+	}
+
+	return out
+}
+
+func staleModels(models []config.ModelEntry) []string {
+	var out []string
+
+	for _, model := range models {
+		if model.CatalogStale {
+			out = append(out, model.ID)
+		}
 	}
 
 	return out

@@ -149,6 +149,8 @@ type ConfigModelInfo struct {
 	// DefaultEffort is the level a switch to this model lands on; empty when
 	// EffortLevels is.
 	DefaultEffort string `json:"default_effort,omitempty"`
+	// CatalogStale means the catalog no longer lists this model; the fields above are its last resolution.
+	CatalogStale bool `json:"catalog_stale,omitempty"`
 }
 
 type ConfigSkillsResultData struct {

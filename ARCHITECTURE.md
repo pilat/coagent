@@ -248,10 +248,14 @@ startup status until every operation owner is registered. A manager startup
 failure is isolated to that manager: the daemon remains up while the operator
 repairs configuration by hand.
 
-Catalog enrichment occurs at startup. Configured models are validated against
-their provider's catalog, so unknown model metadata fails startup rather than
-creating a partially specified session. Catalogs are cached for availability but
-do not turn configuration into a mutable policy source.
+Catalog enrichment occurs at startup. A configured model takes its metadata from
+its provider's catalog. A model the catalog no longer lists keeps its last
+resolution, a best-effort cache beside the catalog bodies: the daemon starts, warns
+at every boot and marks the model `(stale catalog)` in `/model` and `coagent status`,
+with no automatic removal or fallback. A model that never resolved fails startup
+rather than creating a partially specified session, and losing the cache reinstates
+that failure. Catalogs are cached for availability but do not turn configuration
+into a mutable policy source.
 
 ### Session activation
 

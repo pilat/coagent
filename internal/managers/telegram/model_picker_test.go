@@ -43,6 +43,30 @@ func TestHandleModelRendersDisplayNamePriceAndEffort(t *testing.T) {
 	assert.NotContains(t, messages[1], pickerModels[0].DisplayName+" · effort:")
 }
 
+func TestHandleModelMarksStaleCatalog(t *testing.T) {
+	var messages []string
+	models := append([]controllerapi.ConfigModelInfo(nil), pickerModels...)
+	models[0].CatalogStale = true
+	models[0].DefaultEffort = "high"
+	ctrl := &fakeController{
+		focus: 42, listModels: models,
+		listSessions: []controllerapi.SessionInfo{{
+			ID: 42, Model: models[0].ID, ReasoningLevel: "high",
+			Attributes: map[string]any{"manager_id": "telegram-main"},
+		}},
+	}
+	m := newCmdTestManager(t, ctrl, &messages)
+	m.handleChatText(t.Context(), "/model")
+	require.Len(t, messages, 1)
+	assert.Contains(t, messages[0], "<b>Model:</b> "+models[0].DisplayName+" (stale catalog) · effort: high")
+	assert.Contains(t, messages[0], "\n1. "+models[0].DisplayName+" (stale catalog) · ")
+	assert.Contains(t, messages[0], "\n2. local/Plain · free")
+	assert.NotContains(t, messages[0], "local/Plain (stale catalog)")
+	m.handleChatText(t.Context(), "/model 1")
+	require.Len(t, messages, 2)
+	assert.Equal(t, "🧠 <b>Model:</b> "+models[0].DisplayName+" (stale catalog) · effort: high", messages[1])
+}
+
 func TestModelNumberUsesDefaultAndValidatesEffort(t *testing.T) {
 	var messages []string
 	ctrl := &fakeController{focus: 42, listModels: pickerModels}

@@ -16,6 +16,7 @@ func (s *Service) ListModels(context.Context) (*controllerapi.ConfigModelsResult
 			info := controllerapi.ConfigModelInfo{
 				ID: model.ID, Name: model.Name, DisplayName: model.DisplayName,
 				EffortLevels: model.EffortLevels, DefaultEffort: model.DefaultEffort,
+				CatalogStale: model.CatalogStale,
 			}
 			if model.Pricing != nil {
 				info.InputPrice = model.Pricing.InputPrice

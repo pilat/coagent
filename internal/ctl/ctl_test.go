@@ -167,6 +167,25 @@ func TestStatus_BootIDNamesTheRunNotTheBinary(t *testing.T) {
 	assert.Equal(t, st.BinaryVersion, other.BinaryVersion, "same binary — the version cannot tell them apart")
 }
 
+func TestStatus_ReportsStaleModels(t *testing.T) {
+	for _, stale := range []bool{true, false} {
+		t.Run(map[bool]string{true: "stale", false: "fresh"}[stale], func(t *testing.T) {
+			cfg := &config.Config{UnifiedConfig: &config.UnifiedConfig{Models: []config.ModelEntry{
+				{ID: "lost", CatalogStale: stale}, {ID: "fresh"},
+			}}}
+			h := newHarness(t, cfg)
+			var st StatusResult
+			err := h.dial(t).Call(context.Background(), OpStatus, nil, &st)
+			require.NoError(t, err)
+			if stale {
+				assert.Equal(t, []string{"lost"}, st.StaleModels)
+			} else {
+				assert.Nil(t, st.StaleModels)
+			}
+		})
+	}
+}
+
 func TestStatus_WithConfig(t *testing.T) {
 	cfg := &config.Config{UnifiedConfig: &config.UnifiedConfig{
 		Providers: map[string]config.ProviderEntry{

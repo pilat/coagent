@@ -541,8 +541,12 @@ _Avoid_: using "provider" for the driver, or for the vendor behind an OpenAI-com
 The private `llm.driverProtocol` implementation that owns one provider protocol end to end: constructing clients (`NewClient`) and answering where its models' characteristics come from (`ListModels`). Four exist: `anthropic`, `openai`, `openrouter`, `google-sa`. Adding one means implementing both halves — the compiler will not let a new driver skip its catalog.
 
 **catalog** (models):
-The external source of model metadata — display name, context window, max output tokens, pricing, reasoning capability. models.dev for the `anthropic` / `openai` / `google-sa` drivers (section selected by the provider's `catalog` key), OpenRouter's own `/api/v1/models` for `openrouter`. Fetched once at daemon startup, cached under `~/.coagent/cache/catalog`, and the **only** source for those fields — config carries none of them, and a model the catalog does not know is a startup error ([ADR-0003](adr/0003-external-model-catalogs.md)).
+The external source of model metadata — display name, context window, max output tokens, pricing, reasoning capability. models.dev for the `anthropic` / `openai` / `google-sa` drivers (section selected by the provider's `catalog` key), OpenRouter's own `/api/v1/models` for `openrouter`. Fetched once at daemon startup, cached under `~/.coagent/cache/catalog`, and the **only** source for those fields — config carries none of them, and a model it does not know is a startup error ([ADR-0003](adr/0003-external-model-catalogs.md)) unless that model has a **last resolution**.
 _Avoid_: "model config" for this data.
+
+**last resolution**:
+What a model's catalog last answered for it, kept per (model, origin) pair in `~/.coagent/cache/catalog/resolved-models.json`. It is the catalog's own past answer, not an override or a second source, and losing the file reinstates the startup error. A model its catalog no longer lists runs on its last resolution and shows as `(stale catalog)` in `/model` and `coagent status` ([ADR-0086](adr/0086-resolved-model-survives-catalog-drop.md)).
+_Avoid_: "previous catalog", "cached body" (those are the whole catalog snapshots the fetcher keeps).
 
 **model tag**:
 A user-defined lowercase ASCII token on a configured model. Tags are hints with
