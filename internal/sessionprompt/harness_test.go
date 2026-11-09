@@ -3,6 +3,7 @@ package sessionprompt
 import (
 	"context"
 	"encoding/json"
+	"strings"
 
 	"github.com/pilat/coagent/internal/tool"
 )
@@ -16,7 +17,7 @@ var stubDeclarations = map[string]tool.PromptDeclaration{
 	"glob":        {Group: tool.PromptGroupFiles, Order: 5, Description: "find by pattern"},
 	"grep":        {Group: tool.PromptGroupFiles, Order: 6, Description: "search contents"},
 	"ls":          {Group: tool.PromptGroupFiles, Order: 7, Description: "list directory"},
-	"bash":        {Group: tool.PromptGroupShell, Order: 1},
+	"bash":        {Group: tool.PromptGroupShell, Order: 1, Shell: true},
 	"lsp": {
 		Group:       tool.PromptGroupCodeIntelligence,
 		Order:       1,
@@ -24,14 +25,42 @@ var stubDeclarations = map[string]tool.PromptDeclaration{
 	},
 	"todoread":      {Group: tool.PromptGroupTaskTracking, Order: 1},
 	"todowrite":     {Group: tool.PromptGroupTaskTracking, Order: 2},
-	"memory_save":   {Group: tool.PromptGroupMemory, Order: 1},
-	"memory_delete": {Group: tool.PromptGroupMemory, Order: 2},
-	"skill":         {Group: tool.PromptGroupSkills, Order: 1, Description: "load domain knowledge"},
-	"webfetch":      {Group: tool.PromptGroupWeb, Order: 1, Description: "fetch known URL"},
-	"websearch":     {Group: tool.PromptGroupWeb, Order: 2, Description: "web search"},
+	"memory_save":   {Group: tool.PromptGroupMemory, Order: 1, Memory: true},
+	"memory_delete": {Group: tool.PromptGroupMemory, Order: 2, Memory: true},
+	"skill": {
+		Group:       tool.PromptGroupSkills,
+		Order:       1,
+		Description: "load domain knowledge",
+	},
+	"webfetch": {
+		Group:       tool.PromptGroupWeb,
+		Order:       1,
+		Description: "fetch known URL",
+		WebFetch:    true,
+	},
+	"websearch": {
+		Group:       tool.PromptGroupWeb,
+		Order:       2,
+		Description: "web search",
+		Search:      true,
+	},
+	"mcp__tavily__tavily_search":          {Search: true, SearchOrder: 1},
+	"mcp__brave-search__brave_web_search": {Search: true, SearchOrder: 2},
 }
 
 type stubTool struct{ id string }
+
+type untrustedStubTool struct{ stubTool }
+
+func (untrustedStubTool) UntrustedSource() {}
+
+func newStubTool(id string) tool.Tool {
+	if id == "webfetch" || id == "websearch" || strings.HasPrefix(id, "mcp__") {
+		return &untrustedStubTool{stubTool{id: id}}
+	}
+
+	return &stubTool{id: id}
+}
 
 func (t *stubTool) ID() string                                { return t.id }
 func (*stubTool) Description() string                         { return "prompt fixture" }

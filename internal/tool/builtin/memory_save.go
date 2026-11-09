@@ -46,7 +46,7 @@ Use when the user asks you to remember something. Saved memories are loaded into
 }
 
 func (t *memorySaveTool) PromptDeclaration() tool.PromptDeclaration {
-	return tool.PromptDeclaration{Group: tool.PromptGroupMemory, Order: 1}
+	return tool.PromptDeclaration{Group: tool.PromptGroupMemory, Order: 1, Memory: true}
 }
 
 func (t *memorySaveTool) Parameters() json.RawMessage {

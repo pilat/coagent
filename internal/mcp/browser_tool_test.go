@@ -141,6 +141,7 @@ func TestRegisterToolsUsesActivationSinkAndProfileAdmission(t *testing.T) {
 				registry,
 				fixedAttachmentSink{note: note},
 				map[string]Profile{"example": testProfile{}},
+				nil,
 			),
 		)
 		assert.Nil(t, registry.Get("mcp__example__rejected"))

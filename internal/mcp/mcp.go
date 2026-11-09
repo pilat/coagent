@@ -27,7 +27,7 @@ type ServerStats struct {
 type Service interface {
 	Start(ctx context.Context, config *Config) (*ServerStats, error)
 	Stop()
-	RegisterTools(registry *tool.Registry, sink AttachmentSink, profiles map[string]Profile) int
+	RegisterTools(registry *tool.Registry, sink AttachmentSink, profiles map[string]Profile, search SearchOrder) int
 	GetClient(name string) *Client
 	Stats() ServerStats
 	// Refresh checks live connections and refreshes their catalog before reuse.
@@ -138,7 +138,12 @@ func (s *svc) Stop() {
 	}
 }
 
-func (s *svc) RegisterTools(registry *tool.Registry, sink AttachmentSink, profiles map[string]Profile) int {
+func (s *svc) RegisterTools(
+	registry *tool.Registry,
+	sink AttachmentSink,
+	profiles map[string]Profile,
+	search SearchOrder,
+) int {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -152,7 +157,12 @@ func (s *svc) RegisterTools(registry *tool.Registry, sink AttachmentSink, profil
 				continue
 			}
 
-			registry.Register(newLiveMCPTool(serverName, toolName, client, sink, profile))
+			discovered := newLiveMCPTool(serverName, toolName, client, sink, profile)
+			if search != nil {
+				discovered.searchOrder, discovered.search = search(discovered.ID())
+			}
+
+			registry.Register(discovered)
 
 			count++
 		}

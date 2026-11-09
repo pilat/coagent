@@ -15,10 +15,7 @@ import (
 	"github.com/pilat/coagent/internal/tool"
 )
 
-const (
-	batchToolName     = "batch"
-	websearchToolName = "websearch"
-)
+const batchToolName = "batch"
 
 // toolGroups fixes the inventory's lines. Core-forever tools follow a group's declared tools.
 var toolGroups = []struct {
@@ -48,23 +45,16 @@ var coreToolDescriptions = map[string]string{
 	tool.IDCancelProcess:  "stop an owned background process",
 }
 
-// Known search-server keys let tool discovery enable search guidance.
-var knownSearchMCPs = []string{
-	"tavily",
-	"brave-search",
-	"exa",
-	"kagi",
-	"searxng",
-	"duckduckgo",
-	"perplexity",
-	"firecrawl",
-}
-
 // promptTools is the registry as the prompt's sections consult it.
 type promptTools struct {
 	ids        []string
 	registered map[string]bool
 	groups     map[tool.PromptGroup][]string
+	memory     bool
+	shell      bool
+	webFetch   bool
+	external   bool
+	search     []string
 }
 
 // Builder synchronizes prompt reads with model and tool-inventory updates.
@@ -318,11 +308,11 @@ func buildToolsSection(reg *tool.Registry, nativeSearch bool) string {
 		}
 	}
 
-	appendMemorySection(&sb, tools.registered)
+	appendMemorySection(&sb, tools)
 	appendParallelSection(&sb, tools.registered)
 	appendScheduleSection(&sb, tools.registered)
-	appendWebSearchSection(&sb, tools.ids, tools.registered, nativeSearch)
-	appendUntrustedContentSection(&sb, tools.ids, tools.registered, nativeSearch)
+	appendWebSearchSection(&sb, tools, nativeSearch)
+	appendUntrustedContentSection(&sb, tools, nativeSearch)
 
 	return sb.String()
 }
@@ -336,18 +326,32 @@ func scanPromptTools(registered []tool.Tool) promptTools {
 	scan := promptTools{registered: make(map[string]bool, len(registered))}
 
 	var inventory []declared
+	var search []declared
 
 	for _, candidate := range registered {
 		id := candidate.ID()
 		scan.ids = append(scan.ids, id)
 		scan.registered[id] = true
 
+		if _, ok := candidate.(tool.UntrustedSource); ok {
+			scan.external = true
+		}
+
 		declarer, ok := candidate.(tool.PromptDeclarer)
 		if !ok {
 			continue
 		}
 
-		if spec := declarer.PromptDeclaration(); spec.Group != tool.PromptGroupNone {
+		spec := declarer.PromptDeclaration()
+		scan.memory = scan.memory || spec.Memory
+		scan.shell = scan.shell || spec.Shell
+		scan.webFetch = scan.webFetch || spec.WebFetch
+
+		if spec.Search {
+			search = append(search, declared{id, spec})
+		}
+
+		if spec.Group != tool.PromptGroupNone {
 			inventory = append(inventory, declared{id, spec})
 		}
 	}
@@ -357,6 +361,15 @@ func scanPromptTools(registered []tool.Tool) promptTools {
 	scan.groups = make(map[tool.PromptGroup][]string)
 	for _, item := range inventory {
 		scan.groups[item.spec.Group] = append(scan.groups[item.spec.Group], listedTool(item.id, item.spec.Description))
+	}
+
+	slices.SortStableFunc(
+		search,
+		func(a, b declared) int { return cmp.Compare(a.spec.SearchOrder, b.spec.SearchOrder) },
+	)
+
+	for _, item := range search {
+		scan.search = append(scan.search, item.id)
 	}
 
 	return scan
@@ -370,8 +383,8 @@ func listedTool(id, description string) string {
 	return id + " (" + description + ")"
 }
 
-func appendMemorySection(sb *strings.Builder, registered map[string]bool) {
-	if !registered["memory_save"] && !registered["memory_delete"] {
+func appendMemorySection(sb *strings.Builder, tools promptTools) {
+	if !tools.memory {
 		return
 	}
 
@@ -430,28 +443,13 @@ func appendScheduleSection(sb *strings.Builder, registered map[string]bool) {
 	}
 }
 
-func appendWebSearchSection(sb *strings.Builder, ids []string, registered map[string]bool, nativeSearch bool) {
-	var searchTools []string
-
-	if registered[websearchToolName] {
-		searchTools = append(searchTools, websearchToolName)
-	}
-
-	for _, key := range knownSearchMCPs {
-		prefix := "mcp__" + key + "__"
-		for _, id := range ids {
-			if strings.HasPrefix(id, prefix) && strings.Contains(id, "search") {
-				searchTools = append(searchTools, id)
-			}
-		}
-	}
-
+func appendWebSearchSection(sb *strings.Builder, tools promptTools, nativeSearch bool) {
 	switch {
-	case len(searchTools) > 0:
+	case len(tools.search) > 0:
 		sb.WriteString("\n# WEB SEARCH\n\n")
 		sb.WriteString("You have web search capability via: ")
-		sb.WriteString(strings.Join(searchTools, ", ") + "\n\n")
-	case nativeSearch && hasClientSideTool(ids):
+		sb.WriteString(strings.Join(tools.search, ", ") + "\n\n")
+	case nativeSearch && hasClientSideTool(tools.ids):
 		// The driver enables native search only when the request includes client-side tools.
 		sb.WriteString("\n# WEB SEARCH\n\n")
 		sb.WriteString(
@@ -463,7 +461,7 @@ func appendWebSearchSection(sb *strings.Builder, ids []string, registered map[st
 		return
 	}
 
-	appendWebSearchUsage(sb, registered)
+	appendWebSearchUsage(sb, tools.webFetch)
 }
 
 func hasClientSideTool(ids []string) bool {
@@ -471,20 +469,10 @@ func hasClientSideTool(ids []string) bool {
 }
 
 // External-content guidance also applies without search, including Bash and non-search MCP tools.
-func appendUntrustedContentSection(sb *strings.Builder, ids []string, registered map[string]bool, nativeSearch bool) {
-	hasWebTools := registered["webfetch"] || registered[websearchToolName]
-	hasMCP := false
+func appendUntrustedContentSection(sb *strings.Builder, tools promptTools, nativeSearch bool) {
+	usableNativeSearch := nativeSearch && hasClientSideTool(tools.ids)
 
-	for _, id := range ids {
-		if strings.HasPrefix(id, "mcp__") {
-			hasMCP = true
-			break
-		}
-	}
-
-	usableNativeSearch := nativeSearch && hasClientSideTool(ids)
-
-	if !registered["bash"] && !hasWebTools && !hasMCP && !usableNativeSearch {
+	if !tools.shell && !tools.external && !usableNativeSearch {
 		return
 	}
 
@@ -508,12 +496,12 @@ func appendUntrustedContentSection(sb *strings.Builder, ids []string, registered
 	)
 }
 
-func appendWebSearchUsage(sb *strings.Builder, registered map[string]bool) {
+func appendWebSearchUsage(sb *strings.Builder, webFetch bool) {
 	sb.WriteString("Use web search for:\n")
 	sb.WriteString("- Information beyond your knowledge cutoff\n")
 	sb.WriteString("- Current documentation, recent changes, latest versions\n")
 
-	if registered["webfetch"] {
+	if webFetch {
 		sb.WriteString("- Finding URLs before fetching them with webfetch\n\n")
 		sb.WriteString("Do not guess URLs — search first, then use webfetch for the found URL.\n")
 	} else {

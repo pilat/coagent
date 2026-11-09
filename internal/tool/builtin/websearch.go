@@ -73,7 +73,7 @@ func (t *webSearchTool) TrailArgument() tool.TrailArgument {
 }
 
 func (t *webSearchTool) PromptDeclaration() tool.PromptDeclaration {
-	return tool.PromptDeclaration{Group: tool.PromptGroupWeb, Order: 2, Description: "web search"}
+	return tool.PromptDeclaration{Group: tool.PromptGroupWeb, Order: 2, Description: "web search", Search: true}
 }
 
 func (t *webSearchTool) UntrustedSource() {}

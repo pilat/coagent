@@ -85,7 +85,7 @@ func (t *bashTool) TrailArgument() tool.TrailArgument {
 }
 
 func (t *bashTool) PromptDeclaration() tool.PromptDeclaration {
-	return tool.PromptDeclaration{Group: tool.PromptGroupShell, Order: 1}
+	return tool.PromptDeclaration{Group: tool.PromptGroupShell, Order: 1, Shell: true}
 }
 
 func (t *bashTool) Parameters() json.RawMessage {
