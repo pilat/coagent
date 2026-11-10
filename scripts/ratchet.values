@@ -50,8 +50,8 @@ lines internal/bashsandbox 1767
 lines internal/budget 492
 lines internal/catalog 545
 lines internal/coagenthome 142
-lines internal/config 1281
-lines internal/configapply 571
+lines internal/config 1303
+lines internal/configapply 572
 lines internal/configops 530
 lines internal/controllerapi 303
 lines internal/ctl 1023
@@ -71,7 +71,7 @@ lines internal/managerdelivery 451
 lines internal/managerdiscovery 240
 lines internal/managers 195
 lines internal/managers/telegram 2899
-lines internal/mcp 1073
+lines internal/mcp 1095
 lines internal/mcpstore 680
 lines internal/memory 139
 lines internal/migrate 695
@@ -79,7 +79,7 @@ lines internal/procexec 277
 lines internal/progress 284
 lines internal/progressruntime 176
 lines internal/projectpath 180
-lines internal/registry 417
+lines internal/registry 419
 lines internal/safefile 926
 lines internal/sandboxpolicy 785
 lines internal/schedule 1347
@@ -87,13 +87,13 @@ lines internal/session 5200
 lines internal/sessionbuild 776
 lines internal/sessionbus 171
 lines internal/sessionevent 263
-lines internal/sessionprompt 1038
+lines internal/sessionprompt 1080
 lines internal/sessionstore 6467
 lines internal/shellenv 975
 lines internal/subagent 1571
 lines internal/todo 226
-lines internal/tool 761
-lines internal/tool/builtin 7416
+lines internal/tool 764
+lines internal/tool/builtin 7425
 lines internal/transcript 32
 lines internal/version 8
 lines internal/worktree 206

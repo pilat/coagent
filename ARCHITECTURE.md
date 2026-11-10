@@ -392,15 +392,16 @@ Stored message content never changes after insertion. The model-visible
 conversation is a projection of rows plus context metadata, which keeps ordinary
 sessions' unchanged prompt prefix byte-stable between context events. Oversized tool output
 is capped before insertion. In `browser` sessions only, the projection replaces
-an earlier Playwright result's text and image references with a fixed placeholder
-after a successful Playwright call from a later assistant turn; failed calls leave
-the prior frame live. Only the first Playwright call in a browser assistant
+an earlier bound-server result's text and image references with a fixed placeholder
+after a successful call to that server from a later assistant turn; failed calls leave
+the prior frame live. Only the first call in a browser assistant
 message runs; later calls are stored as skipped errors without reaching the
-server. Browser Playwright results alone use a 120,000-character truncation
+server. Results of the configured browser server alone use a 120,000-character truncation
 budget, capped at 30% of the context window's character estimate. Stored rows
 and assistant reasoning remain unchanged
 ([ADR-0067](docs/adr/0067-browser-subagent-supersedes-frames.md), amended by
-[ADR-0069](docs/adr/0069-browser-takes-one-action-per-turn.md)).
+[ADR-0069](docs/adr/0069-browser-takes-one-action-per-turn.md) and
+[ADR-0088](docs/adr/0088-browser-surface-is-the-configured-mcp-server.md)).
 Identifiable external tool output (web, search, MCP) is additionally wrapped in
 host-authored provenance markers with a matching random ID before insertion.
 IDs are assigned after loop fingerprinting and remain unchanged during replay
@@ -972,14 +973,19 @@ The built-in `explore` type deliberately starts without project instructions,
 skills, curated memory, Git state or the model catalog, and receives only
 read-only code-search tools; its parent supplies constraints in the assignment.
 The built-in `browser` type likewise omits project context and is the one frame
-session: it receives only the frame rule's tools — those of an enabled MCP
-server named `playwright`, as the built-in browser surface declares them — and
+session: it receives only the frame rule's tools — those of the enabled MCP
+server named in the daemon-wide `browser.mcp_name` setting — and
 every other agent type, including project subagents, never sees them. Its name
 is reserved from project subagents by the registry. It is offered to `task`
 only when this activation discovered one of those tools. Every browser call
 requires a model-written `task_state`, retained in its stored tool arguments
 and stripped before forwarding to the server. Browser sessions disable
-integrated search before client construction.
+integrated search before client construction. Without the config section the
+rule owns no tools, browser mode is unavailable, and every MCP server is ordinary.
+A present null or empty section, or a blank or untrimmed name, is rejected.
+The neutral browser discipline applies to every bound-server result as a frame;
+the root delegates only when the user's request needs it
+([ADR-0088](docs/adr/0088-browser-surface-is-the-configured-mcp-server.md)).
 Todo tracking is root-session-local durable state. The tool replaces the whole
 list atomically, and progress treats it as planning state rather than a separate
 workflow engine.
@@ -1070,6 +1076,16 @@ only top-level `type`, `properties`, `required`, `additionalProperties` and
 non-null type; empty types default to `object`. Nested schemas remain unchanged.
 A per-server profile from the tool stack may then extend the schema; the browser
 surface adds its required task-state property.
+
+The MCP client retains initialization instructions, capped at 8,000 Unicode
+characters of server text with a truncation marker and one warning per client.
+Tools declare their server's guidance through prompt traits. The prompt emits
+one delimited block per visible server with non-empty instructions, sorted by
+server name. Guidance therefore follows filtered tool visibility, including the
+browser surface's exclusive visibility. It is operator-installed server metadata
+about its tools, distinct from untrusted tool output, and never overrides system,
+user, project or task instructions
+([ADR-0089](docs/adr/0089-mcp-instructions-follow-tool-visibility.md)).
 
 Schedule owns cron validation, schedule-list rendering, durable schedule records and execution of sleep
 and schedule tools, including the sleep guard over pending producer obligations. It enqueues through session-store and uses a narrow sender

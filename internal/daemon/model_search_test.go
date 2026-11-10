@@ -70,6 +70,7 @@ func TestSetModelPreservesAgentSearchPolicy(t *testing.T) {
 			defer closeOnce(release)
 			h := newHarness(t, harnessOptions{})
 			cfg := &config.Config{WorkDir: t.TempDir(), Model: "before", UnifiedConfig: &config.UnifiedConfig{
+				Browser: &config.BrowserConfig{MCPName: "playwright"},
 				Providers: map[string]config.ProviderEntry{
 					"fixture": {Driver: "openrouter", BaseURL: server.URL, APIKey: "test-key"},
 				},

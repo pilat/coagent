@@ -35,16 +35,8 @@ func stripRemovedManagerKeys(data []byte) ([]byte, []string, error) {
 	}
 
 	found := make(map[string]bool)
-
-	if len(document.Content) > 0 {
-		root := document.Content[0]
-		if root.Kind == yaml.MappingNode {
-			for i := 0; i < len(root.Content); i += 2 {
-				if root.Content[i].Value == "managers" {
-					stripManagerSequence(root.Content[i+1], found)
-				}
-			}
-		}
+	if err := scanTopLevel(&document, found); err != nil {
+		return nil, nil, err
 	}
 
 	if len(found) == 0 {
@@ -64,6 +56,26 @@ func stripRemovedManagerKeys(data []byte) ([]byte, []string, error) {
 	}
 
 	return filtered, keys, nil
+}
+
+// scanTopLevel rejects a null browser section, which strict decoding would read as absent.
+func scanTopLevel(document *yaml.Node, found map[string]bool) error {
+	if len(document.Content) == 0 || document.Content[0].Kind != yaml.MappingNode {
+		return nil
+	}
+
+	root := document.Content[0]
+	for i := 0; i+1 < len(root.Content); i += 2 {
+		if root.Content[i].Value == "browser" && root.Content[i+1].Tag == "!!null" {
+			return errors.New("browser must be a mapping with a non-empty mcp_name")
+		}
+
+		if root.Content[i].Value == "managers" {
+			stripManagerSequence(root.Content[i+1], found)
+		}
+	}
+
+	return nil
 }
 
 func stripManagerSequence(node *yaml.Node, found map[string]bool) {

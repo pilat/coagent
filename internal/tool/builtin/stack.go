@@ -51,6 +51,7 @@ type Stack struct {
 	Registry  *tool.Registry
 	lspMgr    lsp.Manager
 	mcpSvc    mcp.Service // nil when no MCP servers configured
+	frames    browserFrameRule
 	resources *resourceLease
 	closeOnce sync.Once
 	closeErr  error
@@ -160,11 +161,17 @@ func BuildStack(ctx context.Context, cfg StackConfig) (*Stack, error) {
 		logger.Ctx(ctx).Warn("mcp_acquire_failed", zap.Error(err))
 	}
 
+	frames := browserFrameRule{}
+	var profiles map[string]mcp.Profile
+	if cfg.Unified != nil && cfg.Unified.Browser != nil {
+		frames.serverName = cfg.Unified.Browser.MCPName
+		profiles = map[string]mcp.Profile{frames.serverName: browserProfile{}}
+	}
 	if mcpSvc != nil {
 		mcpSvc.RegisterTools(
 			registry,
 			mcp.AttachmentSink(&mcpAttachmentSink{projectID: cfg.ProjectID, sessionID: cfg.SessionID, access: access}),
-			map[string]mcp.Profile{browserServerName: browserProfile{}},
+			profiles,
 			mcpSearchOrder,
 		)
 	}
@@ -175,7 +182,7 @@ func BuildStack(ctx context.Context, cfg StackConfig) (*Stack, error) {
 
 	return &Stack{
 		Registry: registry, lspMgr: lspMgr, mcpSvc: mcpSvc, runner: bashRunner, access: access,
-		resources: resources, web: webTransports,
+		resources: resources, web: webTransports, frames: frames,
 		sessionID: cfg.SessionID,
 	}, nil
 }

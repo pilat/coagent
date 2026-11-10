@@ -154,6 +154,10 @@ func readConfigFile(configPath string) ([]byte, error) {
 }
 
 func (c *UnifiedConfig) validate() error {
+	if c.Browser != nil && (c.Browser.MCPName == "" || c.Browser.MCPName != strings.TrimSpace(c.Browser.MCPName)) {
+		return errors.New("browser.mcp_name must be non-empty and have no leading or trailing whitespace")
+	}
+
 	if err := c.validateManagers(); err != nil {
 		return err
 	}

@@ -31,7 +31,7 @@ while IFS= read -r line; do
   [ -n "$id" ] || continue
   case "$line" in
     *'"method":"initialize"'*)
-      printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":"2024-11-05","capabilities":{"tools":{}},"serverInfo":{"name":"fakemcp","version":"0.0.1"}}}\n' "$id"
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":"2024-11-05","capabilities":{"tools":{}},"serverInfo":{"name":"fakemcp","version":"0.0.1"},"instructions":%s}}\n' "$id" "$2"
       ;;
     *'"method":"tools/list"'*)
       printf '{"jsonrpc":"2.0","id":%s,"result":{"tools":%s}}\n' "$id" "$1"
@@ -69,27 +69,27 @@ func TestMain(m *testing.M) {
 }
 
 func TestToolsSectionBytes_AgentTypes(t *testing.T) {
-	reg := realRegistry(t, true, nil)
+	reg, frames := realRegistry(t, true, nil, nil)
 	set := registry.NewSet(nil)
 	for _, agent := range []registry.AgentType{registry.AgentTypeBuild, registry.AgentTypeGeneral, registry.AgentTypeExplore} {
 		cfg, ok := set.Get(agent)
 		require.True(t, ok)
-		filtered := filterRegistryForAgent(set, reg, cfg, (*builtin.Stack)(nil).Frames().Owns)
+		filtered := filterRegistryForAgent(set, reg, cfg, frames.Owns)
 		assertToolsSectionGolden(t, "agent-"+string(agent), renderToolsSection(filtered, false))
 	}
 	assertToolsSectionGolden(t, "all-tools", renderToolsSection(reg, false))
 }
 
 func TestToolsSectionBytes_EachToolAlone(t *testing.T) {
-	reg := realRegistry(t, true, nil)
+	reg, _ := realRegistry(t, true, nil, nil)
 	for _, id := range reg.IDs() {
 		assertToolsSectionGolden(t, "alone-"+id, renderToolsSection(reg.Filter([]string{id}), false))
 	}
 }
 
 func TestToolsSectionBytes_Search(t *testing.T) {
-	withSearch := realRegistry(t, true, nil)
-	noSearch := realRegistry(t, false, nil)
+	withSearch, _ := realRegistry(t, true, nil, nil)
+	noSearch, _ := realRegistry(t, false, nil, nil)
 	assertToolsSectionGolden(t, "no-websearch-native", renderToolsSection(noSearch, true))
 	assertToolsSectionGolden(t, "no-websearch-no-native", renderToolsSection(noSearch, false))
 	assertToolsSectionGolden(t, "websearch-native", renderToolsSection(withSearch, true))
@@ -116,13 +116,13 @@ func TestToolsSectionBytes_MCP(t *testing.T) {
 		"context7":     {"query-docs", "search_docs"},
 		"Tavily":       {"tavily_search"},
 		"playwright":   {"browser_snapshot", "browser_click"},
-	})
-	reg := realRegistry(t, true, servers)
+	}, nil)
+	reg, frames := realRegistry(t, true, servers, &config.BrowserConfig{MCPName: "playwright"})
 	set := registry.NewSet(nil)
 	browser, ok := set.Get(registry.AgentTypeBrowser)
 	require.True(t, ok)
 	assertToolsSectionGolden(t, "agent-browser", renderToolsSection(
-		filterRegistryForAgent(set, reg, browser, (*builtin.Stack)(nil).Frames().Owns), false,
+		filterRegistryForAgent(set, reg, browser, frames.Owns), false,
 	))
 	assertToolsSectionGolden(t, "mcp-search-order", renderToolsSection(reg, false))
 	assertToolsSectionGolden(t, "mcp-unknown-server-search-word-only",
@@ -183,7 +183,11 @@ func coreForeverStubs() []tool.Tool {
 	return stubs
 }
 
-func mcpServerFixture(t *testing.T, servers map[string][]string) map[string]mcp.ServerConfig {
+func mcpServerFixture(
+	t *testing.T,
+	servers map[string][]string,
+	guidance map[string]string,
+) map[string]mcp.ServerConfig {
 	t.Helper()
 	script := filepath.Join(t.TempDir(), "fakemcp.sh")
 	require.NoError(t, os.WriteFile(script, []byte(fakeToolListMCPScript), 0o700))
@@ -198,15 +202,22 @@ func mcpServerFixture(t *testing.T, servers map[string][]string) map[string]mcp.
 		}
 		raw, err := json.Marshal(list)
 		require.NoError(t, err)
-		out[name] = mcp.ServerConfig{Command: script, Args: []string{string(raw)}}
+		instructions, err := json.Marshal(guidance[name])
+		require.NoError(t, err)
+		out[name] = mcp.ServerConfig{Command: script, Args: []string{string(raw), string(instructions)}}
 	}
 	return out
 }
 
-func realRegistry(t *testing.T, search bool, servers map[string]mcp.ServerConfig) *tool.Registry {
+func realRegistry(
+	t *testing.T,
+	search bool,
+	servers map[string]mcp.ServerConfig,
+	browser *config.BrowserConfig,
+) (*tool.Registry, tool.FrameRule) {
 	t.Helper()
 	t.Setenv("HOME", t.TempDir())
-	unified := &config.UnifiedConfig{}
+	unified := &config.UnifiedConfig{Browser: browser}
 	if search {
 		unified.Tools.Search = config.SearchToolConfig{Provider: config.SearchProviderTavily, APIKey: "tvly-test"}
 	}
@@ -223,7 +234,7 @@ func realRegistry(t *testing.T, search bool, servers map[string]mcp.ServerConfig
 	for _, stub := range coreForeverStubs() {
 		reg.Register(stub)
 	}
-	return reg
+	return reg, stack.Frames()
 }
 
 func renderToolsSection(reg *tool.Registry, native bool) string {

@@ -58,7 +58,7 @@ func TestScenario_BrowserFramesStayStoredAndProjectToLatest(t *testing.T) {
 				{"frame-3", `{"task_state":"second frame showed two items; finish"}`},
 			} {
 				if toolResultForCallID(msgs, step.id) == nil {
-					return mcpToolCall(step.id, "mcp__playwright__"+"view", step.args)
+					return mcpToolCall(step.id, "mcp__remote__"+"view", step.args)
 				}
 			}
 			return textReply("browser complete")
@@ -82,6 +82,7 @@ func TestScenario_BrowserFramesStayStoredAndProjectToLatest(t *testing.T) {
 	options := harnessOptions{dbPath: dbPath, respond: respond, configure: func(cfg *config.Config) {
 		cfg.WorkDir = workDir
 		cfg.UnifiedConfig = &config.UnifiedConfig{
+			Browser: &config.BrowserConfig{MCPName: "remote"},
 			Models: []config.ModelEntry{
 				{ID: "fake-model", ContextWindow: 200000, InputModalities: []string{"text", "image"}},
 			},
@@ -93,7 +94,7 @@ func TestScenario_BrowserFramesStayStoredAndProjectToLatest(t *testing.T) {
 	}}
 	h := newHarness(t, options)
 	require.NoError(t, h.mgr.mcpStore.Add(h.ctx, &h.projectID, mcpstore.ServerDef{
-		Name: "playwright", Command: server, Args: []string{log}, Enabled: true,
+		Name: "remote", Command: server, Args: []string{log}, Enabled: true,
 	}))
 	h.startInboxWake()
 	rootID, err := h.mgr.Send(h.ctx, h.projectID, "inspect site", "fake-model", nil)
@@ -107,12 +108,12 @@ func TestScenario_BrowserFramesStayStoredAndProjectToLatest(t *testing.T) {
 	h.waitUntil("root completed", func() bool { return lastAssistantTextDTO(h.messages(rootID)) == "root complete" })
 	require.NotNil(t, h.linkByCall(rootID, "general-task"))
 	generalID := h.linkByCall(rootID, "general-task").ChildID
-	assert.Zero(t, countAssistantToolCallsFor(h.messages(rootID), "mcp__playwright__"+"view"))
+	assert.Zero(t, countAssistantToolCallsFor(h.messages(rootID), "mcp__remote__"+"view"))
 	stored, err := h.store.LoadActiveMessages(h.ctx, childID)
 	require.NoError(t, err)
 	frames := 0
 	for _, row := range stored {
-		if row.ToolName != "mcp__playwright__"+"view" {
+		if row.ToolName != "mcp__remote__"+"view" {
 			continue
 		}
 		if row.ToolCallID == "missing" || row.ToolCallID == "server-error" {
@@ -156,9 +157,9 @@ func TestScenario_BrowserFramesStayStoredAndProjectToLatest(t *testing.T) {
 	require.NotEmpty(t, rootWire)
 	require.GreaterOrEqual(t, len(childWire), 6)
 	require.NotEmpty(t, generalWire)
-	assert.NotContains(t, wireToolNames(rootWire[0]), "mcp__playwright__"+"view")
-	assert.Equal(t, []string{"mcp__playwright__" + "view"}, wireToolNames(childWire[0]))
-	assert.NotContains(t, wireToolNames(generalWire[0]), "mcp__playwright__"+"view")
+	assert.NotContains(t, wireToolNames(rootWire[0]), "mcp__remote__"+"view")
+	assert.Equal(t, []string{"mcp__remote__" + "view"}, wireToolNames(childWire[0]))
+	assert.NotContains(t, wireToolNames(generalWire[0]), "mcp__remote__"+"view")
 	for _, schema := range rootWire[0].Tools {
 		if schema.Function.Name == tool.IDTask {
 			assert.Contains(t, string(schema.Function.Parameters), `"browser"`)
@@ -203,7 +204,7 @@ func TestScenario_BrowserFramesStayStoredAndProjectToLatest(t *testing.T) {
 	assert.Equal(t, 4, wirePlaceholderCount(restarted))
 }
 
-func TestScenario_BrowserFramesProjectAfterPlaywrightIsDisabled(t *testing.T) {
+func TestScenario_BrowserFramesProjectAfterBoundServerIsDisabled(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("POSIX fake MCP server")
 	}
@@ -234,7 +235,7 @@ func TestScenario_BrowserFramesProjectAfterPlaywrightIsDisabled(t *testing.T) {
 				{"frame-3", `{"task_state":"second frame showed two items; finish"}`},
 			} {
 				if toolResultForCallID(msgs, step.id) == nil {
-					return mcpToolCall(step.id, "mcp__playwright__"+"view", step.args)
+					return mcpToolCall(step.id, "mcp__remote__"+"view", step.args)
 				}
 			}
 			return textReply("browser complete")
@@ -258,6 +259,7 @@ func TestScenario_BrowserFramesProjectAfterPlaywrightIsDisabled(t *testing.T) {
 	options := harnessOptions{dbPath: dbPath, respond: respond, configure: func(cfg *config.Config) {
 		cfg.WorkDir = workDir
 		cfg.UnifiedConfig = &config.UnifiedConfig{
+			Browser: &config.BrowserConfig{MCPName: "remote"},
 			Models: []config.ModelEntry{
 				{ID: "fake-model", ContextWindow: 200000, InputModalities: []string{"text", "image"}},
 			},
@@ -269,7 +271,7 @@ func TestScenario_BrowserFramesProjectAfterPlaywrightIsDisabled(t *testing.T) {
 	}}
 	h := newHarness(t, options)
 	require.NoError(t, h.mgr.mcpStore.Add(h.ctx, &h.projectID, mcpstore.ServerDef{
-		Name: "playwright", Command: server, Args: []string{log}, Enabled: true,
+		Name: "remote", Command: server, Args: []string{log}, Enabled: true,
 	}))
 	h.startInboxWake()
 	rootID, err := h.mgr.Send(h.ctx, h.projectID, "inspect site", "fake-model", nil)
@@ -288,7 +290,7 @@ func TestScenario_BrowserFramesProjectAfterPlaywrightIsDisabled(t *testing.T) {
 	h.shutdown()
 	require.NoError(t, h.db.Close())
 	second := newHarness(t, options)
-	require.NoError(t, second.mgr.mcpStore.SetEnabled(second.ctx, &second.projectID, "playwright", false))
+	require.NoError(t, second.mgr.mcpStore.SetEnabled(second.ctx, &second.projectID, "remote", false))
 	second.startInboxWake()
 	require.NoError(t, second.mgr.SendToChild(second.ctx, childID, "BROWSER_CHILD follow-up after restart"))
 	second.waitUntil("browser follow-up after restart", func() bool {
@@ -313,7 +315,7 @@ func TestScenario_BrowserFramesProjectAfterPlaywrightIsDisabled(t *testing.T) {
 	assert.Equal(t, 1, wireImageCount(restarted))
 	assert.Equal(t, 4, wirePlaceholderCount(restarted))
 	for _, name := range wireToolNames(restarted) {
-		assert.NotContains(t, name, "mcp__playwright__")
+		assert.NotContains(t, name, "mcp__remote__")
 	}
 }
 
@@ -338,12 +340,12 @@ func TestScenario_BrowserRunsOnlyFirstActionInMessage(t *testing.T) {
 			return &llmwire.Response{ToolCalls: []llmwire.ToolCall{
 				{
 					ID:        "first-navigation",
-					Name:      "mcp__playwright__" + "view",
+					Name:      "mcp__remote__" + "view",
 					Arguments: []byte(`{"task_state":"open the first page"}`),
 				},
 				{
 					ID:        "second-navigation",
-					Name:      "mcp__playwright__" + "view",
+					Name:      "mcp__remote__" + "view",
 					Arguments: []byte(`{"task_state":"open another page"}`),
 				},
 			}}
@@ -356,9 +358,10 @@ func TestScenario_BrowserRunsOnlyFirstActionInMessage(t *testing.T) {
 	}
 	h := newHarness(t, harnessOptions{respond: respond, configure: func(cfg *config.Config) {
 		cfg.WorkDir = t.TempDir()
+		cfg.UnifiedConfig = &config.UnifiedConfig{Browser: &config.BrowserConfig{MCPName: "remote"}}
 	}})
 	require.NoError(t, h.mgr.mcpStore.Add(h.ctx, &h.projectID, mcpstore.ServerDef{
-		Name: "playwright", Command: server, Args: []string{log}, Enabled: true,
+		Name: "remote", Command: server, Args: []string{log}, Enabled: true,
 	}))
 	h.startInboxWake()
 	rootID, err := h.mgr.Send(h.ctx, h.projectID, "inspect site", "fake-model", nil)
@@ -377,13 +380,16 @@ func TestScenario_BrowserRunsOnlyFirstActionInMessage(t *testing.T) {
 	require.NotNil(t, second)
 	assert.False(t, first.ToolError)
 	assert.True(t, second.ToolError)
-	assert.Contains(t, second.Content, "Only one browser action")
+	assert.Contains(t, second.Content, "Only one action")
 }
 
-func TestScenario_BrowserUnavailableWithoutPlaywright(t *testing.T) {
+func TestScenario_BrowserUnavailableWithoutBoundServer(t *testing.T) {
 	var mu sync.Mutex
 	var requests []providerRequest
 	h := newHarness(t, harnessOptions{
+		configure: func(cfg *config.Config) {
+			cfg.UnifiedConfig = &config.UnifiedConfig{Browser: &config.BrowserConfig{MCPName: "remote"}}
+		},
 		respond:        func(_ string, _ []llmwire.Message) *llmwire.Response { return textReply("done") },
 		observeRequest: func(request providerRequest) { mu.Lock(); requests = append(requests, request); mu.Unlock() },
 	})
@@ -399,6 +405,63 @@ func TestScenario_BrowserUnavailableWithoutPlaywright(t *testing.T) {
 	for _, schema := range request.Tools {
 		if schema.Function.Name == tool.IDTask {
 			assert.NotContains(t, string(schema.Function.Parameters), `"browser"`)
+		}
+	}
+}
+
+func TestScenario_PlaywrightWithoutBrowserBindingIsOrdinary(t *testing.T) {
+	dir := t.TempDir()
+	server, log := filepath.Join(dir, "browser.sh"), filepath.Join(dir, "calls.log")
+	encoded := base64.StdEncoding.EncodeToString(browserScenarioPNG(t))
+	require.NoError(
+		t,
+		os.WriteFile(server, []byte(strings.ReplaceAll(browserScenarioScript, "IMAGE_DATA", encoded)), 0o700),
+	)
+	require.NoError(t, os.WriteFile(log, nil, 0o600))
+	var mu sync.Mutex
+	var requests []providerRequest
+	h := newHarness(t, harnessOptions{
+		respond: func(_ string, msgs []llmwire.Message) *llmwire.Response {
+			if toolResultForCallID(msgs, "one") != nil {
+				return textReply("ordinary calls complete")
+			}
+			return &llmwire.Response{ToolCalls: []llmwire.ToolCall{
+				{ID: "one", Name: "mcp__playwright__view", Arguments: []byte(`{}`)},
+				{ID: "two", Name: "mcp__playwright__view", Arguments: []byte(`{}`)},
+			}}
+		},
+		observeRequest: func(request providerRequest) { mu.Lock(); requests = append(requests, request); mu.Unlock() },
+	})
+	require.Nil(t, h.mgr.build.Config.UnifiedConfig.Browser)
+	require.NoError(t, h.mgr.mcpStore.Add(h.ctx, &h.projectID, mcpstore.ServerDef{
+		Name: "playwright", Command: server, Args: []string{log}, Enabled: true,
+	}))
+	h.startInboxWake()
+	id, err := h.mgr.Send(h.ctx, h.projectID, "inspect site", "fake-model", nil)
+	require.NoError(t, err)
+	h.waitUntil(
+		"ordinary calls complete",
+		func() bool { return lastAssistantTextDTO(h.messages(id)) == "ordinary calls complete" },
+	)
+	for _, callID := range []string{"one", "two"} {
+		result := toolResultForCallID(h.messages(id), callID)
+		require.NotNil(t, result)
+		assert.False(t, result.ToolError)
+	}
+	data, err := os.ReadFile(log)
+	require.NoError(t, err)
+	assert.Equal(t, 2, strings.Count(string(data), "call\n"))
+	mu.Lock()
+	captured := append([]providerRequest(nil), requests...)
+	mu.Unlock()
+	require.NotEmpty(t, captured)
+	assert.Contains(t, wireToolNames(captured[0]), "mcp__playwright__view")
+	for _, schema := range captured[0].Tools {
+		if schema.Function.Name == tool.IDTask {
+			assert.NotContains(t, string(schema.Function.Parameters), `"browser"`)
+		}
+		if schema.Function.Name == "mcp__playwright__view" {
+			assert.NotContains(t, string(schema.Function.Parameters), "task_state")
 		}
 	}
 }

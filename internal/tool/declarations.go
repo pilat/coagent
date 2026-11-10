@@ -42,6 +42,9 @@ type PromptDeclaration struct {
 	// Search lists the tool in the web search section, by ascending SearchOrder.
 	Search      bool
 	SearchOrder int
+	// InstructionsSource identifies shared server guidance carried by its visible tools.
+	InstructionsSource string
+	Instructions       string
 }
 
 // PromptDeclarer is a tool the system prompt describes.

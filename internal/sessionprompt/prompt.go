@@ -55,6 +55,7 @@ type promptTools struct {
 	webFetch   bool
 	external   bool
 	search     []string
+	guidance   map[string]string
 }
 
 // Builder synchronizes prompt reads with model and tool-inventory updates.
@@ -312,6 +313,7 @@ func buildToolsSection(reg *tool.Registry, nativeSearch bool) string {
 	appendParallelSection(&sb, tools.registered)
 	appendScheduleSection(&sb, tools.registered)
 	appendWebSearchSection(&sb, tools, nativeSearch)
+	appendMCPServerGuidance(&sb, tools.guidance)
 	appendUntrustedContentSection(&sb, tools, nativeSearch)
 
 	return sb.String()
@@ -323,7 +325,7 @@ func scanPromptTools(registered []tool.Tool) promptTools {
 		spec tool.PromptDeclaration
 	}
 
-	scan := promptTools{registered: make(map[string]bool, len(registered))}
+	scan := promptTools{registered: make(map[string]bool, len(registered)), guidance: make(map[string]string)}
 
 	var inventory []declared
 	var search []declared
@@ -343,6 +345,10 @@ func scanPromptTools(registered []tool.Tool) promptTools {
 		}
 
 		spec := declarer.PromptDeclaration()
+		if spec.InstructionsSource != "" && spec.Instructions != "" {
+			scan.guidance[spec.InstructionsSource] = spec.Instructions
+		}
+
 		scan.memory = scan.memory || spec.Memory
 		scan.shell = scan.shell || spec.Shell
 		scan.webFetch = scan.webFetch || spec.WebFetch

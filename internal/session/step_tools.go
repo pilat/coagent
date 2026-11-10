@@ -19,7 +19,7 @@ import (
 	"github.com/pilat/coagent/internal/transcript"
 )
 
-const browserExtraActionNotice = "Only one browser action runs per turn; this call was not executed. Look at the result of the first call, then act again. Use browser_fill_form to fill several fields at once."
+const browserExtraActionNotice = "Only one action runs per turn; this call was not executed. Look at the result of the first call, then act again."
 
 // toolCallResultItem holds the decided outcome of one scheduled tool call.
 // Only items whose outcome is executed or failed carry persisted content;
@@ -548,7 +548,7 @@ func formatToolResult(result *tool.Result, contextWindow, frameLimit int) string
 
 	if frameLimit > 0 {
 		budget = tool.ToolResultBudgetForWindow(contextWindow, frameLimit)
-		hint = " Read an omitted part with browser_snapshot target (a CSS selector or a visible container ref) and/or depth."
+		hint = " Request a narrower view of the omitted part if your tools allow it."
 	}
 
 	if result.Untrusted {
