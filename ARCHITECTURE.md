@@ -1024,9 +1024,16 @@ than sleeping.
 
 LLM drivers own provider-specific request/response encoding, client creation,
 retry rules and model listing. The wire package carries neutral message and tool
-types so session/tool code does not depend on provider SDKs. Reasoning payloads
+types so session/tool code does not depend on provider SDKs. The `openai` driver
+speaks two wires: a provider whose `base_url` host is `api.openai.com` gets a
+stateless Responses API client (`store: false`, full history resent), every other
+endpoint keeps Chat Completions unchanged; one host predicate decides both the
+client and whether the picker offers effort levels
+([ADR-0090](docs/adr/0090-direct-openai-speaks-responses.md)). Reasoning payloads
 are stored verbatim with their originating model and are replayed only to that
-same model; a model change drops them rather than sending incompatible data.
+same model; a model change drops them rather than sending incompatible data. The
+Responses client also drops an envelope that no longer fits its message's text and
+tool calls, and never replays a reasoning item without the item that followed it.
 Every agent type's system prompt states the configured model identity and
 effective effort using the driver's catalog clamp, hiding effort for models
 without choices. Runtime configuration and prompts share the catalog's
@@ -1045,7 +1052,7 @@ passthrough, an explicit disable removes all integrated search, and an
 unconfigured section falls back to the OpenRouter driver's server-side
 web-search injection
 ([ADR-0043](docs/adr/0043-integrated-search-quality-first.md)). Tool-less
-requests — the compaction summarizer — carry no injection; `browser`
+requests carry no injection; `browser`
 sessions disable integrated search for initial and replacement clients. Search precedence
 lives in config, so drivers and sessions read one resolver.
 

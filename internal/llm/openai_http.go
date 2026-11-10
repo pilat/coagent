@@ -273,7 +273,7 @@ func (c *openaiClient) convertMessages(messages []llmwire.Message) []map[string]
 						"id":       tc.ID,
 						msgKeyType: oaiTypeFunction,
 						oaiTypeFunction: map[string]any{
-							"name":      tc.Name,
+							msgKeyName:  tc.Name,
 							"arguments": string(tc.Arguments),
 						},
 					})
@@ -288,7 +288,7 @@ func (c *openaiClient) convertMessages(messages []llmwire.Message) []map[string]
 				msgKeyRole:     roleTool,
 				msgKeyContent:  c.contentParts(msg),
 				"tool_call_id": msg.ToolCallID,
-				"name":         msg.ToolName,
+				msgKeyName:     msg.ToolName,
 			})
 		}
 	}
@@ -331,8 +331,8 @@ func (c *openaiClient) imagePart(ref llmwire.ImageRef) []map[string]any {
 	}
 
 	return []map[string]any{{
-		msgKeyType: "image_url",
-		"image_url": map[string]any{
+		msgKeyType: msgKeyImageURL,
+		msgKeyImageURL: map[string]any{
 			"url": "data:" + ref.Mime + ";base64," + base64.StdEncoding.EncodeToString(data),
 		},
 	}}

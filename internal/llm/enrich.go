@@ -140,7 +140,7 @@ func resolveModel(
 	spec, found := catalog.Lookup(models, m.ID)
 	if found {
 		warnAmbiguousSection(providerKey, m.ID, spec)
-		applySpec(m, providerKey, entry.Driver, spec)
+		applySpec(m, providerKey, entry, spec)
 		memory.Remember(m.ID, entry, spec)
 
 		return ""
@@ -156,7 +156,7 @@ func resolveModel(
 		zap.String("provider", providerKey),
 		zap.Duration("age", time.Since(last.ResolvedAt)))
 
-	applySpec(m, providerKey, entry.Driver, last.Spec)
+	applySpec(m, providerKey, entry, last.Spec)
 	m.CatalogStale = true
 
 	return ""
@@ -177,7 +177,7 @@ func warnAmbiguousSection(providerKey, id string, spec catalog.ModelSpec) {
 		zap.String("hint", "set catalog: <section> on the provider to pin the metadata"))
 }
 
-func applySpec(m *config.ModelEntry, providerKey, driverName string, spec catalog.ModelSpec) {
+func applySpec(m *config.ModelEntry, providerKey string, entry config.ProviderEntry, spec catalog.ModelSpec) {
 	m.Name = spec.Name
 	m.DisplayName = providerKey + "/" + spec.Name
 
@@ -191,19 +191,19 @@ func applySpec(m *config.ModelEntry, providerKey, driverName string, spec catalo
 	m.Pricing = spec.Pricing
 	m.Reasoning = spec.Reasoning
 	m.InputModalities = spec.InputModalities
-	m.EffortLevels = effortLevels(driverName, spec.Reasoning)
+	m.EffortLevels = effortLevels(entry, spec.Reasoning)
 	m.DefaultEffort = defaultEffort(spec.Reasoning, m.EffortLevels)
 }
 
 // effortLevels narrows a catalog's reasoning spec to the levels the picker may
 // offer. A driver that never puts the level on the wire offers none, and neither
 // does a model whose catalog declares no effort selector.
-func effortLevels(driverName string, spec *config.ReasoningSpec) []string {
+func effortLevels(entry config.ProviderEntry, spec *config.ReasoningSpec) []string {
 	if spec == nil || !spec.Supported {
 		return nil
 	}
 
-	switch driverName {
+	switch entry.Driver {
 	case driverAnthropic:
 		if spec.NativeEffort && len(spec.Efforts) > 0 {
 			return spec.Efforts
@@ -218,6 +218,11 @@ func effortLevels(driverName string, spec *config.ReasoningSpec) []string {
 		}
 
 		return spec.Efforts
+	case driverOpenAI:
+		// Only the Responses client puts a level on the wire.
+		if isDirectOpenAI(entry.BaseURL) && len(spec.Efforts) > 0 {
+			return spec.Efforts
+		}
 	}
 
 	return nil

@@ -45,6 +45,10 @@ func saFile(t *testing.T) string {
 	return path
 }
 
+// matrixDirectOpenAI is the openai driver pointed at api.openai.com, which
+// constructs the Responses client rather than the Chat Completions one.
+const matrixDirectOpenAI = "openai-direct"
+
 func newMatrixClient(t *testing.T, driver string, model config.ModelEntry) Client {
 	t.Helper()
 
@@ -55,6 +59,11 @@ func newMatrixClient(t *testing.T, driver string, model config.ModelEntry) Clien
 	}
 	if driver == driverGoogleSA {
 		entry.SAFile = saFile(t)
+	}
+
+	if driver == matrixDirectOpenAI {
+		driver = driverOpenAI
+		entry.Driver, entry.BaseURL = driverOpenAI, "https://api.openai.com/v1"
 	}
 
 	client, err := newDrivers(nil)[driver].NewClient(entry, model, DriverClientOpts{})
@@ -98,6 +107,11 @@ func serializeChatBody(t *testing.T, client Client, msgs []llmwire.Message) stri
 		require.NoError(t, err)
 
 		return string(data)
+	case *openAIResponsesClient:
+		data, err := json.Marshal(typed.buildRequest("", msgs, nil, nil))
+		require.NoError(t, err)
+
+		return string(data)
 	default:
 		t.Fatalf("unexpected client type %T", client)
 	}
@@ -126,6 +140,7 @@ func TestDriverMatrix_ImageInToolRoleContent(t *testing.T) {
 		{"openai", driverOpenAI},
 		{"google-sa", driverGoogleSA},
 		{"openrouter", driverOpenRouter},
+		{"openai-direct", matrixDirectOpenAI},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			raw := serializeChatBody(t, newMatrixClient(t, tt.driver, vision), imageConversation(pngPath))
@@ -157,7 +172,7 @@ func TestDriverMatrix_RootedAuthorityNeverReachesProviderWire(t *testing.T) {
 		InputModalities: []string{"text", "image"},
 	}
 
-	for _, driver := range []string{driverAnthropic, driverOpenAI, driverGoogleSA, driverOpenRouter} {
+	for _, driver := range []string{driverAnthropic, driverOpenAI, driverGoogleSA, driverOpenRouter, matrixDirectOpenAI} {
 		raw := serializeChatBody(t, newMatrixClient(t, driver, vision), messages)
 		assert.NotContains(t, raw, "read_root")
 		assert.NotContains(t, raw, path.ReadRootID)
@@ -181,6 +196,7 @@ func TestDriverMatrix_TextOnlyModelNeverGetsPixels(t *testing.T) {
 		{"openai", driverOpenAI},
 		{"google-sa", driverGoogleSA},
 		{"openrouter", driverOpenRouter},
+		{"openai-direct", matrixDirectOpenAI},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			raw := serializeChatBody(t, newMatrixClient(t, tt.driver, textOnly), imageConversation(pngPath))
@@ -222,10 +238,11 @@ func toolRunConversation() []llmwire.Message {
 func TestDriverMatrix_MultiCallToolRunProjection(t *testing.T) {
 	// Every registered driver family the matrix covers.
 	drivers := map[string]string{
-		"anthropic":  driverAnthropic,
-		"openai":     driverOpenAI,
-		"google-sa":  driverGoogleSA,
-		"openrouter": driverOpenRouter,
+		"anthropic":     driverAnthropic,
+		"openai":        driverOpenAI,
+		"google-sa":     driverGoogleSA,
+		"openrouter":    driverOpenRouter,
+		"openai-direct": matrixDirectOpenAI,
 	}
 
 	model := config.ModelEntry{ID: "matrix-model", MaxTokens: 1024, ContextWindow: 100000}
@@ -265,6 +282,26 @@ func TestDriverMatrix_MultiCallToolRunProjection(t *testing.T) {
 					"%s keeps per-call tool messages in wire order", driver)
 
 				raw, err := json.Marshal(req)
+				require.NoError(t, err)
+				assert.NotContains(t, string(raw), "is_error", "%s sends no error field", driver)
+			case *openAIResponsesClient:
+				var kinds []string
+				for _, item := range typed.convertInput(toolRunConversation()) {
+					fields, _ := item.(map[string]any)
+					kind, _ := fields["type"].(string)
+					if kind == "" {
+						kind, _ = fields["role"].(string)
+					}
+
+					kinds = append(kinds, kind)
+				}
+
+				assert.Equal(t, []string{
+					"user", "function_call", "function_call", "function_call",
+					"function_call_output", "function_call_output", "function_call_output",
+				}, kinds, "%s keeps per-call output items in wire order", driver)
+
+				raw, err := json.Marshal(typed.buildRequest("", toolRunConversation(), nil, nil))
 				require.NoError(t, err)
 				assert.NotContains(t, string(raw), "is_error", "%s sends no error field", driver)
 			default:
