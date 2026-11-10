@@ -89,7 +89,7 @@ func (t *taskTool) Description() string {
 	followupTypes := "general or custom"
 
 	if t.browserAvailable {
-		browserGuidance = "\nFor browser, provide a self-contained assignment with the goal, constraints, starting URL or site if known, and what to return. Run at most one browser subagent at a time because the browser profile cannot serve concurrent clients. For related browser follow-ups, launch a new browser task and include the previous result's findings (names, addresses, URLs, verdicts) along with the goal and constraints. Use send_to_subagent with the same browser child only to continue an unfinished multi-step flow that needs its action history.\n"
+		browserGuidance = "\nFor browser, provide a self-contained assignment with the goal, constraints, starting URL or site if known, and what to return. Start a browser subagent only when the user's request needs it, never on your own initiative. Run at most one browser subagent at a time because the browser profile cannot serve concurrent clients. For related browser follow-ups, launch a new browser task and include the previous result's findings (names, addresses, URLs, verdicts) along with the goal and constraints. Use send_to_subagent with the same browser child only to continue an unfinished multi-step flow that needs its action history.\n"
 		contextOmission = "built-in explore and browser skip them"
 		followupTypes = "general or custom"
 	}

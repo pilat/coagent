@@ -45,13 +45,14 @@ type SearchOrder func(toolID string) (int, bool)
 
 // mcpTool keeps the metadata discovered for one stack and calls its live client.
 type mcpTool struct {
-	serverName  string
-	meta        ToolMeta
-	clientFor   func(ctx context.Context) (*Client, error)
-	sink        AttachmentSink
-	profile     Profile
-	search      bool
-	searchOrder int
+	serverName   string
+	instructions string
+	meta         ToolMeta
+	clientFor    func(ctx context.Context) (*Client, error)
+	sink         AttachmentSink
+	profile      Profile
+	search       bool
+	searchOrder  int
 }
 
 // newMCPTool builds a direct MCP tool from discovered metadata.
@@ -74,9 +75,12 @@ func newMCPTool(
 // newLiveMCPTool pins a live client: metadata is projected from the client's
 // discovered tools and every execution runs on that client.
 func newLiveMCPTool(serverName, toolName string, client *Client, sink AttachmentSink, profile Profile) *mcpTool {
-	return newMCPTool(serverName, toolMetaOf(client, toolName), func(context.Context) (*Client, error) {
+	t := newMCPTool(serverName, toolMetaOf(client, toolName), func(context.Context) (*Client, error) {
 		return client, nil
 	}, sink, profile)
+	t.instructions = client.Instructions()
+
+	return t
 }
 
 func toolMetaOf(client *Client, toolName string) ToolMeta {
@@ -111,7 +115,10 @@ func (t *mcpTool) Description() string {
 }
 
 func (t *mcpTool) PromptDeclaration() tool.PromptDeclaration {
-	return tool.PromptDeclaration{Search: t.search, SearchOrder: t.searchOrder}
+	return tool.PromptDeclaration{
+		Search: t.search, SearchOrder: t.searchOrder,
+		InstructionsSource: t.serverName, Instructions: t.instructions,
+	}
 }
 
 func (t *mcpTool) Parameters() json.RawMessage {

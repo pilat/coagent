@@ -328,6 +328,23 @@ MCP search servers (e.g. Tavily MCP) keep working unchanged. At most one
 *integrated* mechanism is active per session — the builtin REST tool or the
 native injection — while configured MCP search tools coexist alongside it.
 
+### Browser
+
+Bind an existing MCP server to the built-in `browser` subagent in
+`~/.coagent/config.yaml`:
+
+```yaml
+browser:
+  mcp_name: playwright
+```
+
+The binding applies across projects where that server is enabled. Its tools are
+available only to `browser`, which records task facts, keeps the latest frame,
+and takes one action per turn. Without the section, browser mode is disabled
+and all MCP servers remain ordinary tools. A present section requires a non-empty
+name without surrounding whitespace. MCP server instructions reach only sessions
+that can see that server's tools.
+
 ## Know before you run
 
 - Linux requires Bubblewrap. Enabling the sandbox without it fails loudly.

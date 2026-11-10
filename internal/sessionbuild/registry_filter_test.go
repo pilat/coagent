@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/pilat/coagent/internal/config"
 	"github.com/pilat/coagent/internal/registry"
 	"github.com/pilat/coagent/internal/tool"
 	"github.com/pilat/coagent/internal/tool/builtin"
@@ -94,6 +95,44 @@ func testRegistry() *tool.Registry {
 	reg.Register(testTool{id: "todowrite"})
 
 	return reg
+}
+
+func TestFilterRegistryForAgent_BrowserBinding(t *testing.T) {
+	for _, binding := range []*config.BrowserConfig{nil, {MCPName: "remote"}} {
+		name := "unconfigured"
+		if binding != nil {
+			name = binding.MCPName
+		}
+		t.Run(name, func(t *testing.T) {
+			reg, frames := realRegistry(t, false, mcpServerFixture(t, map[string][]string{
+				"remote": {"view"}, "playwright": {"view"},
+			}, nil), binding)
+			set := registry.NewSet(nil)
+			assert.Equal(t, binding != nil, frames.Owns("mcp__remote__view"))
+			assert.False(t, frames.Owns("mcp__playwright__view"))
+			for _, agent := range []registry.AgentType{registry.AgentTypeBuild, registry.AgentTypeGeneral, registry.AgentTypeBrowser} {
+				cfg, ok := set.Get(agent)
+				require.True(t, ok)
+				filtered := filterRegistryForAgent(set, reg, cfg, frames.Owns)
+				if agent == registry.AgentTypeBrowser {
+					if binding == nil {
+						assert.Empty(t, filtered.IDs())
+					} else {
+						assert.Equal(t, []string{"mcp__remote__view"}, filtered.IDs())
+					}
+				} else {
+					assert.Equal(t, binding == nil, filtered.Get("mcp__remote__view") != nil)
+					assert.NotNil(t, filtered.Get("mcp__playwright__view"))
+				}
+			}
+			assert.Equal(
+				t,
+				binding != nil,
+				containsText(string(reg.Get("mcp__remote__view").Parameters()), "task_state"),
+			)
+			assert.NotContains(t, string(reg.Get("mcp__playwright__view").Parameters()), "task_state")
+		})
+	}
 }
 
 type testTool struct {

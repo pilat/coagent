@@ -3,6 +3,7 @@
 - **Status:** Accepted
 - **Date:** 2026-10-05
 - **Amends:** [ADR-0067](0067-browser-subagent-supersedes-frames.md)
+- **Amended by:** [ADR-0088](0088-browser-surface-is-the-configured-mcp-server.md) — the one-action rule and frame budget apply to the configured browser server
 
 ## Context
 

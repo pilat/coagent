@@ -32,7 +32,7 @@ type toolLiteralRuleConstraint struct {
 
 func TestToolLiteralRule_CoversRegisteredTools(t *testing.T) {
 	literalRegex := toolLiteralRuleRegex(t)
-	reg := realRegistry(t, true, nil)
+	reg, _ := realRegistry(t, true, nil, nil)
 	ids := reg.IDs()
 	for _, owner := range append(mcpstore.NewTools(nil, 0), budget.NewTool(nil, 0, false)) {
 		ids = append(ids, owner.ID())

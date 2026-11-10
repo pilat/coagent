@@ -114,7 +114,7 @@ project, with or without code or Git; many independent sessions can share it.
 _Avoid_: workspace, space; dialog (a dialog is a session in a project).
 
 **agent type**:
-A named agent configuration — tool allowlist, prompt template, model override, mode and optional project-context omission — that session assembly selects. Built-ins: `build`, `general`, `explore`, `browser`, `compaction`. The `task` tool offers only spawnable types; `build` and `compaction` are not subagent types. The built-in `explore` type is deliberately lean: it has read-only code-search tools and starts without project instructions, skills, curated memory, Git state or model catalog; its assignment must supply relevant constraints. The built-in `browser` type has only the project's Playwright tools and the same project-context omission. Browser disables integrated search. Agent type selects behavior and tools, never a work budget.
+A named agent configuration — tool allowlist, prompt template, model override, mode and optional project-context omission — that session assembly selects. Built-ins: `build`, `general`, `explore`, `browser`, `compaction`. The `task` tool offers only spawnable types; `build` and `compaction` are not subagent types. The built-in `explore` type is deliberately lean: it has read-only code-search tools and starts without project instructions, skills, curated memory, Git state or model catalog; its assignment must supply relevant constraints. The built-in `browser` type has only the tools of the MCP server bound by `browser.mcp_name` and the same project-context omission; without that binding it is unavailable. Browser disables integrated search. Agent type selects behavior and tools, never a work budget.
 _Avoid_: role, persona, mode (mode is a separate axis on the same config).
 
 **control socket**:
@@ -174,12 +174,12 @@ _Avoid_: pruning (names the retroactive anti-pattern), clearing (a separate meta
 A diversity-based detector that catches repetitive tool-call patterns and forces the agent to break out. The "loop" here means *repetition* — unrelated to the **agent loop** (the execution cycle), despite the shared word.
 
 **browser frame**:
-The whole result of one call to a `playwright` MCP tool inside a `browser` subagent — page text and screenshot together. Once a `playwright` call from a later model turn succeeds, the browser session's projection replaces the earlier frame with a fixed placeholder; failed calls never do, and the stored row never changes. The browser subagent's scoped exception to **insertion-time truncation**: only frames are replaced, never assistant messages or reasoning. Only the first `playwright` call of an assistant message runs, so one turn yields at most one fresh frame, and a frame is truncated against a larger browser budget than other tool results ([ADR-0069](adr/0069-browser-takes-one-action-per-turn.md)).
+The whole result of one call to the MCP server bound by `browser.mcp_name` inside a `browser` subagent, regardless of its content. Once a call to that server from a later model turn succeeds, the browser session's projection replaces the earlier frame with a fixed placeholder; failed calls never do, and the stored row never changes. The browser subagent's scoped exception to **insertion-time truncation**: only frames are replaced, never assistant messages or reasoning. Only the first call of an assistant message runs, so one turn yields at most one fresh frame, and a frame is truncated against a larger browser budget than other tool results ([ADR-0069](adr/0069-browser-takes-one-action-per-turn.md), amended by [ADR-0088](adr/0088-browser-surface-is-the-configured-mcp-server.md)).
 _Avoid_: observation, screenshot (a frame may carry no image), image eviction (that rejected idea pruned all images, not superseded frames).
 
 **browser task state**:
-The model-authored `task_state` argument every `playwright` call must carry: verdict on the previous action, task facts worth keeping from the current frame, next goal. It is the only record of a frame once that frame is replaced; coagent strips it before the call reaches the MCP server.
-_Avoid_: memory (that is curated memory), state (a `playwright` tool already has a `state` parameter), observation, page description (it records task progress, not what the screen looks like).
+The model-authored `task_state` argument every call to the configured browser MCP server must carry: verdict on the previous action, task facts worth keeping from the current frame, next goal. It is the only record of a frame once that frame is replaced; coagent strips it before the call reaches the MCP server.
+_Avoid_: memory (that is curated memory), state (a server tool may already have a `state` parameter), observation, page description (it records task progress, not what the screen looks like).
 
 ## Tools, skills & extensions
 
@@ -210,6 +210,15 @@ _Avoid_: browser check, Playwright check (the core never tests a tool ID against
 **MCP profile** (`mcp.Profile`):
 The per-server adapter the tool stack hands to the MCP client for one server's tools — admit or refuse a discovered tool, extend its model-facing schema, gate a call's arguments before forwarding. `internal/mcp` applies it without knowing any server name; the browser surface's profile adds and strips **browser task state**.
 _Avoid_: server hook, plugin.
+
+**MCP server guidance**:
+The server's initialization `instructions`, kept as metadata about using its tools.
+The system prompt includes one delimited block per server with visible tools and
+non-empty guidance, sorted by server name. The client caps each server's text at
+8,000 Unicode characters, appending a marker when truncated. Guidance follows tool
+visibility and never overrides system, user, project or task instructions; it is
+distinct from **untrusted tool output** ([ADR-0089](adr/0089-mcp-instructions-follow-tool-visibility.md)).
+_Avoid_: tool output, system authority.
 
 **websearch**:
 The builtin search tool (`internal/tool/builtin`), registered only when `tools.search` selects a REST provider — a model never sees a dead tool. Returns SERP-style results (title/url/snippet); page fetching stays `webfetch`'s job. With no `tools.search` section, `openrouter`-driver models instead get the driver's server-side search injection ([ADR-0043](adr/0043-integrated-search-quality-first.md)).

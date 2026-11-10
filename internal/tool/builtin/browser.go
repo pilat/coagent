@@ -13,8 +13,6 @@ import (
 
 const (
 	browserFrameResultLimit = 120000
-	browserToolPrefix       = "mcp__playwright__"
-	browserServerName       = "playwright"
 	browserTaskStateArg     = "task_state"
 )
 
@@ -23,17 +21,21 @@ var (
 	_ mcp.Profile    = browserProfile{}
 )
 
-type browserFrameRule struct{}
+type browserFrameRule struct{ serverName string }
 
 type browserProfile struct{}
 
 // Frames returns the stack's frame rule independently of which servers are up.
 func (s *Stack) Frames() tool.FrameRule {
-	return browserFrameRule{}
+	if s == nil {
+		return browserFrameRule{}
+	}
+
+	return s.frames
 }
 
-func (browserFrameRule) Owns(id string) bool {
-	return strings.HasPrefix(id, browserToolPrefix)
+func (r browserFrameRule) Owns(id string) bool {
+	return r.serverName != "" && strings.HasPrefix(id, "mcp__"+r.serverName+"__")
 }
 
 func (browserFrameRule) ResultLimit() int {
@@ -46,7 +48,7 @@ func (browserProfile) Admit(meta mcp.ToolMeta) bool {
 	}
 	if json.Unmarshal(meta.Schema, &schema) == nil && schema.Properties != nil {
 		if _, collision := schema.Properties[browserTaskStateArg]; collision {
-			logger.Named("tool.browser").Warn("playwright_task_state_collision", zap.String("tool", meta.Name))
+			logger.Named("tool.browser").Warn("browser_task_state_collision", zap.String("tool", meta.Name))
 			return false
 		}
 	}
@@ -86,7 +88,7 @@ func (browserProfile) Gate(args map[string]any, decodeErr error) *tool.Result {
 	if decodeErr != nil || !ok || strings.TrimSpace(state) == "" {
 		return &tool.Result{
 			IsError: true,
-			Output:  "Every playwright tool call requires a non-blank string task_state recording the previous action's outcome, task facts from the current frame, and the next goal.",
+			Output:  "Every tool call requires a non-blank string task_state recording the previous action's outcome, task facts from the current frame, and the next goal.",
 		}
 	}
 

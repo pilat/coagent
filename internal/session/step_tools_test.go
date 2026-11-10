@@ -99,15 +99,13 @@ func TestBrowserFrameBudgetAndCutHint(t *testing.T) {
 	assert.NotContains(t, browser, "omitted")
 	ordinary := formatToolResult(frame, 200000, 0)
 	assert.Contains(t, ordinary, "omitted")
-	assert.NotContains(t, ordinary, "browser_snapshot")
+	assert.NotContains(t, ordinary, "narrower view")
 
 	frame.Output = strings.Repeat("x", 200000)
 	large := formatToolResult(frame, 200000, testFrameResultLimit)
 	assert.LessOrEqual(t, len([]rune(large))-len([]rune(tool.UntrustedContentBegin+"\n\n"+tool.UntrustedContentEnd)),
 		testFrameResultLimit)
-	for _, part := range []string{"browser_snapshot", "target", "CSS selector", "visible container ref", "depth"} {
-		assert.Contains(t, large, part)
-	}
+	assert.Contains(t, large, "Request a narrower view of the omitted part if your tools allow it.")
 	assert.NotContains(t, large, "omitted ref")
 	small := formatToolResult(frame, 32000, testFrameResultLimit)
 	assert.LessOrEqual(t, len([]rune(small))-len([]rune(tool.UntrustedContentBegin+"\n\n"+tool.UntrustedContentEnd)),
@@ -146,7 +144,7 @@ func TestBrowserExtraActionsSkippedBeforeScheduling(t *testing.T) {
 	for i := 1; i < 3; i++ {
 		assert.Equal(t, i, items[i].index)
 		assert.Equal(t, tool.OutcomeSkipped, items[i].outcome)
-		assert.Contains(t, items[i].content, "Only one browser action")
+		assert.Contains(t, items[i].content, "Only one action")
 		assert.NotContains(t, items[i].content, tool.UntrustedContentBegin)
 	}
 
@@ -168,7 +166,7 @@ func TestBrowserUnknownCallStillTakesTheTurnsAction(t *testing.T) {
 	require.Len(t, items, 2)
 	assert.Contains(t, items[0].content, "unknown tool")
 	assert.Equal(t, tool.OutcomeSkipped, items[1].outcome)
-	assert.Contains(t, items[1].content, "Only one browser action")
+	assert.Contains(t, items[1].content, "Only one action")
 	assert.Zero(t, stub.entryCount())
 }
 
@@ -197,7 +195,7 @@ func TestBrowserExtraActionsPersistWithoutLoopRecords(t *testing.T) {
 	stored := agent.store.(*mockSessionStore).messages
 	for _, i := range []int{2, 3, 4, 5, 6, 9, 10, 11, 12, 13} {
 		assert.True(t, stored[i].ToolError)
-		assert.Contains(t, stored[i].Content, "Only one browser action")
+		assert.Contains(t, stored[i].Content, "Only one action")
 		assert.NotContains(t, stored[i].Content, tool.UntrustedContentBegin)
 	}
 }
@@ -220,7 +218,7 @@ func TestBrowserLoopWarningStaysOnExecutedCall(t *testing.T) {
 	require.Len(t, stored, 9)
 	assert.Contains(t, stored[7].Content, "[LOOP WARNING:")
 	assert.NotContains(t, stored[8].Content, "[LOOP WARNING:")
-	assert.Contains(t, stored[8].Content, "Only one browser action")
+	assert.Contains(t, stored[8].Content, "Only one action")
 }
 
 func TestFormatToolResult_PreservesPresentationContract(t *testing.T) {

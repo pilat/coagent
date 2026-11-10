@@ -48,7 +48,7 @@ var builtinAgentTypes = map[AgentType]AgentTypeConfig{
 	},
 	AgentTypeBrowser: {
 		Name:                    AgentTypeBrowser,
-		Description:             "Drive the project's Playwright browser with browser tools only. Receives no project context; supply a self-contained goal, constraints, starting URL or site, and the facts to return.",
+		Description:             "Drive the configured browser surface with its tools only. Receives no project context; supply a self-contained goal, constraints, starting URL or site, and the facts to return.",
 		Mode:                    ModeSubagent,
 		Tools:                   []string{"*"},
 		Prompt:                  BrowserAgentPrompt,

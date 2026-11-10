@@ -21,6 +21,11 @@ import (
 	"github.com/pilat/coagent/internal/shellenv"
 )
 
+const (
+	maxInstructionsRunes  = 8000
+	instructionsCutMarker = "\n[guidance truncated by coagent at 8000 characters]"
+)
+
 // initTimeout bounds each MCP handshake RPC so a server that spawns but never
 // speaks the protocol fails on a deadline instead of wedging startup (var: tests shrink it).
 var initTimeout = 30 * time.Second
@@ -31,12 +36,13 @@ var callTimeout = 5 * time.Minute
 
 // Client wraps an MCP client for a single server.
 type Client struct {
-	name      string
-	client    client.MCPClient
-	tools     map[string]mcp.Tool
-	cancelRun context.CancelFunc // force-kills the server subprocess on close
-	closeOnce sync.Once
-	closeErr  error
+	name         string
+	client       client.MCPClient
+	tools        map[string]mcp.Tool
+	instructions string
+	cancelRun    context.CancelFunc // force-kills the server subprocess on close
+	closeOnce    sync.Once
+	closeErr     error
 }
 
 type BinaryPart struct {
@@ -115,7 +121,7 @@ func NewClient(
 	initReq.Params.ClientInfo = mcp.Implementation{Name: "coagent", Version: "1.0.0"}
 	initReq.Params.Capabilities = mcp.ClientCapabilities{}
 
-	toolList, err := handshake(ctx, c, initReq)
+	toolList, instructions, err := handshake(ctx, c, initReq)
 	if err != nil {
 		cancelRun()
 
@@ -129,13 +135,19 @@ func NewClient(
 		tools[tool.Name] = tool
 	}
 
+	if runes := []rune(instructions); len(runes) > maxInstructionsRunes {
+		instructions = string(runes[:maxInstructionsRunes]) + instructionsCutMarker
+		log.Warn("mcp_instructions_truncated", zap.String("name", name), zap.Int("characters", len(runes)))
+	}
+
 	log.Debug("mcp_ready", zap.String("name", name), zap.Int("tools", len(tools)))
 
 	return &Client{
-		name:      name,
-		client:    c,
-		tools:     tools,
-		cancelRun: cancelRun,
+		name:         name,
+		client:       c,
+		tools:        tools,
+		instructions: instructions,
+		cancelRun:    cancelRun,
 	}, nil
 }
 
@@ -223,14 +235,14 @@ func activatedServerCommand(
 
 // handshake runs Initialize then ListTools, each under its own initTimeout so a
 // slow-but-progressing cold start can't let one starve the other.
-func handshake(ctx context.Context, c *client.Client, initReq mcp.InitializeRequest) ([]mcp.Tool, error) {
+func handshake(ctx context.Context, c *client.Client, initReq mcp.InitializeRequest) ([]mcp.Tool, string, error) {
 	initCtx, cancelInit := context.WithTimeout(ctx, initTimeout)
-	_, err := c.Initialize(initCtx, initReq)
+	initialized, err := c.Initialize(initCtx, initReq)
 
 	cancelInit()
 
 	if err != nil {
-		return nil, fmt.Errorf("initialize MCP client: %w", err)
+		return nil, "", fmt.Errorf("initialize MCP client: %w", err)
 	}
 
 	listCtx, cancelList := context.WithTimeout(ctx, initTimeout)
@@ -239,11 +251,14 @@ func handshake(ctx context.Context, c *client.Client, initReq mcp.InitializeRequ
 	cancelList()
 
 	if err != nil {
-		return nil, fmt.Errorf("list MCP tools: %w", err)
+		return nil, "", fmt.Errorf("list MCP tools: %w", err)
 	}
 
-	return toolsResult.Tools, nil
+	return toolsResult.Tools, initialized.Instructions, nil
 }
+
+// Instructions returns the server's bounded guidance from initialization.
+func (c *Client) Instructions() string { return c.instructions }
 
 func (c *Client) Name() string {
 	return c.name

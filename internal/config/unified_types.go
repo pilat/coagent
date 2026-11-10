@@ -153,6 +153,11 @@ type (
 		Search SearchToolConfig `yaml:"search,omitempty"`
 	}
 
+	// BrowserConfig binds the browser subagent to one configured MCP server.
+	BrowserConfig struct {
+		MCPName string `yaml:"mcp_name"`
+	}
+
 	// UnifiedConfig represents the unified configuration file (~/.coagent/config.yaml)
 	UnifiedConfig struct {
 		RemovedManagerKeys []string                 `yaml:"-"`
@@ -165,6 +170,7 @@ type (
 		Managers           []ManagerEntry           `yaml:"managers,omitempty"`
 		Sandbox            SandboxConfig            `yaml:"sandbox"`
 		Tools              ToolsConfig              `yaml:"tools,omitempty"`
+		Browser            *BrowserConfig           `yaml:"browser,omitempty"`
 	}
 )
 

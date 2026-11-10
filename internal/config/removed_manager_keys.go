@@ -10,12 +10,20 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+const (
+	browserUndefined browserState = iota
+	browserNull
+	browserSet
+)
+
 var removedManagerKeys = map[string]bool{
 	"service_topic_name":          true,
 	"service_topic_icon_emoji_id": true,
 	"session_topic_icon_emoji_id": true,
 	"target_chat_id":              true,
 }
+
+type browserState int
 
 func stripRemovedManagerKeys(data []byte) ([]byte, []string, error) {
 	decoder := yaml.NewDecoder(bytes.NewReader(data))
@@ -35,16 +43,8 @@ func stripRemovedManagerKeys(data []byte) ([]byte, []string, error) {
 	}
 
 	found := make(map[string]bool)
-
-	if len(document.Content) > 0 {
-		root := document.Content[0]
-		if root.Kind == yaml.MappingNode {
-			for i := 0; i < len(root.Content); i += 2 {
-				if root.Content[i].Value == "managers" {
-					stripManagerSequence(root.Content[i+1], found)
-				}
-			}
-		}
+	if err := scanTopLevel(&document, found); err != nil {
+		return nil, nil, err
 	}
 
 	if len(found) == 0 {
@@ -64,6 +64,80 @@ func stripRemovedManagerKeys(data []byte) ([]byte, []string, error) {
 	}
 
 	return filtered, keys, nil
+}
+
+// scanTopLevel rejects a null browser section, which strict decoding would read as
+// absent, and strips retired manager keys.
+func scanTopLevel(document *yaml.Node, found map[string]bool) error {
+	if len(document.Content) == 0 || document.Content[0].Kind != yaml.MappingNode {
+		return nil
+	}
+
+	root := document.Content[0]
+	if browserStateOf(root, make(map[*yaml.Node]bool)) == browserNull {
+		return errors.New("browser must be a mapping with a non-empty mcp_name")
+	}
+
+	for i := 0; i+1 < len(root.Content); i += 2 {
+		if root.Content[i].Value == "managers" {
+			stripManagerSequence(root.Content[i+1], found)
+		}
+	}
+
+	return nil
+}
+
+// browserStateOf follows aliases and merge keys with yaml.v3 precedence: an explicit
+// key wins, then the first merge source that defines it.
+func browserStateOf(node *yaml.Node, visited map[*yaml.Node]bool) browserState {
+	node = resolveAlias(node)
+	if node == nil || visited[node] {
+		return browserUndefined
+	}
+
+	visited[node] = true
+	if node.Kind == yaml.SequenceNode {
+		return firstDefinedBrowser(node.Content, visited)
+	}
+
+	if node.Kind != yaml.MappingNode {
+		return browserUndefined
+	}
+
+	var merges []*yaml.Node
+
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		switch node.Content[i].Value {
+		case "browser":
+			if value := resolveAlias(node.Content[i+1]); value != nil && value.Tag == "!!null" {
+				return browserNull
+			}
+
+			return browserSet
+		case "<<":
+			merges = append(merges, node.Content[i+1])
+		}
+	}
+
+	return firstDefinedBrowser(merges, visited)
+}
+
+func firstDefinedBrowser(sources []*yaml.Node, visited map[*yaml.Node]bool) browserState {
+	for _, source := range sources {
+		if state := browserStateOf(source, visited); state != browserUndefined {
+			return state
+		}
+	}
+
+	return browserUndefined
+}
+
+func resolveAlias(node *yaml.Node) *yaml.Node {
+	for depth := 0; node != nil && node.Kind == yaml.AliasNode && depth < 64; depth++ {
+		node = node.Alias
+	}
+
+	return node
 }
 
 func stripManagerSequence(node *yaml.Node, found map[string]bool) {

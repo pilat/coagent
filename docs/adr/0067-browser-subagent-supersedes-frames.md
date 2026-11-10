@@ -3,6 +3,7 @@
 - **Status:** Accepted
 - **Date:** 2026-10-05
 - **Amended by:** [ADR-0069](0069-browser-takes-one-action-per-turn.md) — one browser action per turn and a larger frame budget
+- **Amended by:** [ADR-0088](0088-browser-surface-is-the-configured-mcp-server.md) — the browser surface is the MCP server named in `browser.mcp_name`, not `playwright`
 
 ## Context
 

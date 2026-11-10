@@ -46,7 +46,7 @@ type messageStore struct {
 	frames   tool.FrameRule
 }
 
-const supersededBrowserFrame = "[browser frame replaced — its task facts are in the task_state of the next playwright call]"
+const supersededBrowserFrame = "[browser frame replaced — its task facts are in the task_state of the next call]"
 
 // PendingToolCall identifies one exact suspended tool invocation.
 type PendingToolCall struct {
