@@ -50,7 +50,7 @@ lines internal/bashsandbox 1767
 lines internal/budget 492
 lines internal/catalog 545
 lines internal/coagenthome 142
-lines internal/config 1303
+lines internal/config 1365
 lines internal/configapply 572
 lines internal/configops 530
 lines internal/controllerapi 303

@@ -17,6 +17,8 @@ func TestUnifiedConfig_Browser(t *testing.T) {
 	}{
 		{"absent", "", nil},
 		{"configured", "browser:\n  mcp_name: remote\n", &BrowserConfig{MCPName: "remote"}},
+		{"explicit over merged null", "<<: {browser: ~}\nbrowser:\n  mcp_name: remote\n", &BrowserConfig{MCPName: "remote"}},
+		{"first merge source wins", "<<: [{browser: {mcp_name: remote}}, {browser: ~}]\n", &BrowserConfig{MCPName: "remote"}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
@@ -48,6 +50,11 @@ func TestUnifiedConfig_RejectsInvalidBrowser(t *testing.T) {
 		"browser:\n  mcp_name: ' remote '\n",
 		"browser:\n  mcp_name: 'remote '\n",
 		"browser:\n  mcp_name: ' remote'\n",
+		"tools: {search: &n ~}\nbrowser: *n\n",
+		"<<: {browser: ~}\n",
+		"<<: [{sandbox: {}}, {browser: ~}]\n",
+		"<<: [{browser: ~}, {browser: {mcp_name: remote}}]\n",
+		"<<: {<<: {browser: {mcp_name: remote}}, browser: ~}\n",
 	} {
 		t.Run(data, func(t *testing.T) {
 			t.Parallel()
