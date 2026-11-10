@@ -70,6 +70,7 @@ func TestEnrichCatalogFillsEffortLevelsPerDriver(t *testing.T) {
 	tests := []struct {
 		name        string
 		driverName  string
+		baseURL     string
 		spec        *config.ReasoningSpec
 		want        []string
 		wantDefault string
@@ -134,6 +135,26 @@ func TestEnrichCatalogFillsEffortLevelsPerDriver(t *testing.T) {
 			spec:       &config.ReasoningSpec{Supported: true, NativeEffort: true, Efforts: []string{"low", "high"}},
 		},
 		{
+			name:       "openai on a third-party endpoint never sends a level",
+			driverName: driverOpenAI,
+			baseURL:    "http://localhost:8000/v1",
+			spec:       &config.ReasoningSpec{Supported: true, Efforts: []string{"low", "medium", "high"}},
+		},
+		{
+			name:        "direct openai offers the catalog allowlist",
+			driverName:  driverOpenAI,
+			baseURL:     "https://api.openai.com/v1",
+			spec:        &config.ReasoningSpec{Supported: true, Efforts: []string{"low", "medium", "high"}},
+			want:        []string{"low", "medium", "high"},
+			wantDefault: "medium",
+		},
+		{
+			name:       "direct openai model without a selector offers nothing",
+			driverName: driverOpenAI,
+			baseURL:    "https://api.openai.com/v1",
+			spec:       &config.ReasoningSpec{Supported: true},
+		},
+		{
 			name:       "a model that does not reason",
 			driverName: driverAnthropic,
 			spec:       &config.ReasoningSpec{},
@@ -147,7 +168,7 @@ func TestEnrichCatalogFillsEffortLevelsPerDriver(t *testing.T) {
 			}}
 
 			cfg := testConfig([]config.ModelEntry{{ID: "m", Provider: "prod"}})
-			cfg.UnifiedConfig.Providers["prod"] = config.ProviderEntry{Driver: tt.driverName}
+			cfg.UnifiedConfig.Providers["prod"] = config.ProviderEntry{Driver: tt.driverName, BaseURL: tt.baseURL}
 
 			require.NoError(
 				t,

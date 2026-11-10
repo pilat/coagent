@@ -21,6 +21,8 @@ const (
 	msgKeyRole      = "role"
 	msgKeyContent   = "content"
 	msgKeyType      = "type"
+	msgKeyName      = "name"
+	msgKeyImageURL  = "image_url"
 	oaiTypeFunction = "function"
 	oaiTypeText     = "text"
 

@@ -32,7 +32,7 @@ type DriverClientOpts struct {
 	NativeSearch bool
 }
 
-// driverProtocol owns one provider protocol end to end. Both methods are mandatory, so
+// driverProtocol owns one kind of provider end to end. Both methods are mandatory, so
 // the compiler will not let a new driver skip saying where its models come from.
 type driverProtocol interface {
 	NewClient(entry config.ProviderEntry, model config.ModelEntry, opts DriverClientOpts) (Client, error)
@@ -87,6 +87,10 @@ func (d *openAIDriver) NewClient(
 	model config.ModelEntry,
 	_ DriverClientOpts,
 ) (Client, error) {
+	if isDirectOpenAI(entry.BaseURL) {
+		return newOpenAIResponsesClient(entry.BaseURL, entry.APIKey, model)
+	}
+
 	return newOpenAICompatibleClient(openAICompatibleParams{
 		BaseURL: entry.BaseURL,
 		APIKey:  entry.APIKey,

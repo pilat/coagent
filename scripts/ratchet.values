@@ -60,7 +60,7 @@ lines internal/git 868
 lines internal/humanize 24
 lines internal/id 17
 lines internal/install 478
-lines internal/llm 3845
+lines internal/llm 4540
 lines internal/llm/llmtest 56
 lines internal/llmwire 180
 lines internal/loader 1605
