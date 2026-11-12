@@ -70,7 +70,7 @@ func TestMain(m *testing.M) {
 
 func TestToolsSectionBytes_AgentTypes(t *testing.T) {
 	reg, frames := realRegistry(t, true, nil, nil)
-	set := registry.NewSet(nil)
+	set := registry.NewSet(nil, registry.BrowserSettings{})
 	for _, agent := range []registry.AgentType{registry.AgentTypeBuild, registry.AgentTypeGeneral, registry.AgentTypeExplore} {
 		cfg, ok := set.Get(agent)
 		require.True(t, ok)
@@ -118,7 +118,7 @@ func TestToolsSectionBytes_MCP(t *testing.T) {
 		"playwright":   {"browser_snapshot", "browser_click"},
 	}, nil)
 	reg, frames := realRegistry(t, true, servers, &config.BrowserConfig{MCPName: "playwright"})
-	set := registry.NewSet(nil)
+	set := registry.NewSet(nil, registry.BrowserSettings{})
 	browser, ok := set.Get(registry.AgentTypeBrowser)
 	require.True(t, ok)
 	assertToolsSectionGolden(t, "agent-browser", renderToolsSection(

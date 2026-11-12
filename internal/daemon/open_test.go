@@ -10,6 +10,7 @@ import (
 	"github.com/pilat/coagent/internal/config"
 	"github.com/pilat/coagent/internal/configapply"
 	"github.com/pilat/coagent/internal/mcpstore"
+	"github.com/pilat/coagent/internal/registry"
 	"github.com/pilat/coagent/internal/schedule"
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/subagent"
@@ -94,7 +95,7 @@ func TestResolveChildEffort(t *testing.T) {
 // Only task is parallel-safe among daemon-registered tools; accidental policy changes must fail this test.
 func TestProductionTools_ParallelSafePolicies(t *testing.T) {
 	tools := map[string]tool.Tool{
-		tool.IDTask:           subagent.NewTaskTool(nil, 0, nil, nil),
+		tool.IDTask:           subagent.NewTaskTool(nil, 0, nil, nil, registry.BrowserSettings{}),
 		tool.IDSendToSubagent: subagent.NewSendToSubagentTool(nil),
 		"get_subagent_result": subagent.NewGetSubagentResultTool(nil),
 		tool.IDSchedule:       schedule.NewScheduleTool(0, nil, nil),

@@ -144,7 +144,7 @@ func TestBrowserExtraActionsSkippedBeforeScheduling(t *testing.T) {
 	for i := 1; i < 3; i++ {
 		assert.Equal(t, i, items[i].index)
 		assert.Equal(t, tool.OutcomeSkipped, items[i].outcome)
-		assert.Contains(t, items[i].content, "Only one action")
+		assert.Contains(t, items[i].content, "Only one surface action")
 		assert.NotContains(t, items[i].content, tool.UntrustedContentBegin)
 	}
 
@@ -153,6 +153,31 @@ func TestBrowserExtraActionsSkippedBeforeScheduling(t *testing.T) {
 	for _, item := range ordinaryItems {
 		assert.Equal(t, tool.OutcomeExecuted, item.outcome)
 	}
+}
+
+// A granted built-in is not a surface action, so it neither spends nor loses the turn's action.
+func TestBrowserGrantedBuiltinRunsBesideSurfaceAction(t *testing.T) {
+	name := "mcp__playwright__" + "click"
+	surface := newGateTool(name, false)
+	builtin := newGateTool("write", false)
+	agent := newTestAgent(surface, builtin)
+	agent.ms.frames = testFrameRule{}
+	calls := []llmwire.ToolCall{
+		gateCall("write", "1"),
+		gateCall(name, "2"),
+		gateCall(name, "3"),
+		gateCall("write", "4"),
+	}
+	items := executeToolCallsInternal(t.Context(), agent, calls)
+
+	require.Len(t, items, 4)
+	assert.Equal(t, 2, builtin.entryCount())
+	assert.Equal(t, 1, surface.entryCount())
+	for _, i := range []int{0, 1, 3} {
+		assert.Equal(t, tool.OutcomeExecuted, items[i].outcome)
+	}
+	assert.Equal(t, tool.OutcomeSkipped, items[2].outcome)
+	assert.Contains(t, items[2].content, "earlier surface call")
 }
 
 func TestBrowserUnknownCallStillTakesTheTurnsAction(t *testing.T) {
@@ -166,7 +191,7 @@ func TestBrowserUnknownCallStillTakesTheTurnsAction(t *testing.T) {
 	require.Len(t, items, 2)
 	assert.Contains(t, items[0].content, "unknown tool")
 	assert.Equal(t, tool.OutcomeSkipped, items[1].outcome)
-	assert.Contains(t, items[1].content, "Only one action")
+	assert.Contains(t, items[1].content, "Only one surface action")
 	assert.Zero(t, stub.entryCount())
 }
 
@@ -195,7 +220,7 @@ func TestBrowserExtraActionsPersistWithoutLoopRecords(t *testing.T) {
 	stored := agent.store.(*mockSessionStore).messages
 	for _, i := range []int{2, 3, 4, 5, 6, 9, 10, 11, 12, 13} {
 		assert.True(t, stored[i].ToolError)
-		assert.Contains(t, stored[i].Content, "Only one action")
+		assert.Contains(t, stored[i].Content, "Only one surface action")
 		assert.NotContains(t, stored[i].Content, tool.UntrustedContentBegin)
 	}
 }
@@ -218,7 +243,7 @@ func TestBrowserLoopWarningStaysOnExecutedCall(t *testing.T) {
 	require.Len(t, stored, 9)
 	assert.Contains(t, stored[7].Content, "[LOOP WARNING:")
 	assert.NotContains(t, stored[8].Content, "[LOOP WARNING:")
-	assert.Contains(t, stored[8].Content, "Only one action")
+	assert.Contains(t, stored[8].Content, "Only one surface action")
 }
 
 func TestFormatToolResult_PreservesPresentationContract(t *testing.T) {

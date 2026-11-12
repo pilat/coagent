@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -154,8 +155,8 @@ func readConfigFile(configPath string) ([]byte, error) {
 }
 
 func (c *UnifiedConfig) validate() error {
-	if c.Browser != nil && (c.Browser.MCPName == "" || c.Browser.MCPName != strings.TrimSpace(c.Browser.MCPName)) {
-		return errors.New("browser.mcp_name must be non-empty and have no leading or trailing whitespace")
+	if err := c.validateBrowser(); err != nil {
+		return err
 	}
 
 	if err := c.validateManagers(); err != nil {
@@ -175,6 +176,27 @@ func (c *UnifiedConfig) validate() error {
 	}
 
 	return c.validateModels()
+}
+
+func (c *UnifiedConfig) validateBrowser() error {
+	b := c.Browser
+	if b == nil {
+		return nil
+	}
+
+	if b.MCPName == "" || b.MCPName != strings.TrimSpace(b.MCPName) {
+		return errors.New("browser.mcp_name must be non-empty and have no leading or trailing whitespace")
+	}
+
+	if b.Effort != "" && b.Model == "" {
+		return errors.New("browser.effort requires browser.model")
+	}
+
+	if b.Model != "" && !slices.ContainsFunc(c.Models, func(m ModelEntry) bool { return m.ID == b.Model }) {
+		return fmt.Errorf("browser.model %q is not an id in models", b.Model)
+	}
+
+	return nil
 }
 
 func (c *UnifiedConfig) validateManagers() error {

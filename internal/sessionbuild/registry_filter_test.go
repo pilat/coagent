@@ -15,7 +15,7 @@ import (
 )
 
 func TestFilterRegistryForAgent_BuiltInSubagentExcludesTodoTools(t *testing.T) {
-	set := registry.NewSet(nil)
+	set := registry.NewSet(nil, registry.BrowserSettings{})
 
 	cfg, ok := set.Get(registry.AgentTypeGeneral)
 	require.True(t, ok)
@@ -33,7 +33,7 @@ func TestFilterRegistryForAgent_DynamicSubagentExcludesTodoTools(t *testing.T) {
 		Name:  customType,
 		Mode:  registry.ModeSubagent,
 		Tools: []string{"*"},
-	}})
+	}}, registry.BrowserSettings{})
 
 	cfg, ok := set.Get(customType)
 	require.True(t, ok)
@@ -46,7 +46,7 @@ func TestFilterRegistryForAgent_DynamicSubagentExcludesTodoTools(t *testing.T) {
 }
 
 func TestFilterRegistryForAgent_BuildAgentKeepsTodoTools(t *testing.T) {
-	set := registry.NewSet(nil)
+	set := registry.NewSet(nil, registry.BrowserSettings{})
 
 	cfg, ok := set.Get(registry.AgentTypeBuild)
 	require.True(t, ok)
@@ -66,7 +66,7 @@ func TestFilterRegistryForAgent_BatchCannotReachExcludedTools(t *testing.T) {
 		Name:  customType,
 		Mode:  registry.ModeSubagent,
 		Tools: []string{"read", tool.IDBatch},
-	}})
+	}}, registry.BrowserSettings{})
 
 	cfg, ok := set.Get(customType)
 	require.True(t, ok)
@@ -107,7 +107,7 @@ func TestFilterRegistryForAgent_BrowserBinding(t *testing.T) {
 			reg, frames := realRegistry(t, false, mcpServerFixture(t, map[string][]string{
 				"remote": {"view"}, "playwright": {"view"},
 			}, nil), binding)
-			set := registry.NewSet(nil)
+			set := registry.NewSet(nil, registry.BrowserSettings{})
 			assert.Equal(t, binding != nil, frames.Owns("mcp__remote__view"))
 			assert.False(t, frames.Owns("mcp__playwright__view"))
 			for _, agent := range []registry.AgentType{registry.AgentTypeBuild, registry.AgentTypeGeneral, registry.AgentTypeBrowser} {
@@ -133,6 +133,19 @@ func TestFilterRegistryForAgent_BrowserBinding(t *testing.T) {
 			assert.NotContains(t, string(reg.Get("mcp__playwright__view").Parameters()), "task_state")
 		})
 	}
+}
+
+func TestFilterRegistryForAgent_BrowserGrantedTools(t *testing.T) {
+	binding := &config.BrowserConfig{MCPName: "remote", Tools: []string{"read", "write"}}
+	reg, frames := realRegistry(t, false, mcpServerFixture(t, map[string][]string{"remote": {"view"}}, nil), binding)
+	require.NotNil(t, reg.Get("bash"))
+	set := registry.NewSet(nil, BrowserSettings(&config.UnifiedConfig{Browser: binding}))
+
+	cfg, ok := set.Get(registry.AgentTypeBrowser)
+	require.True(t, ok)
+	filtered := filterRegistryForAgent(set, reg, cfg, frames.Owns)
+	assert.ElementsMatch(t, []string{"read", "write", "mcp__remote__view"}, filtered.IDs())
+	assert.NotContains(t, string(reg.Get("read").Parameters()), "task_state")
 }
 
 type testTool struct {

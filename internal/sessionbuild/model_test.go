@@ -51,7 +51,7 @@ func TestBuildPromptModelIdentity(t *testing.T) {
 			level := configureClient(client, in.Record)
 			assert.Equal(t, client.level, level)
 			for _, agent := range []registry.AgentType{registry.AgentTypeBuild, registry.AgentTypeExplore, registry.AgentTypeBrowser} {
-				cfg, ok := registry.NewSet(nil).Get(agent)
+				cfg, ok := registry.NewSet(nil, registry.BrowserSettings{}).Get(agent)
 				require.True(t, ok)
 				prompt := buildPrompt(in, cfg, nil, level).SystemPrompt()
 				assert.Contains(t, prompt, "You are running on "+tc.want+". Trust this over anything said earlier")

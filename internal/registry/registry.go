@@ -16,6 +16,11 @@ const (
 	AgentTypeCompaction AgentType = "compaction"
 )
 
+const (
+	browserDescriptionLead = "Drive the configured browser surface with its tools only. "
+	browserDescriptionTail = "Receives no project context; supply a self-contained goal, constraints, starting URL or site, and the facts to return."
+)
+
 // Agent modes.
 const (
 	ModePrimary  = "primary"
@@ -48,7 +53,7 @@ var builtinAgentTypes = map[AgentType]AgentTypeConfig{
 	},
 	AgentTypeBrowser: {
 		Name:                    AgentTypeBrowser,
-		Description:             "Drive the configured browser surface with its tools only. Receives no project context; supply a self-contained goal, constraints, starting URL or site, and the facts to return.",
+		Description:             browserDescriptionLead + browserDescriptionTail,
 		Mode:                    ModeSubagent,
 		Tools:                   []string{"*"},
 		Prompt:                  BrowserAgentPrompt,
@@ -63,6 +68,12 @@ var builtinAgentTypes = map[AgentType]AgentTypeConfig{
 		Tools:       []string{},
 		Prompt:      sessionprompt.CompactionSummaryPrompt,
 	},
+}
+
+// browserGrantable is every built-in browser.tools can grant; the order is the
+// grant's display and filter order. Everything else is ignored.
+var browserGrantable = []string{
+	"read", "write", "edit", "apply_patch", "ls", "glob", "grep", "bash", "tail", "cancel_process", "webfetch",
 }
 
 // AgentType defines different agent configurations.
@@ -82,8 +93,21 @@ type (
 		OmitProjectContext      bool
 		DisableIntegratedSearch bool
 		// FrameSession applies the tool stack's frame rule to sessions of this type.
-		// Such a type sees only the rule's tools; every other type never sees them.
+		// Such a type sees the rule's tools plus GrantedTools; every other type never sees the rule's.
 		FrameSession bool
+		// ReasoningLevel is the explicit effort for a spawn of this type.
+		ReasoningLevel string
+		// PinnedModel makes Model beat the model a task call asks for.
+		PinnedModel bool
+		// GrantedTools are the non-frame tools a frame session also sees.
+		GrantedTools []string
+	}
+
+	// BrowserSettings is the daemon-wide configuration of the built-in browser.
+	BrowserSettings struct {
+		Model  string
+		Effort string
+		Tools  []string
 	}
 )
 
@@ -95,13 +119,16 @@ type Set struct {
 
 // NewSet seeds the built-in agent types and overlays the session's project-local
 // subagents on top, normalizing each (subagent-mode todo exclusion, default tool
-// inheritance). A project subagent may shadow a built-in of the same name.
-func NewSet(projectSubagents []AgentTypeConfig) *Set {
+// inheritance). A project subagent may shadow a built-in of the same name except a
+// Reserved one; the built-in browser takes the daemon-wide browser settings.
+func NewSet(projectSubagents []AgentTypeConfig, browser BrowserSettings) *Set {
 	types := make(map[AgentType]AgentTypeConfig, len(builtinAgentTypes)+len(projectSubagents))
 
 	for name, cfg := range builtinAgentTypes {
 		types[name] = cloneConfig(cfg)
 	}
+
+	types[AgentTypeBrowser] = applyBrowserSettings(types[AgentTypeBrowser], browser)
 
 	for _, cfg := range projectSubagents {
 		if Reserved(string(cfg.Name)) {
@@ -179,6 +206,10 @@ func (s *Set) FilterTools(allTools []string, t AgentType, isFrame func(toolID st
 
 	for _, tl := range allTools {
 		if isFrame(tl) != config.FrameSession {
+			if config.FrameSession && slices.Contains(config.GrantedTools, tl) {
+				result = append(result, tl)
+			}
+
 			continue
 		}
 
@@ -205,6 +236,24 @@ func toolPatternMatches(pattern, id string) bool {
 
 func cloneConfig(config AgentTypeConfig) AgentTypeConfig {
 	config.Tools = slices.Clone(config.Tools)
+	config.GrantedTools = slices.Clone(config.GrantedTools)
+
+	return config
+}
+
+func applyBrowserSettings(config AgentTypeConfig, s BrowserSettings) AgentTypeConfig {
+	config.Model = s.Model
+	config.PinnedModel = s.Model != ""
+	config.ReasoningLevel = s.Effort
+
+	granted := slices.DeleteFunc(slices.Clone(browserGrantable), func(id string) bool {
+		return !slices.Contains(s.Tools, id)
+	})
+	if len(granted) > 0 {
+		config.GrantedTools = granted
+		config.Description = "Drive the configured browser surface. Also has built-in tools: " +
+			strings.Join(granted, ", ") + ". " + browserDescriptionTail
+	}
 
 	return config
 }

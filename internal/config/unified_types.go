@@ -155,7 +155,10 @@ type (
 
 	// BrowserConfig binds the browser subagent to one configured MCP server.
 	BrowserConfig struct {
-		MCPName string `yaml:"mcp_name"`
+		MCPName string   `yaml:"mcp_name"`
+		Model   string   `yaml:"model,omitempty"`  // an `id` from models:; pins every new browser child
+		Effort  string   `yaml:"effort,omitempty"` // requires Model
+		Tools   []string `yaml:"tools,omitempty"`  // built-in tool IDs; registry ignores non-grantable ones
 	}
 
 	// UnifiedConfig represents the unified configuration file (~/.coagent/config.yaml)

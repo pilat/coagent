@@ -394,9 +394,9 @@ sessions' unchanged prompt prefix byte-stable between context events. Oversized 
 is capped before insertion. In `browser` sessions only, the projection replaces
 an earlier bound-server result's text and image references with a fixed placeholder
 after a successful call to that server from a later assistant turn; failed calls leave
-the prior frame live. Only the first call in a browser assistant
-message runs; later calls are stored as skipped errors without reaching the
-server. Results of the configured browser server alone use a 120,000-character truncation
+the prior frame live. Only the first bound-server call in a browser assistant
+message runs; later bound-server calls are stored as skipped errors without reaching the
+server, while granted built-ins run normally. Results of the configured browser server alone use a 120,000-character truncation
 budget, capped at 30% of the context window's character estimate. Stored rows
 and assistant reasoning remain unchanged
 ([ADR-0067](docs/adr/0067-browser-subagent-supersedes-frames.md), amended by
@@ -973,11 +973,14 @@ The built-in `explore` type deliberately starts without project instructions,
 skills, curated memory, Git state or the model catalog, and receives only
 read-only code-search tools; its parent supplies constraints in the assignment.
 The built-in `browser` type likewise omits project context and is the one frame
-session: it receives only the frame rule's tools — those of the enabled MCP
-server named in the daemon-wide `browser.mcp_name` setting — and
-every other agent type, including project subagents, never sees them. Its name
+session: it receives the frame rule's tools — those of the enabled MCP
+server named in the daemon-wide `browser.mcp_name` setting — plus the built-ins
+granted by `browser.tools` that pass the registry's whitelist, and
+every other agent type, including project subagents, never sees the frame tools.
+`browser.model` and `browser.effort` pin every new browser child's model and
+explicit effort; a boot check refuses an effort the model's catalog allowlist lacks. Its name
 is reserved from project subagents by the registry. It is offered to `task`
-only when this activation discovered one of those tools. Every browser call
+only when this activation discovered one of those tools. Every bound-server call
 requires a model-written `task_state`, retained in its stored tool arguments
 and stripped before forwarding to the server. Browser sessions disable
 integrated search before client construction. Without the config section the
@@ -985,7 +988,8 @@ rule owns no tools, browser mode is unavailable, and every MCP server is ordinar
 A present null or empty section, or a blank or untrimmed name, is rejected.
 The neutral browser discipline applies to every bound-server result as a frame;
 the root delegates only when the user's request needs it
-([ADR-0088](docs/adr/0088-browser-surface-is-the-configured-mcp-server.md)).
+([ADR-0088](docs/adr/0088-browser-surface-is-the-configured-mcp-server.md),
+[ADR-0091](docs/adr/0091-browser-runs-on-a-fixed-model-with-granted-built-ins.md)).
 Todo tracking is root-session-local durable state. The tool replaces the whole
 list atomically, and progress treats it as planning state rather than a separate
 workflow engine.

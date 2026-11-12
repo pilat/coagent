@@ -20,7 +20,7 @@ func TestBrowserProfileGate(t *testing.T) {
 			got := (browserProfile{}).Gate(args, decodeErr)
 			assert.Equal(t, &tool.Result{
 				IsError: true,
-				Output:  "Every tool call requires a non-blank string task_state recording the previous action's outcome, task facts from the current frame, and the next goal.",
+				Output:  "Every surface call requires a non-blank string task_state recording the previous action's outcome, task facts from the current frame, and the next goal.",
 			}, got)
 		})
 	}

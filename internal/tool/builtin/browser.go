@@ -88,7 +88,7 @@ func (browserProfile) Gate(args map[string]any, decodeErr error) *tool.Result {
 	if decodeErr != nil || !ok || strings.TrimSpace(state) == "" {
 		return &tool.Result{
 			IsError: true,
-			Output:  "Every tool call requires a non-blank string task_state recording the previous action's outcome, task facts from the current frame, and the next goal.",
+			Output:  "Every surface call requires a non-blank string task_state recording the previous action's outcome, task facts from the current frame, and the next goal.",
 		}
 	}
 

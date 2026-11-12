@@ -37,6 +37,49 @@ func TestUnifiedConfig_Browser(t *testing.T) {
 	}
 }
 
+const browserModelsYAML = "providers:\n  ant:\n    driver: anthropic\n    api_key: test\n" +
+	"models:\n  - id: cheap\n    provider: ant\n"
+
+func TestUnifiedConfig_BrowserModelEffortTools(t *testing.T) {
+	t.Parallel()
+
+	data := browserModelsYAML +
+		"browser:\n  mcp_name: remote\n  model: cheap\n  effort: low\n  tools: [read, write, nope]\n"
+	want := &BrowserConfig{MCPName: "remote", Model: "cheap", Effort: "low", Tools: []string{"read", "write", "nope"}}
+
+	parsed, err := ParseUnifiedConfig([]byte(data))
+	require.NoError(t, err)
+	assert.Equal(t, want, parsed.Browser)
+	resolved, err := ParseAndResolve([]byte(data), nil)
+	require.NoError(t, err)
+	assert.Equal(t, want, resolved.Browser)
+	raw, err := MarshalUnifiedConfig(resolved)
+	require.NoError(t, err)
+	roundTripped, err := ParseAndResolve(raw, nil)
+	require.NoError(t, err)
+	assert.Equal(t, want, roundTripped.Browser)
+}
+
+func TestUnifiedConfig_RejectsInvalidBrowserModel(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct{ data, want string }{
+		{"browser:\n  mcp_name: remote\n  effort: low\n", "browser.effort requires browser.model"},
+		{"browser:\n  mcp_name: remote\n  model: other\n", `browser.model "other" is not an id in models`},
+		{"browser:\n  mcp_name: remote\n  model: ' cheap'\n", `browser.model " cheap" is not an id in models`},
+		{"browser:\n  model: cheap\n  tools: [read]\n", "browser.mcp_name must be non-empty"},
+	} {
+		t.Run(tt.data, func(t *testing.T) {
+			t.Parallel()
+			data := browserModelsYAML + tt.data
+			_, err := LoadUnifiedConfig(writeConfig(t, data), nil)
+			require.ErrorContains(t, err, tt.want)
+			_, err = ParseAndResolve([]byte(data), nil)
+			require.ErrorContains(t, err, tt.want)
+		})
+	}
+}
+
 func TestUnifiedConfig_RejectsInvalidBrowser(t *testing.T) {
 	t.Parallel()
 

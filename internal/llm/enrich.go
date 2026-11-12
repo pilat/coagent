@@ -266,7 +266,36 @@ func validateEnriched(uc *config.UnifiedConfig, resolved []bool) []string {
 		}
 	}
 
+	if problem := browserEffortProblem(uc, resolved); problem != "" {
+		problems = append(problems, problem)
+	}
+
 	return problems
+}
+
+// browserEffortProblem refuses a pinned browser effort the model cannot take,
+// never clamping it: the operator's level must be the one that runs.
+func browserEffortProblem(uc *config.UnifiedConfig, resolved []bool) string {
+	b := uc.Browser
+	if b == nil || b.Effort == "" {
+		return ""
+	}
+
+	i := slices.IndexFunc(uc.Models, func(m config.ModelEntry) bool { return m.ID == b.Model })
+	if i < 0 || !resolved[i] {
+		return ""
+	}
+
+	levels := uc.Models[i].EffortLevels
+	if len(levels) == 0 {
+		return fmt.Sprintf("browser.effort %q: model %s accepts no effort level", b.Effort, b.Model)
+	}
+
+	if !slices.Contains(levels, b.Effort) {
+		return fmt.Sprintf("browser.effort %q: model %s accepts only %s", b.Effort, b.Model, strings.Join(levels, ", "))
+	}
+
+	return ""
 }
 
 func requiresMaxTokens(uc *config.UnifiedConfig, m config.ModelEntry) bool {

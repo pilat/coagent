@@ -40,7 +40,7 @@ func TestBuildPrompt_AgentInventory(t *testing.T) {
 			if tc.task {
 				reg.Register(testTool{id: tool.IDTask})
 			}
-			set := registry.NewSet(nil)
+			set := registry.NewSet(nil, registry.BrowserSettings{})
 			agent, ok := set.Get(tc.agent)
 			require.True(t, ok)
 			reg = filterRegistryForAgent(set, reg, agent, (*builtin.Stack)(nil).Frames().Owns)
@@ -67,7 +67,7 @@ func TestBuildPrompt_ReservedSubagentIsNotListed(t *testing.T) {
 			}
 			reg := tool.NewRegistry()
 			reg.Register(testTool{id: tool.IDTask})
-			agent, ok := registry.NewSet(nil).Get(registry.AgentTypeBuild)
+			agent, ok := registry.NewSet(nil, registry.BrowserSettings{}).Get(registry.AgentTypeBuild)
 			require.True(t, ok)
 			in := BuildInput{Config: &config.Config{}, Loader: ldr, WorkDir: t.TempDir()}
 			prompt := preparePrompt(in, agent, nil, todo.New(), reg, nil, "medium")

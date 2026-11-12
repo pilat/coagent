@@ -25,7 +25,7 @@ func TestToolsSectionBytes_MCPGuidance(t *testing.T) {
 				"alpha":  "Use alpha for lookups.", "empty": "No visible tools, no guidance.",
 			})
 			reg, frames := realRegistry(t, false, servers, binding)
-			set := registry.NewSet(nil)
+			set := registry.NewSet(nil, registry.BrowserSettings{})
 			for _, agent := range []registry.AgentType{registry.AgentTypeBuild, registry.AgentTypeGeneral, registry.AgentTypeBrowser} {
 				cfg, ok := set.Get(agent)
 				require.True(t, ok)

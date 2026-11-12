@@ -114,7 +114,7 @@ project, with or without code or Git; many independent sessions can share it.
 _Avoid_: workspace, space; dialog (a dialog is a session in a project).
 
 **agent type**:
-A named agent configuration — tool allowlist, prompt template, model override, mode and optional project-context omission — that session assembly selects. Built-ins: `build`, `general`, `explore`, `browser`, `compaction`. The `task` tool offers only spawnable types; `build` and `compaction` are not subagent types. The built-in `explore` type is deliberately lean: it has read-only code-search tools and starts without project instructions, skills, curated memory, Git state or model catalog; its assignment must supply relevant constraints. The built-in `browser` type has only the tools of the MCP server bound by `browser.mcp_name` and the same project-context omission; without that binding it is unavailable. Browser disables integrated search. Agent type selects behavior and tools, never a work budget.
+A named agent configuration — tool allowlist, prompt template, model override, mode and optional project-context omission — that session assembly selects. Built-ins: `build`, `general`, `explore`, `browser`, `compaction`. The `task` tool offers only spawnable types; `build` and `compaction` are not subagent types. The built-in `explore` type is deliberately lean: it has read-only code-search tools and starts without project instructions, skills, curated memory, Git state or model catalog; its assignment must supply relevant constraints. The built-in `browser` type has the tools of the MCP server bound by `browser.mcp_name`, plus any whitelisted built-ins granted by `browser.tools`, and the same project-context omission; without that binding it is unavailable. `browser.model` and `browser.effort` pin its model and effort. Browser disables integrated search. Agent type selects behavior and tools, never a work budget.
 _Avoid_: role, persona, mode (mode is a separate axis on the same config).
 
 **control socket**:
@@ -174,7 +174,7 @@ _Avoid_: pruning (names the retroactive anti-pattern), clearing (a separate meta
 A diversity-based detector that catches repetitive tool-call patterns and forces the agent to break out. The "loop" here means *repetition* — unrelated to the **agent loop** (the execution cycle), despite the shared word.
 
 **browser frame**:
-The whole result of one call to the MCP server bound by `browser.mcp_name` inside a `browser` subagent, regardless of its content. Once a call to that server from a later model turn succeeds, the browser session's projection replaces the earlier frame with a fixed placeholder; failed calls never do, and the stored row never changes. The browser subagent's scoped exception to **insertion-time truncation**: only frames are replaced, never assistant messages or reasoning. Only the first call of an assistant message runs, so one turn yields at most one fresh frame, and a frame is truncated against a larger browser budget than other tool results ([ADR-0069](adr/0069-browser-takes-one-action-per-turn.md), amended by [ADR-0088](adr/0088-browser-surface-is-the-configured-mcp-server.md)).
+The whole result of one call to the MCP server bound by `browser.mcp_name` inside a `browser` subagent, regardless of its content. Once a call to that server from a later model turn succeeds, the browser session's projection replaces the earlier frame with a fixed placeholder; failed calls never do, and the stored row never changes. The browser subagent's scoped exception to **insertion-time truncation**: only frames are replaced, never assistant messages or reasoning. Only the first surface call of an assistant message runs, so one turn yields at most one fresh frame, and a frame is truncated against a larger browser budget than other tool results ([ADR-0069](adr/0069-browser-takes-one-action-per-turn.md), amended by [ADR-0088](adr/0088-browser-surface-is-the-configured-mcp-server.md)).
 _Avoid_: observation, screenshot (a frame may carry no image), image eviction (that rejected idea pruned all images, not superseded frames).
 
 **browser task state**:
@@ -204,7 +204,7 @@ A property the core consults instead of a tool's ID, declared by the tool as an 
 _Avoid_: tool kind.
 
 **frame rule** (`tool.FrameRule`):
-The tool stack's ID rule naming which tool calls return whole **browser frame**s and what truncation budget a frame gets. It answers for stored rows whose tool is no longer registered. An agent type opts in with `FrameSession`; such a **frame session** sees only the rule's tools, and every other type never sees them. Today the built-in browser surface declares the only rule and `browser` is the only frame session.
+The tool stack's ID rule naming which tool calls return whole **browser frame**s and what truncation budget a frame gets. It answers for stored rows whose tool is no longer registered. An agent type opts in with `FrameSession`; such a **frame session** sees the rule's tools plus only the built-ins its type grants, and every other type never sees the rule's tools. Today the built-in browser surface declares the only rule and `browser` is the only frame session.
 _Avoid_: browser check, Playwright check (the core never tests a tool ID against either name).
 
 **MCP profile** (`mcp.Profile`):

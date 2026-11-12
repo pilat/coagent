@@ -258,6 +258,64 @@ func TestEnrichCatalogValidatesResolvedMetadata(t *testing.T) {
 	}
 }
 
+func TestEnrichCatalogValidatesBrowserEffort(t *testing.T) {
+	native := catalog.ModelSpec{
+		Name: "Cheap", ContextWindow: 200_000, MaxTokens: 8192,
+		Reasoning: &config.ReasoningSpec{Supported: true, NativeEffort: true, Efforts: []string{"low", "high"}},
+	}
+	plain := catalog.ModelSpec{Name: "Plain", ContextWindow: 200_000, MaxTokens: 8192}
+
+	tests := []struct {
+		name    string
+		spec    catalog.ModelSpec
+		browser *config.BrowserConfig
+		wantErr []string
+	}{
+		{name: "accepted effort", spec: native, browser: &config.BrowserConfig{Model: "cheap", Effort: "low"}},
+		{name: "no browser section", spec: plain},
+		{name: "no effort", spec: plain, browser: &config.BrowserConfig{Model: "cheap"}},
+		{
+			name: "effort outside the allowlist", spec: native,
+			browser: &config.BrowserConfig{Model: "cheap", Effort: "medium"},
+			wantErr: []string{"browser.effort", `"medium"`, "cheap", "low, high"},
+		},
+		{
+			name: "model without effort levels", spec: plain,
+			browser: &config.BrowserConfig{Model: "cheap", Effort: "low"},
+			wantErr: []string{"browser.effort", "cheap", "accepts no effort level"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			driver := &stubDriver{models: map[string]catalog.ModelSpec{"cheap": tt.spec}}
+			cfg := testConfig([]config.ModelEntry{{ID: "cheap", Provider: "prod"}})
+			cfg.UnifiedConfig.Browser = tt.browser
+
+			err := enrichCatalog(context.Background(), cfg, map[string]driverProtocol{driverAnthropic: driver})
+			if len(tt.wantErr) == 0 {
+				require.NoError(t, err)
+
+				return
+			}
+
+			for _, want := range tt.wantErr {
+				require.ErrorContains(t, err, want)
+			}
+		})
+	}
+}
+
+func TestEnrichCatalogBrowserEffortSkipsUnresolvedModel(t *testing.T) {
+	driver := &stubDriver{models: map[string]catalog.ModelSpec{}}
+	cfg := testConfig([]config.ModelEntry{{ID: "ghost", Provider: "prod"}})
+	cfg.UnifiedConfig.Browser = &config.BrowserConfig{Model: "ghost", Effort: "low"}
+
+	err := enrichCatalog(context.Background(), cfg, map[string]driverProtocol{driverAnthropic: driver})
+	require.ErrorContains(t, err, "ghost")
+	assert.NotContains(t, err.Error(), "browser.effort")
+}
+
 func TestEnrichCatalogAllowsMissingMaxTokensElsewhere(t *testing.T) {
 	driver := &stubDriver{models: map[string]catalog.ModelSpec{
 		"local-model": {Name: "Local", ContextWindow: 32_000},

@@ -19,7 +19,7 @@ import (
 	"github.com/pilat/coagent/internal/transcript"
 )
 
-const browserExtraActionNotice = "Only one action runs per turn; this call was not executed. Look at the result of the first call, then act again."
+const browserExtraActionNotice = "Only one surface action runs per turn; this call was not executed. Look at the result of the earlier surface call, then act again."
 
 // toolCallResultItem holds the decided outcome of one scheduled tool call.
 // Only items whose outcome is executed or failed carry persisted content;
