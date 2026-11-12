@@ -340,10 +340,38 @@ browser:
 
 The binding applies across projects where that server is enabled. Its tools are
 available only to `browser`, which records task facts, keeps the latest frame,
-and takes one action per turn. Without the section, browser mode is disabled
+and takes one action on that server per turn. Without the section, browser mode is disabled
 and all MCP servers remain ordinary tools. A present section requires a non-empty
 name without surrounding whitespace. MCP server instructions reach only sessions
 that can see that server's tools.
+
+Three optional keys tune the browser for every session:
+
+```yaml
+browser:
+  mcp_name: playwright
+  model: claude-sonnet-5-5   # an id from models:
+  effort: low                # requires model
+  tools: [read, write, glob]
+```
+
+- `model` pins every new browser child to that `models:` entry. A `model`
+  argument the parent passes to `task` for browser is ignored. Without it, the
+  child runs on the task's `model`, else the parent's model.
+- `effort` is the child's reasoning level and requires `model`. A level the
+  model does not accept, including any level on a model without an effort
+  selector, fails daemon startup. The check runs against the live catalog on
+  every start, so if a vendor later drops that level, the daemon will not start
+  until you change `config.yaml` by hand
+  ([ADR-0091](docs/adr/0091-browser-runs-on-a-fixed-model-with-granted-built-ins.md)).
+- `tools` grants built-in tools on top of the bound server's. Nothing is granted
+  by default. Accepted names: `read`, `write`, `edit`, `apply_patch`, `ls`,
+  `glob`, `grep`, `bash`, `tail`, `cancel_process`, `webfetch`. Any other name,
+  including `batch`, `lsp`, `skill`, `websearch`, `task` and MCP tools, is
+  ignored without an error or a log line. Granted tools are not frames: they
+  do not take `task_state` and do not count toward the one-action rule.
+  Granting `bash` lets an agent that reads untrusted web content run arbitrary
+  sandboxed commands, including network access.
 
 ## Know before you run
 

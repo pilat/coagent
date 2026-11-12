@@ -3,6 +3,7 @@
 - **Status:** Accepted
 - **Date:** 2026-11-10
 - **Amends:** [ADR-0067](0067-browser-subagent-supersedes-frames.md), [ADR-0069](0069-browser-takes-one-action-per-turn.md)
+- **Amended by:** [ADR-0091](0091-browser-runs-on-a-fixed-model-with-granted-built-ins.md) — a fixed browser model and effort, and operator-granted built-in tools
 
 ## Context
 

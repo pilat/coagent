@@ -44,7 +44,10 @@ const editAuthorityDoc = wholeDocumentRule + " " +
 	"The sandbox is one ordered list of allow/deny path rules under sandbox.rules and sandbox.projects.<path>.rules; " +
 	"the last matching rule decides. The current project's daemon-owned process output is always read-only after " +
 	"all operator rules. A rule that buries a project's own writability is refused. " +
-	"browser.mcp_name names the MCP server whose tools the browser subagent alone uses; without the section there is no browser subagent."
+	"browser.mcp_name names the MCP server whose tools the browser subagent alone uses; without the section there is no browser subagent. " +
+	"Optional browser.model (an id from models) pins every new browser child; browser.effort requires it and must be " +
+	"one of that model's effort levels. browser.tools lists built-in tool ids the browser may also use; " +
+	"ids the browser cannot be granted are ignored."
 
 const documentParamDoc = "The COMPLETE configuration YAML: the full current " + configDisplayPath +
 	" with only the requested change applied. It replaces the entire configuration; any section or entry " +

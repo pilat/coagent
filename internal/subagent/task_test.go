@@ -67,7 +67,7 @@ func (m *mockSpawner) LinkPending(ctx context.Context, parentID int64, taskCallI
 }
 
 func taskToolWith(sp *mockSpawner) tool.Tool {
-	return NewTaskTool(sp, 7, nil, nil)
+	return NewTaskTool(sp, 7, nil, nil, registry.BrowserSettings{})
 }
 
 func taskToolWithSkills(sp *mockSpawner, skills ...*loader.Skill) tool.Tool {
@@ -76,11 +76,11 @@ func taskToolWithSkills(sp *mockSpawner, skills ...*loader.Skill) tool.Tool {
 		catalog.RegisterSkill(skill)
 	}
 
-	return NewTaskTool(sp, 7, catalog, nil)
+	return NewTaskTool(sp, 7, catalog, nil, registry.BrowserSettings{})
 }
 
 func TestTaskToolBrowserAvailability(t *testing.T) {
-	task := NewTaskTool(&mockSpawner{}, 7, loader.New(), nil).(*taskTool)
+	task := NewTaskTool(&mockSpawner{}, 7, loader.New(), nil, registry.BrowserSettings{}).(*taskTool)
 	params := TaskParams{Prompt: "inspect", Description: "browse", SubagentType: string(registry.AgentTypeBrowser)}
 	assert.NotContains(t, string(task.Parameters()), `"browser"`)
 	assert.NotContains(t, task.Description(), "browser")
@@ -101,9 +101,9 @@ func TestTaskToolReservedSubagentDoesNotShadowBrowser(t *testing.T) {
 
 	ldr := loader.New()
 	ldr.RegisterSubagent(&loader.Subagent{Name: "browser", Description: "shadow"})
-	task := NewTaskTool(&mockSpawner{}, 7, ldr, nil).(*taskTool)
+	task := NewTaskTool(&mockSpawner{}, 7, ldr, nil, registry.BrowserSettings{}).(*taskTool)
 	task.SetFramesAvailable(true)
-	browser, ok := registry.NewSet(nil).Get(registry.AgentTypeBrowser)
+	browser, ok := registry.NewSet(nil, registry.BrowserSettings{}).Get(registry.AgentTypeBrowser)
 	require.True(t, ok)
 
 	description := task.Description()
@@ -120,7 +120,7 @@ func TestTaskTool_NilLoaderReturnsUnavailable(t *testing.T) {
 			t.Parallel()
 
 			sp := &mockSpawner{}
-			task := NewTaskTool(sp, 7, nil, nil)
+			task := NewTaskTool(sp, 7, nil, nil, registry.BrowserSettings{})
 			params, err := json.Marshal(TaskParams{
 				Skill: "review", Description: "review task", SubagentType: "general", Background: background,
 			})
@@ -185,7 +185,7 @@ func TestTaskTool_BlockingReplayDoesNotResolveSkillAgain(t *testing.T) {
 	sp := &mockSpawner{linkPendingFn: func(context.Context, int64, string) (bool, error) {
 		return true, nil
 	}}
-	task := NewTaskTool(sp, 7, nil, nil)
+	task := NewTaskTool(sp, 7, nil, nil, registry.BrowserSettings{})
 	params, err := json.Marshal(TaskParams{
 		Skill: "removed-skill", Description: "task", SubagentType: "general",
 	})
@@ -444,7 +444,7 @@ func TestTaskTool_ResolvesAgentTypeModel(t *testing.T) {
 	sp := &mockSpawner{}
 	catalog := loader.New()
 	catalog.RegisterSubagent(&loader.Subagent{Name: "reviewer", Model: "agent-model"})
-	tt := NewTaskTool(sp, 7, catalog, nil)
+	tt := NewTaskTool(sp, 7, catalog, nil, registry.BrowserSettings{})
 
 	params, _ := json.Marshal(TaskParams{
 		Prompt:       "review it",
@@ -498,7 +498,7 @@ func TestTaskTool_RejectsUnknownSubagentType(t *testing.T) {
 }
 
 func TestTaskTool_NoSpawnerErrors(t *testing.T) {
-	tt := NewTaskTool(nil, 0, nil, nil)
+	tt := NewTaskTool(nil, 0, nil, nil, registry.BrowserSettings{})
 
 	params, _ := json.Marshal(TaskParams{
 		Prompt:       "do something",
@@ -526,7 +526,7 @@ func TestTaskTool_OnlyTaggedModelsAreExplicitCandidates(t *testing.T) {
 	tt := NewTaskTool(sp, 7, nil, []ModelInfo{
 		{ID: "untagged", Name: "Hidden"},
 		{ID: "tagged", Name: "Candidate", Tags: []string{"coding", "fast"}},
-	})
+	}, registry.BrowserSettings{})
 
 	assert.Contains(t, tt.Description(), "inherit (default)")
 	assert.Contains(t, tt.Description(), "tagged: Candidate (tags: coding, fast)")
@@ -549,8 +549,70 @@ func TestTaskTool_OnlyTaggedModelsAreExplicitCandidates(t *testing.T) {
 }
 
 func TestTaskTool_AdvertisesInheritanceWithoutTaggedModels(t *testing.T) {
-	tt := NewTaskTool(&mockSpawner{}, 7, nil, []ModelInfo{{ID: "untagged", Name: "Hidden"}})
+	tt := NewTaskTool(&mockSpawner{}, 7, nil, []ModelInfo{{ID: "untagged", Name: "Hidden"}}, registry.BrowserSettings{})
 
 	assert.Contains(t, tt.Description(), "inherit (default): use the current session model")
 	assert.NotContains(t, tt.Description(), "untagged")
+}
+
+func TestTaskToolPinnedBrowserIgnoresModelParameter(t *testing.T) {
+	t.Parallel()
+
+	for _, background := range []bool{false, true} {
+		t.Run(fmt.Sprintf("background_%t", background), func(t *testing.T) {
+			t.Parallel()
+
+			sp := &mockSpawner{}
+			task := NewTaskTool(sp, 7, nil, []ModelInfo{{ID: "tagged", Tags: []string{"fast"}}},
+				registry.BrowserSettings{Model: "cheap", Effort: "low", Tools: []string{"write", "read"}}).(*taskTool)
+			task.SetFramesAvailable(true)
+			params, err := json.Marshal(TaskParams{
+				Prompt: "browse", Description: "browse", SubagentType: "browser",
+				Model: "not-a-candidate", Background: background,
+			})
+			require.NoError(t, err)
+
+			_, err = task.Execute(tool.WithCallID(context.Background(), "call-1"), params)
+			if !background {
+				require.ErrorIs(t, err, tool.ErrSuspend)
+			} else {
+				require.NoError(t, err)
+			}
+
+			assert.Empty(t, sp.lastReq.Model)
+			assert.Equal(t, "cheap", sp.lastReq.AgentModel)
+			assert.Equal(t, "low", sp.lastReq.ReasoningLevel)
+
+			description := task.Description()
+			assert.Contains(t, description, "Also has built-in tools: read, write.")
+			assert.Contains(t, description, "Browser runs on a fixed model")
+		})
+	}
+}
+
+func TestTaskToolUnpinnedBrowserKeepsModelPrecedence(t *testing.T) {
+	t.Parallel()
+
+	sp := &mockSpawner{}
+	task := NewTaskTool(sp, 7, nil, []ModelInfo{{ID: "tagged", Tags: []string{"fast"}}},
+		registry.BrowserSettings{}).(*taskTool)
+	task.SetFramesAvailable(true)
+	ctx := tool.WithCallID(context.Background(), "call-1")
+
+	bad, _ := json.Marshal(
+		TaskParams{Prompt: "b", Description: "b", SubagentType: "browser", Model: "nope", Background: true},
+	)
+	_, err := task.Execute(ctx, bad)
+	require.ErrorContains(t, err, `model "nope" is not an advertised tagged subagent candidate`)
+
+	good, _ := json.Marshal(
+		TaskParams{Prompt: "b", Description: "b", SubagentType: "browser", Model: "tagged", Background: true},
+	)
+	_, err = task.Execute(ctx, good)
+	require.NoError(t, err)
+	assert.Equal(t, SpawnRequest{
+		ParentID: 7, AgentType: "browser", Prompt: "b", Model: "tagged", TaskCallID: "call-1",
+	}, sp.lastReq)
+	assert.NotContains(t, task.Description(), "Also has built-in tools")
+	assert.NotContains(t, task.Description(), "fixed model")
 }

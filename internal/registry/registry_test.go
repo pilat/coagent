@@ -11,7 +11,7 @@ import (
 func TestFrameSessionIsBrowserOnly(t *testing.T) {
 	t.Parallel()
 
-	set := NewSet(nil)
+	set := NewSet(nil, BrowserSettings{})
 	for name := range builtinAgentTypes {
 		cfg, ok := set.Get(name)
 		require.True(t, ok)
@@ -25,8 +25,14 @@ func TestFrameSessionIsBrowserOnly(t *testing.T) {
 func TestNewSet_IsolatesSameNamedSubagents(t *testing.T) {
 	name := AgentType("reviewer")
 
-	setA := NewSet([]AgentTypeConfig{{Name: name, Mode: ModeSubagent, Tools: []string{"read"}, Model: "model-a"}})
-	setB := NewSet([]AgentTypeConfig{{Name: name, Mode: ModeSubagent, Tools: []string{"bash"}, Model: "model-b"}})
+	setA := NewSet(
+		[]AgentTypeConfig{{Name: name, Mode: ModeSubagent, Tools: []string{"read"}, Model: "model-a"}},
+		BrowserSettings{},
+	)
+	setB := NewSet(
+		[]AgentTypeConfig{{Name: name, Mode: ModeSubagent, Tools: []string{"bash"}, Model: "model-b"}},
+		BrowserSettings{},
+	)
 
 	a, ok := setA.Get(name)
 	require.True(t, ok)
@@ -46,7 +52,7 @@ func TestNewSet_NormalizesSubagents(t *testing.T) {
 
 	set := NewSet([]AgentTypeConfig{{
 		Name: name, Mode: ModeSubagent, Tools: []string{"*"}, Model: "model-a", Prompt: "custom prompt",
-	}})
+	}}, BrowserSettings{})
 
 	cfg, ok := set.Get(name)
 	require.True(t, ok)
@@ -61,7 +67,7 @@ func TestNewSet_NormalizesSubagents(t *testing.T) {
 func TestNewSet_SubagentWithoutToolsInheritsFullInventory(t *testing.T) {
 	name := AgentType("docs-writer")
 
-	set := NewSet([]AgentTypeConfig{{Name: name, Mode: ModeSubagent}})
+	set := NewSet([]AgentTypeConfig{{Name: name, Mode: ModeSubagent}}, BrowserSettings{})
 
 	all := []string{"read", "write", "bash", "todoread", "todowrite"}
 	assert.Equal(t, []string{"read", "write", "bash"}, set.FilterTools(all, name, func(string) bool { return false }))
@@ -70,13 +76,16 @@ func TestNewSet_SubagentWithoutToolsInheritsFullInventory(t *testing.T) {
 func TestNewSet_SubagentWithExplicitlyEmptyToolsStaysToolless(t *testing.T) {
 	name := AgentType("mute")
 
-	set := NewSet([]AgentTypeConfig{{Name: name, Mode: ModeSubagent, Tools: []string{}}})
+	set := NewSet([]AgentTypeConfig{{Name: name, Mode: ModeSubagent, Tools: []string{}}}, BrowserSettings{})
 
 	assert.Empty(t, set.FilterTools([]string{"read", "write"}, name, func(string) bool { return false }))
 }
 
 func TestNewSet_ProjectSubagentShadowsBuiltIn(t *testing.T) {
-	set := NewSet([]AgentTypeConfig{{Name: AgentTypeGeneral, Mode: ModeSubagent, Description: "custom general"}})
+	set := NewSet(
+		[]AgentTypeConfig{{Name: AgentTypeGeneral, Mode: ModeSubagent, Description: "custom general"}},
+		BrowserSettings{},
+	)
 
 	cfg, ok := set.Get(AgentTypeGeneral)
 	require.True(t, ok)
@@ -86,12 +95,12 @@ func TestNewSet_ProjectSubagentShadowsBuiltIn(t *testing.T) {
 func TestNewSet_ProjectExploreOverrideKeepsFullContext(t *testing.T) {
 	t.Parallel()
 
-	builtins := NewSet(nil)
+	builtins := NewSet(nil, BrowserSettings{})
 	builtInExplore, ok := builtins.Get(AgentTypeExplore)
 	require.True(t, ok)
 	assert.True(t, builtInExplore.OmitProjectContext)
 
-	overridden := NewSet([]AgentTypeConfig{{Name: AgentTypeExplore, Mode: ModeSubagent}})
+	overridden := NewSet([]AgentTypeConfig{{Name: AgentTypeExplore, Mode: ModeSubagent}}, BrowserSettings{})
 	projectExplore, ok := overridden.Get(AgentTypeExplore)
 	require.True(t, ok)
 	assert.False(t, projectExplore.OmitProjectContext)
@@ -102,7 +111,7 @@ func TestNewSet_ClonesProjectToolsBeforeNormalization(t *testing.T) {
 
 	tools := make([]string, 1, 4)
 	tools[0] = "read"
-	set := NewSet([]AgentTypeConfig{{Name: "reviewer", Mode: ModeSubagent, Tools: tools}})
+	set := NewSet([]AgentTypeConfig{{Name: "reviewer", Mode: ModeSubagent, Tools: tools}}, BrowserSettings{})
 
 	tools[0] = "bash"
 	tools = append(tools, "write")
@@ -116,7 +125,7 @@ func TestNewSet_ClonesProjectToolsBeforeNormalization(t *testing.T) {
 func TestSet_GetReturnsClonedTools(t *testing.T) {
 	t.Parallel()
 
-	set := NewSet(nil)
+	set := NewSet(nil, BrowserSettings{})
 
 	cfg, ok := set.Get(AgentTypeExplore)
 	require.True(t, ok)
@@ -130,7 +139,7 @@ func TestSet_GetReturnsClonedTools(t *testing.T) {
 func TestSet_ListSubagentsReturnsClonedTools(t *testing.T) {
 	t.Parallel()
 
-	set := NewSet([]AgentTypeConfig{{Name: "reviewer", Mode: ModeSubagent, Tools: []string{"read"}}})
+	set := NewSet([]AgentTypeConfig{{Name: "reviewer", Mode: ModeSubagent, Tools: []string{"read"}}}, BrowserSettings{})
 
 	configs := set.ListSubagents()
 	for i := range configs {
@@ -155,7 +164,7 @@ func TestSet_ListSubagentsDeterministic(t *testing.T) {
 	set := NewSet([]AgentTypeConfig{
 		{Name: "zeta", Mode: ModeSubagent},
 		{Name: "alpha", Mode: ModeSubagent},
-	})
+	}, BrowserSettings{})
 
 	subagents := set.ListSubagents()
 	names := make([]string, 0, len(subagents))
@@ -168,7 +177,7 @@ func TestSet_ListSubagentsDeterministic(t *testing.T) {
 }
 
 func TestSet_FilterTools(t *testing.T) {
-	set := NewSet(nil)
+	set := NewSet(nil, BrowserSettings{})
 	all := []string{"read", "write", "todoread", "todowrite", "bash"}
 
 	general := set.FilterTools(all, AgentTypeGeneral, func(string) bool { return false })
@@ -190,7 +199,7 @@ func TestBrowserToolVisibility(t *testing.T) {
 	set := NewSet([]AgentTypeConfig{
 		{Name: "custom", Mode: ModeSubagent, Tools: []string{"mcp__playwright__click", "read"}},
 		{Name: AgentTypeBrowser, Mode: ModeSubagent, Tools: []string{"*"}, Description: "shadow"},
-	})
+	}, BrowserSettings{})
 	all := []string{"read", "mcp__playwright__click", "mcp__playwright__snapshot", "mcp__other__click"}
 	for _, agent := range []AgentType{AgentTypeBuild, AgentTypeGeneral, "custom"} {
 		assert.NotContains(t, set.FilterTools(all, agent, isFrame), "mcp__playwright__click")
@@ -205,4 +214,61 @@ func TestBrowserToolVisibility(t *testing.T) {
 	require.True(t, ok)
 	assert.NotEqual(t, "shadow", cfg.Description)
 	assert.True(t, cfg.OmitProjectContext)
+}
+
+func TestBrowserSettingsGrantOnlyWhitelistedBuiltins(t *testing.T) {
+	isFrame := func(id string) bool { return strings.HasPrefix(id, "mcp__playwright__") }
+	set := NewSet([]AgentTypeConfig{{Name: "custom", Mode: ModeSubagent, Tools: []string{"*"}}}, BrowserSettings{
+		Model: "cheap", Effort: "low",
+		Tools: []string{"read", "batch", "todowrite", "task", "mcp__other__x", "nope", "read"},
+	})
+	all := []string{"read", "write", "batch", "todowrite", "task", "mcp__other__x", "mcp__playwright__click"}
+
+	cfg, ok := set.Get(AgentTypeBrowser)
+	require.True(t, ok)
+	assert.Equal(t, []string{"read"}, cfg.GrantedTools)
+	assert.Equal(t, "cheap", cfg.Model)
+	assert.True(t, cfg.PinnedModel)
+	assert.Equal(t, "low", cfg.ReasoningLevel)
+	assert.Equal(t,
+		"Drive the configured browser surface. Also has built-in tools: read. "+browserDescriptionTail,
+		cfg.Description)
+	assert.Equal(t, []string{"read", "mcp__playwright__click"}, set.FilterTools(all, AgentTypeBrowser, isFrame))
+
+	cfg.GrantedTools[0] = "mutated"
+	again, _ := set.Get(AgentTypeBrowser)
+	assert.Equal(t, []string{"read"}, again.GrantedTools)
+
+	for _, agent := range []AgentType{AgentTypeGeneral, AgentTypeExplore, "custom"} {
+		got, _ := set.Get(agent)
+		assert.Empty(t, got.GrantedTools)
+		assert.False(t, got.PinnedModel)
+		assert.NotContains(t, set.FilterTools(all, agent, isFrame), "mcp__playwright__click")
+	}
+}
+
+func TestBrowserSettingsKeepWhitelistOrder(t *testing.T) {
+	cfg, _ := NewSet(nil, BrowserSettings{Tools: []string{"webfetch", "bash", "read"}}).Get(AgentTypeBrowser)
+	assert.Equal(t, []string{"read", "bash", "webfetch"}, cfg.GrantedTools)
+	assert.False(t, cfg.PinnedModel)
+}
+
+func TestEmptyBrowserSettingsKeepTodaysBrowser(t *testing.T) {
+	isFrame := func(id string) bool { return strings.HasPrefix(id, "mcp__playwright__") }
+	cfg, _ := NewSet(nil, BrowserSettings{}).Get(AgentTypeBrowser)
+	assert.Equal(t,
+		"Drive the configured browser surface with its tools only. Receives no project context; supply a "+
+			"self-contained goal, constraints, starting URL or site, and the facts to return.",
+		cfg.Description)
+	assert.Nil(t, cfg.GrantedTools)
+	assert.Empty(t, cfg.Model)
+	assert.Empty(t, cfg.ReasoningLevel)
+	assert.Equal(
+		t,
+		[]string{"mcp__playwright__click"},
+		NewSet(
+			nil,
+			BrowserSettings{},
+		).FilterTools([]string{"read", "mcp__playwright__click"}, AgentTypeBrowser, isFrame),
+	)
 }

@@ -380,7 +380,7 @@ func TestScenario_BrowserRunsOnlyFirstActionInMessage(t *testing.T) {
 	require.NotNil(t, second)
 	assert.False(t, first.ToolError)
 	assert.True(t, second.ToolError)
-	assert.Contains(t, second.Content, "Only one action")
+	assert.Contains(t, second.Content, "Only one surface action")
 }
 
 func TestScenario_BrowserUnavailableWithoutBoundServer(t *testing.T) {
@@ -505,6 +505,64 @@ func browserScenarioPNG(t *testing.T) []byte {
 	var out bytes.Buffer
 	require.NoError(t, png.Encode(&out, image.NewRGBA(image.Rect(0, 0, 2, 1))))
 	return out.Bytes()
+}
+
+// The task tool ownerTools builds must pin a browser child to browser.model/effort,
+// whatever model the root asks for and whatever level the root runs at.
+func TestScenario_BrowserChildRunsOnConfiguredModelAndEffort(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX fake MCP server")
+	}
+	dir := t.TempDir()
+	server := filepath.Join(dir, "browser.sh")
+	log := filepath.Join(dir, "calls.log")
+	require.NoError(t, os.WriteFile(server, []byte(browserScenarioScript), 0o700))
+	require.NoError(t, os.WriteFile(log, nil, 0o600))
+	respond := func(_ string, msgs []llmwire.Message) *llmwire.Response {
+		if hasUserContaining(msgs, "BROWSER_CHILD") {
+			return textReply("browser complete")
+		}
+		if toolResultForCallID(msgs, "browser-task") != nil {
+			return textReply("root complete")
+		}
+		return callReply(
+			"browser-task",
+			tool.IDTask,
+			`{"prompt":"BROWSER_CHILD open example.test","description":"browse","subagent_type":"browser","model":"fake-model"}`,
+		)
+	}
+	efforts := &config.ReasoningSpec{Supported: true, NativeEffort: true, Efforts: []string{"low", "medium", "high"}}
+	h := newHarness(
+		t,
+		harnessOptions{dbPath: filepath.Join(dir, "session.db"), respond: respond, configure: func(cfg *config.Config) {
+			cfg.UnifiedConfig = &config.UnifiedConfig{
+				Browser: &config.BrowserConfig{MCPName: "remote", Model: "cheap", Effort: "low"},
+				Models: []config.ModelEntry{
+					{
+						ID: "fake-model", ContextWindow: 200000, Reasoning: efforts,
+						EffortLevels: []string{"low", "medium", "high"}, DefaultEffort: "high",
+					},
+					{ID: "cheap", ContextWindow: 200000, Reasoning: efforts, EffortLevels: []string{"low", "high"}},
+				},
+			}
+		}},
+	)
+	require.NoError(t, h.mgr.mcpStore.Add(h.ctx, &h.projectID, mcpstore.ServerDef{
+		Name: "remote", Command: server, Args: []string{log}, Enabled: true,
+	}))
+	h.startInboxWake()
+	rootID, err := h.mgr.Send(h.ctx, h.projectID, "browse", "fake-model", nil)
+	require.NoError(t, err)
+	h.waitUntil("root completed", func() bool { return lastAssistantTextDTO(h.messages(rootID)) == "root complete" })
+	require.NotNil(t, h.linkByCall(rootID, "browser-task"))
+
+	root := h.session(rootID)
+	assert.Equal(t, "fake-model", root.Model)
+	assert.Equal(t, "high", root.ReasoningLevel)
+	child := h.session(h.linkByCall(rootID, "browser-task").ChildID)
+	assert.Equal(t, "browser", child.AgentType)
+	assert.Equal(t, "cheap", child.Model)
+	assert.Equal(t, "low", child.ReasoningLevel)
 }
 
 const browserScenarioScript = `#!/bin/sh

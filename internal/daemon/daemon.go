@@ -14,6 +14,7 @@ import (
 	"github.com/pilat/coagent/internal/logger"
 	"github.com/pilat/coagent/internal/mcpstore"
 	"github.com/pilat/coagent/internal/progressruntime"
+	"github.com/pilat/coagent/internal/registry"
 	"github.com/pilat/coagent/internal/schedule"
 	"github.com/pilat/coagent/internal/sessionbuild"
 	"github.com/pilat/coagent/internal/sessionbus"
@@ -44,6 +45,7 @@ type Service struct {
 	bus          *sessionbus.Bus
 	build        sessionbuild.BuildInput
 	models       models
+	browser      registry.BrowserSettings
 	life         *lifetime
 	runners      *runnerSet
 	trees        *treeLocks
@@ -84,6 +86,7 @@ func New(
 		routes:    &routes{child: make(map[int64]bool), owner: make(map[int64]string)},
 		life:      newLifetime(),
 		models:    newModels(cfg),
+		browser:   sessionbuild.BrowserSettings(cfg.UnifiedConfig),
 		clock:     newBudgetClock(),
 	}
 

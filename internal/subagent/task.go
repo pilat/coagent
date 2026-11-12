@@ -32,6 +32,7 @@ type taskTool struct {
 	models           []ModelInfo
 	modelCatalog     []ModelInfo
 	skillCatalog     loader.SkillCatalog
+	browser          registry.BrowserSettings
 	browserAvailable bool
 }
 
@@ -43,7 +44,9 @@ var (
 func (t *taskTool) SetFramesAvailable(available bool) { t.browserAvailable = available }
 
 // NewTaskTool observes the loader after session assembly has loaded project artifacts.
-func NewTaskTool(sp Spawner, parentID int64, ldr *loader.Service, models []ModelInfo) tool.Tool {
+func NewTaskTool(
+	sp Spawner, parentID int64, ldr *loader.Service, models []ModelInfo, browser registry.BrowserSettings,
+) tool.Tool {
 	candidates := make([]ModelInfo, 0, len(models))
 	for _, model := range models {
 		if len(model.Tags) != 0 {
@@ -53,7 +56,7 @@ func NewTaskTool(sp Spawner, parentID int64, ldr *loader.Service, models []Model
 
 	t := &taskTool{
 		spawner: sp, parentID: parentID, loader: ldr, models: models,
-		modelCatalog: candidates,
+		modelCatalog: candidates, browser: browser,
 	}
 	if ldr != nil {
 		t.skillCatalog = ldr
@@ -90,6 +93,10 @@ func (t *taskTool) Description() string {
 
 	if t.browserAvailable {
 		browserGuidance = "\nFor browser, provide a self-contained assignment with the goal, constraints, starting URL or site if known, and what to return. Start a browser subagent only when the user's request needs it, never on your own initiative. Run at most one browser subagent at a time because the browser profile cannot serve concurrent clients. For related browser follow-ups, launch a new browser task and include the previous result's findings (names, addresses, URLs, verdicts) along with the goal and constraints. Use send_to_subagent with the same browser child only to continue an unfinished multi-step flow that needs its action history.\n"
+		if t.browser.Model != "" {
+			browserGuidance += "Browser runs on a fixed model; a model parameter for it is ignored.\n"
+		}
+
 		contextOmission = "built-in explore and browser skip them"
 		followupTypes = "general or custom"
 	}
@@ -203,15 +210,7 @@ func (t *taskTool) executeBackground(ctx context.Context, p TaskParams) (*tool.R
 		return nil, errors.New("background task requires a tool call id")
 	}
 
-	res, err := t.spawner.Spawn(ctx, SpawnRequest{
-		ParentID:   t.parentID,
-		AgentType:  p.SubagentType,
-		AgentModel: t.agentModel(p.SubagentType),
-		Prompt:     p.Prompt,
-		Model:      p.Model,
-		Blocking:   false,
-		TaskCallID: callID,
-	})
+	res, err := t.spawner.Spawn(ctx, t.spawnRequest(p, false, callID))
 	if err != nil {
 		return nil, fmt.Errorf("spawn background subagent: %w", err)
 	}
@@ -262,15 +261,7 @@ func (t *taskTool) executeBlocking(ctx context.Context, p TaskParams) (*tool.Res
 		return nil, err
 	}
 
-	if _, err := t.spawner.Spawn(ctx, SpawnRequest{
-		ParentID:   t.parentID,
-		AgentType:  p.SubagentType,
-		AgentModel: t.agentModel(p.SubagentType),
-		Prompt:     p.Prompt,
-		Model:      p.Model,
-		Blocking:   true,
-		TaskCallID: callID,
-	}); err != nil {
+	if _, err := t.spawner.Spawn(ctx, t.spawnRequest(p, true, callID)); err != nil {
 		return nil, fmt.Errorf("spawn subagent: %w", err)
 	}
 
@@ -295,7 +286,7 @@ func (t *taskTool) validateParams(p TaskParams) error {
 		return errors.New("subagent_type is required")
 	}
 
-	if p.Model != "" && !t.isCandidateModel(p.Model) {
+	if p.Model != "" && !t.pinnedModel(p.SubagentType) && !t.isCandidateModel(p.Model) {
 		return fmt.Errorf("model %q is not an advertised tagged subagent candidate", p.Model)
 	}
 
@@ -338,15 +329,35 @@ func (t *taskTool) isCandidateModel(id string) bool {
 	return false
 }
 
-// agentModel returns the agent type's configured model override, or "" when the
-// type has none (the daemon then falls back to task param / parent model).
-func (t *taskTool) agentModel(subagentType string) string {
-	cfg, ok := t.agentSet().Get(registry.AgentType(subagentType))
-	if !ok {
-		return ""
+// spawnRequest carries the agent type's model and effort; the daemon resolves the
+// rest. A pinned type drops the task's model so its own wins.
+func (t *taskTool) spawnRequest(p TaskParams, blocking bool, callID string) SpawnRequest {
+	req := SpawnRequest{
+		ParentID:   t.parentID,
+		AgentType:  p.SubagentType,
+		Prompt:     p.Prompt,
+		Model:      p.Model,
+		Blocking:   blocking,
+		TaskCallID: callID,
 	}
 
-	return cfg.Model
+	cfg, ok := t.agentSet().Get(registry.AgentType(p.SubagentType))
+	if !ok {
+		return req
+	}
+
+	req.AgentModel, req.ReasoningLevel = cfg.Model, cfg.ReasoningLevel
+	if cfg.PinnedModel {
+		req.Model = ""
+	}
+
+	return req
+}
+
+func (t *taskTool) pinnedModel(subagentType string) bool {
+	cfg, ok := t.agentSet().Get(registry.AgentType(subagentType))
+
+	return ok && cfg.PinnedModel
 }
 
 func taskMetadata(id int64) string {
@@ -398,5 +409,5 @@ func (t *taskTool) agentSet() *registry.Set {
 		}
 	}
 
-	return registry.NewSet(configs)
+	return registry.NewSet(configs, t.browser)
 }

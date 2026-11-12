@@ -99,7 +99,7 @@ func prepareClientInput(ctx context.Context, in *BuildInput) (*registry.Set, reg
 		in.Loader = loader.New(in.MarketplaceCache)
 	}
 
-	set := registry.NewSet(loadProjectSubagents(ctx, *in, in.WorkDir))
+	set := registry.NewSet(loadProjectSubagents(ctx, *in, in.WorkDir), BrowserSettings(cfg.UnifiedConfig))
 
 	agentType := registry.AgentType(in.Record.AgentType)
 	if agentType == "" {
@@ -119,6 +119,19 @@ func prepareClientInput(ctx context.Context, in *BuildInput) (*registry.Set, reg
 	}
 
 	return set, agent, nil
+}
+
+// BrowserSettings is the registry's view of the config's browser section.
+func BrowserSettings(uc *config.UnifiedConfig) registry.BrowserSettings {
+	if uc == nil || uc.Browser == nil {
+		return registry.BrowserSettings{}
+	}
+
+	return registry.BrowserSettings{
+		Model:  uc.Browser.Model,
+		Effort: uc.Browser.Effort,
+		Tools:  slices.Clone(uc.Browser.Tools),
+	}
 }
 
 // Models offering no effort choice must not receive an unsupported level.

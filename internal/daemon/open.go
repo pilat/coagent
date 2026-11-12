@@ -238,7 +238,7 @@ func (s *Service) activeProcessInfos(ctx context.Context, sessionID int64) []ses
 
 func (s *Service) ownerTools(rec *sessionstore.SessionRecord, ldr *loader.Service) []tool.Tool {
 	tools := []tool.Tool{
-		subagent.NewTaskTool(subagent.Spawner(s), rec.ID, ldr, s.models.infos),
+		subagent.NewTaskTool(subagent.Spawner(s), rec.ID, ldr, s.models.infos, s.browser),
 		subagent.NewGetSubagentResultTool(subagent.Spawner(s)), subagent.NewSendToSubagentTool(subagent.Spawner(s)),
 	}
 
