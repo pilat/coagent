@@ -24,7 +24,7 @@ func TestManager_Shutdown(t *testing.T) {
 	_, err = mgr.Send(ctx, pidB, "init", "", nil)
 	require.NoError(t, err)
 	mgr.Shutdown(t.Context(), 5*time.Second)
-	remaining, _ := runnerCounts(mgr.runners)
+	remaining := runnerRunningCount(mgr.runners)
 	assert.Zero(t, remaining, "all loops should be cleaned up after shutdown")
 }
 
@@ -127,10 +127,4 @@ func (s *blockingStartupProcesses) InterruptNonterminal(ctx context.Context) (in
 	close(s.entered)
 	<-s.release
 	return s.Service.InterruptNonterminal(ctx)
-}
-
-func runnerCounts(runners *runnerSet) (int, int) {
-	runners.mu.Lock()
-	defer runners.mu.Unlock()
-	return runners.running, runners.children
 }

@@ -18,7 +18,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/pilat/coagent/internal/backgroundprocess"
-	"github.com/pilat/coagent/internal/config"
 	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/llm/llmtest"
 	"github.com/pilat/coagent/internal/llmwire"
@@ -83,12 +82,8 @@ func TestHarnessScenario_CompletionNudgeAfterToolStopsOnce(t *testing.T) {
 	})
 	assert.Equal(t, 3, calls)
 	assert.Equal(t, 1, countToolResultsFor(h.messages(root), "read"))
-	var nudges, finals int
-	for _, row := range h.messages(root) {
-		if row.Role == llmwire.RoleUser && strings.Contains(row.Content, "You ended your previous response") {
-			nudges++
-		}
-	}
+	nudges := countUserCompletions(h.messages(root), "You ended your previous response")
+	var finals int
 	for _, row := range h.outbox(root) {
 		if row.Type == "message" &&
 			strings.Contains(row.Content, "complete answer after checking work") {
@@ -174,12 +169,7 @@ func TestHarnessScenario_CompletionCheckEmptyBackgroundYieldYieldsSilently(t *te
 	close(processRunning)
 	h.waitAnswer(root, "")
 	assert.Equal(t, int64(1), calls.Load(), "an empty wake yield ends the activation immediately")
-	var nudges int
-	for _, message := range h.messages(root) {
-		if message.Role == llmwire.RoleUser && strings.Contains(message.Content, "empty response") {
-			nudges++
-		}
-	}
+	nudges := countUserCompletions(h.messages(root), "empty response")
 	assert.Zero(t, nudges, "an empty wake yield appends no empty-stop nudge")
 	require.NoError(t, os.WriteFile(release, []byte("go"), 0o644))
 	collector.waitMessage(root, "resumed after silent yield")
@@ -223,7 +213,7 @@ func TestControllerManagerSubscriptionIsExactAcrossRestart(t *testing.T) {
 	require.NoError(t, firstDB.Close())
 	second := newHarness(t, harnessOptions{dbPath: dbPath, respond: trivialRespond})
 	mgr := second.mgr
-	controllers := newTestController(mgr, &config.Config{}, nil, nil)
+	controllers := newTestController(mgr)
 	subscriptions := make(map[string]<-chan controllerapi.SessionNotification, 10)
 	for i := range 10 {
 		managerID := fmt.Sprintf("manager-%d", i)
@@ -232,7 +222,7 @@ func TestControllerManagerSubscriptionIsExactAcrossRestart(t *testing.T) {
 	mgr.NotifySession(record.ID, sessionevent.Notification{Type: sessionevent.NotifyMessage, Message: "after restart"})
 	for managerID, subscription := range subscriptions {
 		if managerID == "manager-7" {
-			notification := requireManagerNotification(t, subscription)
+			notification := requireNotification(t, subscription)
 			assert.Equal(t, "after restart", notification.Notification.Message)
 			continue
 		}
@@ -495,20 +485,10 @@ func TestHarnessScenario_AgentCancelsOwnedBackgroundProcess(t *testing.T) {
 			return textReply("unused background process cancelled")
 		}
 		if hasToolResultFor(messages, "bash") {
-			const prefix = "Background process ID (not an operating-system PID): "
-			content := ""
-			for _, v := range slices.Backward(messages) {
-				if v.Role == llmwire.RoleTool && v.ToolName == "bash" {
-					content = v.Content
-					break
-				}
-			}
-
-			_, after, found := strings.Cut(content, prefix)
-			if !found {
+			id := backgroundProcessID(messages)
+			if id == "" {
 				return textReply("background process ID missing")
 			}
-			id, _, _ := strings.Cut(after, "\n")
 			processID.Store(id)
 			return callReply("cancel-background", tool.IDCancelProcess, `{"process_id":"`+id+`"}`)
 		}
@@ -526,10 +506,7 @@ func TestHarnessScenario_AgentCancelsOwnedBackgroundProcess(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, backgroundprocess.StateCancelled, process.State)
 	assert.Equal(t, backgroundprocess.IntentAgentCancelled, process.HostIntent)
-	var completions int
-	require.NoError(t, h.db.QueryRowContext(h.ctx, `SELECT COUNT(*) FROM session_inbox
-		WHERE source = 'process' AND json_extract(attributes, '$.process_id') = ?`, id).Scan(&completions))
-	assert.Zero(t, completions, "explicit cancellation must not schedule a later completion")
+	assert.Zero(t, h.processInputs(id), "explicit cancellation must not schedule a later completion")
 }
 
 func TestHarnessScenario_ProcessCompletionAtIdleTransition(t *testing.T) {
@@ -625,13 +602,7 @@ func TestHarnessScenario_ProcessCompletionInterruptsSleep(t *testing.T) {
 	assert.Equal(t, int64(3), modelCalls.Load())
 	assert.Equal(t, 1, countUserCompletions(messages, "<process_completion>"))
 	assert.Equal(t, 1, countToolResultsFor(messages, tool.IDSleep))
-	toolOutput := ""
-	for _, v := range slices.Backward(messages) {
-		if v.Role == llmwire.RoleTool && v.ToolName == tool.IDSleep {
-			toolOutput = v.Content
-			break
-		}
-	}
+	toolOutput := lastToolResultContent(messages, tool.IDSleep)
 	assert.Contains(t, toolOutput, "Sleep interrupted")
 	assert.Equal(t, backgroundprocess.StateCompleted,
 		h.waitProcess(process.ID, backgroundprocess.StateCompleted).State)
@@ -790,7 +761,7 @@ func TestPublishRoutingModel_ManagerOwnershipSurvivesTransitions(t *testing.T) {
 	require.NoError(t, err)
 	model[newAlphaID] = model[alphaID]
 	assertModelDeliveries(t, subscribers, "alpha", alphaID, "")
-	killed := requireManagerNotification(t, subscribers["alpha"])
+	killed := requireNotification(t, subscribers["alpha"])
 	assert.Equal(t, alphaID, killed.SessionID)
 	assert.Equal(t, sessionevent.NotifyStateChanged, killed.Notification.Type)
 	assert.Equal(t, controllerapi.StateIdle, killed.Notification.Status)
@@ -843,7 +814,7 @@ func TestHarnessScenario_LengthAttemptIsDiscardedBeforeToolExecution(t *testing.
 	sessionID := h.send("exercise response recovery", managerAttrs(scenarioManagerID))
 	collector.waitMessage(sessionID, "recovered complete answer")
 	collector.waitIdleAfter(sessionID, "recovered complete answer")
-	messages := transcriptOf(h, sessionID)
+	messages := h.messages(sessionID)
 	assert.Zero(t, countToolResultsFor(messages, "todowrite"))
 	assert.Zero(t, countToolResultsFor(messages, "bash"))
 	assert.NotContains(t, scenarioTranscriptText(messages), "rejected private fragment")
@@ -907,9 +878,7 @@ func TestScenario_StartFailureParksWithoutConsumingInput(t *testing.T) {
 			configure: withKnownModels([]string{"removed-model", "working-model"}),
 			clientFor: knownModelClient(
 				[]string{"removed-model", "working-model"},
-				func(string, []llmwire.Message) *llmwire.Response {
-					return textReply("done")
-				},
+				trivialRespond,
 			),
 		},
 	)
@@ -953,9 +922,7 @@ func TestScenario_RepeatedStartFailureCreatesOneOutput(t *testing.T) {
 		t,
 		harnessOptions{
 			configure: withKnownModels([]string{"working-model"}),
-			clientFor: knownModelClient([]string{"working-model"}, func(string, []llmwire.Message) *llmwire.Response {
-				return textReply("done")
-			}),
+			clientFor: knownModelClient([]string{"working-model"}, trivialRespond),
 		},
 	)
 	record, err := h.store.CreateSession(h.ctx, h.projectID, "removed-model", "", managerAttrs("test-manager"))
@@ -981,9 +948,7 @@ func TestScenario_RepeatedStartFailureCreatesOneOutput(t *testing.T) {
 
 func TestScenario_StartFailureRestartKeepsOneReceipt(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "restart.db")
-	respond := func(string, []llmwire.Message) *llmwire.Response {
-		return textReply("done")
-	}
+	respond := trivialRespond
 	first := newHarness(
 		t, harnessOptions{
 			dbPath:    dbPath,
@@ -1088,10 +1053,7 @@ func TestHarnessScenario_StatusIsAnsweredWhileABlockingChildIsOut(t *testing.T) 
 	h := newHarness(t, harnessOptions{respond: blockingCompactRespond(release)})
 	collector := h.collect()
 	defer closeOnce(release)
-	parentID := h.send("do work then spawn", nil)
-	link := h.waitLink(parentID, taskCallID)
-	require.True(t, link.Blocking)
-	h.waitUntil("parent suspended", func() bool { return !h.mgr.HasActiveLoop(parentID) })
+	parentID, link := parkOnBlockingChild(t, h)
 	h.say(parentID, "/status")
 	collector.waitFor(t, "status answered while the child is out", func(e []controllerapi.SessionNotification) bool {
 		return len(statusReports(e, parentID)) == 1
@@ -1206,16 +1168,6 @@ func TestScenario_StoppedRootAnswersStatusWithoutReactivating(t *testing.T) {
 	if idle != nil {
 		assert.Empty(t, idle.Reason, "read-only processing must not be mistaken for a lifecycle stop")
 	}
-}
-
-func countUserCompletions(messages []llmwire.Message, marker string) int {
-	count := 0
-	for _, message := range messages {
-		if message.Role == llmwire.RoleUser && strings.Contains(message.Content, marker) {
-			count++
-		}
-	}
-	return count
 }
 
 func assertModelDeliveries(

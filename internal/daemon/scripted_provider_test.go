@@ -3,7 +3,6 @@ package daemon
 import (
 	"bytes"
 	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -13,30 +12,22 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/pilat/coagent/internal/backgroundprocess"
-	"github.com/pilat/coagent/internal/budget"
 	"github.com/pilat/coagent/internal/config"
-	"github.com/pilat/coagent/internal/configapply"
-	"github.com/pilat/coagent/internal/configops"
 	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/llm"
 	"github.com/pilat/coagent/internal/llmwire"
 	"github.com/pilat/coagent/internal/mcpstore"
-	"github.com/pilat/coagent/internal/progressruntime"
-	"github.com/pilat/coagent/internal/schedule"
 	"github.com/pilat/coagent/internal/sessionbuild"
-	"github.com/pilat/coagent/internal/sessionbus"
 	"github.com/pilat/coagent/internal/sessionevent"
 	"github.com/pilat/coagent/internal/sessionstore"
-	"github.com/pilat/coagent/internal/subagent"
 	"github.com/pilat/coagent/internal/tool/builtin"
 )
 
@@ -195,13 +186,11 @@ type fakeMCPServer struct {
 // A held server delays every tool call until release, exposing cancellation and restart ordering.
 func newFakeMCPServer(t *testing.T, pong string, held bool) *fakeMCPServer {
 	t.Helper()
-	if runtime.GOOS == "windows" {
-		t.Skip("the fake MCP server is a POSIX shell script")
-	}
 	dir := t.TempDir()
 	f := &fakeMCPServer{path: filepath.Join(dir, "fakemcp.sh"), log: filepath.Join(dir, "events.log"), pong: pong}
 	if held {
 		f.release = filepath.Join(dir, "release")
+		require.NoError(t, syscall.Mkfifo(f.release, 0o600))
 	}
 	require.NoError(t, os.WriteFile(f.path, []byte(fakeMCPScript), 0o700))
 	require.NoError(t, os.WriteFile(f.log, nil, 0o600))
@@ -209,16 +198,25 @@ func newFakeMCPServer(t *testing.T, pong string, held bool) *fakeMCPServer {
 }
 
 func (f *fakeMCPServer) addParams(name, scope string) string {
-	args, err := json.Marshal([]string{f.log, f.pong, f.release})
+	args, err := json.Marshal(f.args())
 	if err != nil {
 		panic(err)
 	}
 	return `{"name":"` + name + `","scope":"` + scope + `","command":"` + f.path + `","args":` + string(args) + `}`
 }
 
+func (f *fakeMCPServer) args() []string {
+	return []string{f.log, f.pong, f.release}
+}
+
 func (f *fakeMCPServer) unblock(t *testing.T) {
 	t.Helper()
-	require.NoError(t, os.WriteFile(f.release, nil, 0o600))
+	release, err := os.OpenFile(f.release, os.O_RDWR, 0o600)
+	require.NoError(t, err)
+	_, err = release.WriteString("release\n")
+	require.NoError(t, err)
+	require.NoError(t, release.Close())
+	require.NoError(t, os.Remove(f.release))
 }
 
 func (f *fakeMCPServer) count(t *testing.T, event string) int {
@@ -273,12 +271,9 @@ func scriptedBuildInput(
 	store *sessionstore.Store,
 	mcp mcpstore.Store,
 	clientFor func(*config.Config) (llm.Client, error),
-	observers ...func(providerRequest),
+	observe func(providerRequest),
 ) sessionbuild.BuildInput {
 	t.Helper()
-	if cfg.WorkDir == "" {
-		cfg.WorkDir = t.TempDir()
-	}
 	var mu sync.Mutex
 	clients := make(map[scriptedClientKey]llm.Client)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -287,10 +282,8 @@ func scriptedBuildInput(
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		for _, observe := range observers {
-			if observe != nil {
-				observe(request)
-			}
+		if observe != nil {
+			observe(request)
 		}
 		mu.Lock()
 		clientKey := scriptedClientKey{request.SessionID, request.Model}
@@ -417,43 +410,6 @@ func scriptedBuildInput(
 		cfg.UnifiedConfig.Models[index].Provider = "scripted"
 	}
 	return sessionbuild.BuildInput{Config: cfg, Store: store, MCPStore: mcp, Resources: builtin.NewResources()}
-}
-
-func newScenarioDaemon(
-	ctx context.Context,
-	in sessionbuild.BuildInput,
-	store *sessionstore.Store,
-	links subagent.Store,
-	budgets budget.Service,
-	schedules schedule.Service,
-	model func() string,
-	db *sql.DB,
-) (*Service, backgroundprocess.Service) {
-	bus := sessionbus.New()
-	defaultModel := "fake-model"
-	if model != nil {
-		defaultModel = model()
-	}
-	if budgets == nil {
-		budgets = budget.New(store)
-	}
-	if schedules == nil {
-		schedules = schedule.NewService(schedule.NewStore(db, store), store)
-	}
-	in.Config.Model = defaultModel
-	mcp := in.MCPStore
-	if mcp == nil {
-		mcp = mcpstore.NewStore(db)
-	}
-	in.MCPStore = mcp
-	applier := configapply.New(
-		configops.New(filepath.Join(in.Config.WorkDir, "config.yaml"), filepath.Join(in.Config.WorkDir, "secrets")),
-	)
-	service := New(
-		ctx, in, store, links, budgets, backgroundprocess.NewStore(db, store), progressruntime.New(store), bus,
-		schedules, in.Config, mcp, applier,
-	)
-	return service, service.processes
 }
 
 func lifecycleInput(ctx context.Context, t *testing.T, s *Service, id int64, command string) *sessionstore.InboxInput {
@@ -634,18 +590,6 @@ func assertHarnessTraceForScenario(
 // Daemon and manager tests must consume the same trace artifacts to prevent contract drift.
 func harnessTracePath(name string) string {
 	return filepath.Join("..", "testdata", "harness_scenarios", name)
-}
-
-func readHarnessTraceFile(t *testing.T, path string) harnessTraceFile {
-	t.Helper()
-	data, err := os.ReadFile(path)
-	require.NoError(t, err, "missing recorded trace; regenerate with -update-traces")
-	decoder := json.NewDecoder(strings.NewReader(string(data)))
-	decoder.DisallowUnknownFields()
-	var file harnessTraceFile
-	require.NoError(t, decoder.Decode(&file))
-	require.NotEmpty(t, file.Trace)
-	return file
 }
 
 func writeHarnessTrace(t *testing.T, path string, file harnessTraceFile) {

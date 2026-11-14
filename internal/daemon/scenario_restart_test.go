@@ -18,8 +18,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/pilat/coagent/internal/backgroundprocess"
-	"github.com/pilat/coagent/internal/configapply"
-	"github.com/pilat/coagent/internal/configops"
 	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/llm/llmtest"
 	"github.com/pilat/coagent/internal/llmwire"
@@ -346,27 +344,19 @@ func TestIntegration_SweepRedeliversIdempotently(t *testing.T) {
 	h.mgr.resumeAfterRestart(ctx)
 	h.waitDelivered(childID)
 	h.waitUntil("parent completions", func() bool {
-		count := 0
-		needle := "child_id: " + strconv.FormatInt(childID, 10)
-		for _, message := range h.messages(parent) {
-			if message.Role == llmwire.RoleUser && strings.Contains(message.Content, "<subagent_completion>") &&
-				strings.Contains(message.Content, needle) {
-				count++
-			}
-		}
-		return count >= 1
+		return countSubagentCompletions(h.messages(parent), childID) >= 1
 	})
 	h.waitAnswer(parent, "")
 	msgs := h.messages(parent)
 	require.NoError(t, llmtest.ValidateToolPairing(msgs))
-	assert.Equal(t, 1, restartCountSubagentCompletions(msgs, childID), "exactly one record after first sweep")
+	assert.Equal(t, 1, countSubagentCompletions(msgs, childID), "exactly one record after first sweep")
 
 	// A delivered link is excluded from the restart sweep, so redelivery adds no second completion.
 	h.mgr.resumeAfterRestart(ctx)
 	h.waitAnswer(parent, "")
 	msgs = h.messages(parent)
 	assert.Equal(
-		t, 1, restartCountSubagentCompletions(
+		t, 1, countSubagentCompletions(
 			msgs, childID,
 		), "still exactly one record after second sweep (never zero)",
 	)
@@ -396,9 +386,9 @@ func TestHarnessModel_PendingExternalCallOwnershipAgreesAfterRestart(t *testing.
 	t.Run("a task loses its producer and is closed", func(t *testing.T) {
 		dbPath := filepath.Join(t.TempDir(), "orphan.db")
 		configDir := newApplyConfigDir(t)
-		var seen modelRequests
+		var seen skillRecorder
 		sessionID := stageTaskAndStop(t, dbPath, configDir, &seen)
-		second := newExternalCallDaemon(t, dbPath, configDir, seen.wrap(askForBlockingTaskRespond))
+		second := newApplyDaemonWith(t, dbPath, configDir, seen.wrap(askForBlockingTaskRespond))
 		require.NoError(t, second.mgr.Start(second.ctx))
 		second.waitUntil("orphaned task result consumed", func() bool {
 			return countToolResultsFor(second.messages(sessionID), tool.IDTask) == 1
@@ -411,8 +401,8 @@ func TestHarnessModel_PendingExternalCallOwnershipAgreesAfterRestart(t *testing.
 	t.Run("a task keeps its live child", func(t *testing.T) {
 		dbPath := filepath.Join(t.TempDir(), "task.db")
 		configDir := newApplyConfigDir(t)
-		var seen modelRequests
-		first := newExternalCallDaemon(t, dbPath, configDir, seen.wrap(askForBlockingTaskRespond))
+		var seen skillRecorder
+		first := newApplyDaemonWith(t, dbPath, configDir, seen.wrap(askForBlockingTaskRespond))
 		sessionID := first.send("do work then spawn", nil)
 		first.waitUntil("the parent parked on the child", func() bool {
 			return countAssistantToolCallsFor(first.messages(sessionID), tool.IDTask) == 1 &&
@@ -432,7 +422,7 @@ func TestHarnessModel_PendingExternalCallOwnershipAgreesAfterRestart(t *testing.
 func TestScenario_BlockingTaskOrphanedByARestartIsClosedOnce(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "task.db")
 	configDir := newApplyConfigDir(t)
-	var seen modelRequests
+	var seen skillRecorder
 	childHeld := make(chan struct{})
 	defer close(childHeld)
 	heldRespond := func(system string, msgs []llmwire.Message) *llmwire.Response {
@@ -441,7 +431,7 @@ func TestScenario_BlockingTaskOrphanedByARestartIsClosedOnce(t *testing.T) {
 		}
 		return askForBlockingTaskRespond(system, msgs)
 	}
-	first := newExternalCallDaemon(t, dbPath, configDir, seen.wrap(heldRespond))
+	first := newApplyDaemonWith(t, dbPath, configDir, seen.wrap(heldRespond))
 	sessionID := first.send("do work then spawn", nil)
 	first.waitUntil("the parent parked on the child", func() bool {
 		return first.parkedOnChild(sessionID)
@@ -454,7 +444,7 @@ func TestScenario_BlockingTaskOrphanedByARestartIsClosedOnce(t *testing.T) {
 	_, err := first.db.ExecContext(first.ctx, `DELETE FROM subagent_links WHERE child_id = ?`, link.ChildID)
 	require.NoError(t, err)
 	first.shutdown()
-	second := newExternalCallDaemon(t, dbPath, configDir, seen.wrap(askForBlockingTaskRespond))
+	second := newApplyDaemonWith(t, dbPath, configDir, seen.wrap(askForBlockingTaskRespond))
 	require.NoError(t, second.mgr.Start(second.ctx))
 	second.waitUntil("orphan cancellation consumed", func() bool {
 		return countToolResultsFor(second.messages(sessionID), tool.IDTask) == 1 &&
@@ -463,7 +453,7 @@ func TestScenario_BlockingTaskOrphanedByARestartIsClosedOnce(t *testing.T) {
 	recovered := second.messages(sessionID)
 	require.NoError(t, llmtest.ValidateToolPairing(recovered), "boot must leave a transcript a provider accepts")
 	require.Equal(t, 1, countToolResultsFor(recovered, tool.IDTask), "the abandoned task is closed exactly once")
-	assert.Contains(t, restartLastToolResultContent(recovered, tool.IDTask), "restarted")
+	assert.Contains(t, lastToolResultContent(recovered, tool.IDTask), "restarted")
 	second.say(sessionID, "any progress?")
 	second.waitUntil("follow-up consumed", func() bool {
 		return hasUserContaining(second.messages(sessionID), "any progress?") &&
@@ -488,9 +478,9 @@ func TestScenario_BlockingTaskOrphanedByARestartIsClosedOnce(t *testing.T) {
 func TestScenario_OrphanedCallsAreClosedBeforeStartReturns(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "boot.db")
 	configDir := newApplyConfigDir(t)
-	var seen modelRequests
+	var seen skillRecorder
 	sessionID := stageTaskAndStop(t, dbPath, configDir, &seen)
-	second := newExternalCallDaemon(t, dbPath, configDir, seen.wrap(askForBlockingTaskRespond))
+	second := newApplyDaemonWith(t, dbPath, configDir, seen.wrap(askForBlockingTaskRespond))
 	require.NoError(t, second.mgr.Start(second.ctx))
 	if countToolResultsFor(second.messages(sessionID), tool.IDTask) == 0 {
 		pending, err := second.store.ListPending(second.ctx, sessionID)
@@ -514,7 +504,7 @@ func TestScenario_OrphanedCallsAreClosedBeforeStartReturns(t *testing.T) {
 func TestScenario_MessageQueuedBehindAnOrphanedTaskRunsAfterRecovery(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "queued.db")
 	configDir := newApplyConfigDir(t)
-	var seen modelRequests
+	var seen skillRecorder
 	// Keep the child parked until the queued message is observed; completion would otherwise wake the parent.
 	childHeld := make(chan struct{})
 	heldRespond := func(system string, msgs []llmwire.Message) *llmwire.Response {
@@ -523,7 +513,7 @@ func TestScenario_MessageQueuedBehindAnOrphanedTaskRunsAfterRecovery(t *testing.
 		}
 		return askForBlockingTaskRespond(system, msgs)
 	}
-	first := newExternalCallDaemon(t, dbPath, configDir, seen.wrap(heldRespond))
+	first := newApplyDaemonWith(t, dbPath, configDir, seen.wrap(heldRespond))
 	defer func() {
 		closeOnce(childHeld)
 	}()
@@ -543,7 +533,7 @@ func TestScenario_MessageQueuedBehindAnOrphanedTaskRunsAfterRecovery(t *testing.
 	_, delErr := first.db.ExecContext(first.ctx, `DELETE FROM subagent_links WHERE child_id = ?`, link.ChildID)
 	require.NoError(t, delErr)
 	first.shutdown()
-	second := newExternalCallDaemon(t, dbPath, configDir, seen.wrap(askForBlockingTaskRespond))
+	second := newApplyDaemonWith(t, dbPath, configDir, seen.wrap(askForBlockingTaskRespond))
 	defer second.shutdown()
 	require.NoError(t, second.mgr.Start(second.ctx))
 	second.waitUntil("the queued message finally ran", func() bool {
@@ -775,8 +765,8 @@ func TestScenario_StopOrdinaryBashDoesNotReplayAfterNewInputOrRestart(t *testing
 func TestScenario_StopThatDidNotSurviveItsRestartStillSettlesTheOrphan(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "stopped-task.db")
 	configDir := newApplyConfigDir(t)
-	var seen modelRequests
-	first := newExternalCallDaemon(t, dbPath, configDir, seen.wrap(askForBlockingTaskRespond))
+	var seen skillRecorder
+	first := newApplyDaemonWith(t, dbPath, configDir, seen.wrap(askForBlockingTaskRespond))
 	sessionID := first.send("do work then spawn", nil)
 	first.waitUntil("the parent parked on the child", func() bool {
 		return countAssistantToolCallsFor(first.messages(sessionID), tool.IDTask) == 1 &&
@@ -786,7 +776,7 @@ func TestScenario_StopThatDidNotSurviveItsRestartStillSettlesTheOrphan(t *testin
 	// Phase one of /stop lands; the process dies before phase two settles anything.
 	require.NoError(t, first.store.UpdateSessionStatus(first.ctx, sessionID, sessionstore.SessionStatusStopping))
 	first.shutdown()
-	second := newExternalCallDaemon(t, dbPath, configDir, seen.wrap(askForBlockingTaskRespond))
+	second := newApplyDaemonWith(t, dbPath, configDir, seen.wrap(askForBlockingTaskRespond))
 	require.NoError(t, second.mgr.Start(second.ctx))
 	second.resume()
 	rec := second.session(sessionID)
@@ -821,7 +811,7 @@ func TestScenario_CrashBetweenFinalizationAndDeliveryRedeliversExactlyOnce(t *te
 		{
 			name:        "background child arrives through the parent inbox",
 			background:  true,
-			completions: restartCountSubagentCompletions,
+			completions: countSubagentCompletions,
 		},
 	}
 
@@ -893,7 +883,7 @@ func TestScenario_StoppedChildSurvivesARestartWithoutResurrection(t *testing.T) 
 		return linkErr == nil && current != nil &&
 			(current.State != subagent.StateStopped || current.DeliveredAt != 0)
 	}, 500*time.Millisecond, 25*time.Millisecond, "a stopped child stays parked across a restart")
-	assert.Zero(t, restartCountSubagentCompletions(second.messages(parentID), link.ChildID),
+	assert.Zero(t, countSubagentCompletions(second.messages(parentID), link.ChildID),
 		"a stopped child owes the parent nothing")
 	assert.False(t, second.mgr.HasActiveLoop(link.ChildID), "the sweep must not start a stopped child")
 }
@@ -982,7 +972,7 @@ func TestScenario_OwnedTaskCallSurvivesSchemaUpgradeAndRestarts(t *testing.T) {
 	require.NoError(t, llmtest.ValidateToolPairing(final))
 	assert.Equal(t, 1, countAssistantToolCallsFor(final, tool.IDTask), "the task call is never re-issued")
 	assert.Equal(t, 1, countToolResultsFor(final, tool.IDTask), "exactly one completion fills the staged call")
-	require.Contains(t, restartLastToolResultContent(final, tool.IDTask), "staged child finished")
+	require.Contains(t, lastToolResultContent(final, tool.IDTask), "staged child finished")
 	var spawnCount int
 	require.NoError(t, h.db.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM sessions WHERE parent_id = ?`, parent.ID).Scan(&spawnCount))
@@ -990,18 +980,6 @@ func TestScenario_OwnedTaskCallSurvivesSchemaUpgradeAndRestarts(t *testing.T) {
 	link = h.link(childID)
 	require.NotNil(t, link)
 	assert.Equal(t, subagent.OutcomeCompleted, link.Outcome)
-}
-
-func restartCountSubagentCompletions(messages []llmwire.Message, childID int64) int {
-	needle := "child_id: " + strconv.FormatInt(childID, 10)
-	count := 0
-	for _, message := range messages {
-		if message.Role == llmwire.RoleUser && strings.Contains(message.Content, "<subagent_completion>") &&
-			strings.Contains(message.Content, needle) {
-			count++
-		}
-	}
-	return count
 }
 
 func runAcceptedInputRestartScenario(
@@ -1053,16 +1031,10 @@ func appendCrashToolProgress(t *testing.T, h *harness, sessionID int64) {
 
 const orphanTaskCallID = "orphan-task-1"
 
-// Recorded provider transcripts expose any request carrying an unresolved tool call.
-type modelRequests struct {
-	mu   sync.Mutex
-	seen [][]llmwire.Message
-}
-
 // askForBlockingTaskRespond parks the session on a blocking child once, then reacts to whatever came back for it.
 func askForBlockingTaskRespond(_ string, msgs []llmwire.Message) *llmwire.Response {
 	if hasToolResultFor(msgs, tool.IDTask) {
-		return textReply("noted: " + restartLastToolResultContent(msgs, tool.IDTask))
+		return textReply("noted: " + lastToolResultContent(msgs, tool.IDTask))
 	}
 	return callReply(
 		orphanTaskCallID, tool.IDTask,
@@ -1070,23 +1042,10 @@ func askForBlockingTaskRespond(_ string, msgs []llmwire.Message) *llmwire.Respon
 	)
 }
 
-// Config apply and external calls must suspend within the same daemon image.
-func newExternalCallDaemon(
-	t *testing.T,
-	dbPath, configDir string,
-	respond func(string, []llmwire.Message) *llmwire.Response,
-) *applyDaemon {
-	t.Helper()
-	h := newHarness(t, harnessOptions{dbPath: dbPath, respond: respond})
-	ops := configops.New(filepath.Join(configDir, "config.yaml"), filepath.Join(configDir, "secrets"))
-	h.mgr.applier = configapply.New(ops)
-	return &applyDaemon{harness: h, ops: ops, restarts: h.mgr.applier.Restart()}
-}
-
 // Stages a dangling task call whose killed child did not survive shutdown.
-func stageTaskAndStop(t *testing.T, dbPath, configDir string, seen *modelRequests) int64 {
+func stageTaskAndStop(t *testing.T, dbPath, configDir string, seen *skillRecorder) int64 {
 	t.Helper()
-	first := newExternalCallDaemon(t, dbPath, configDir, seen.wrap(askForBlockingTaskRespond))
+	first := newApplyDaemonWith(t, dbPath, configDir, seen.wrap(askForBlockingTaskRespond))
 	sessionID := first.send("do work then spawn", nil)
 	first.waitUntil("the parent parked on the child", func() bool {
 		return countAssistantToolCallsFor(first.messages(sessionID), tool.IDTask) == 1 &&
@@ -1126,31 +1085,6 @@ func unresolvedExternalCallsByName(msgs []llmwire.Message) map[string]string {
 		}
 	}
 	return out
-}
-
-func (r *modelRequests) wrap(
-	respond func(string, []llmwire.Message) *llmwire.Response,
-) func(string, []llmwire.Message) *llmwire.Response {
-	return func(system string, msgs []llmwire.Message) *llmwire.Response {
-		r.mu.Lock()
-		r.seen = append(r.seen, slices.Clone(msgs))
-		r.mu.Unlock()
-		return respond(system, msgs)
-	}
-}
-
-func (r *modelRequests) assertAllPaired(t *testing.T) {
-	t.Helper()
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	for i, req := range r.seen {
-		assert.NoErrorf(
-			t,
-			llmtest.ValidateToolPairing(req),
-			"request %d reached the provider with a dangling tool_use",
-			i,
-		)
-	}
 }
 
 func interruptFirstRecovery(t *testing.T, dbPath string) int64 {
@@ -1268,15 +1202,6 @@ func crashWindowRespond(background bool) func(string, []llmwire.Message) *llmwir
 		}
 		return callReply(taskCallID, "task", args)
 	}
-}
-
-func restartLastToolResultContent(msgs []llmwire.Message, toolName string) string {
-	for _, v := range slices.Backward(msgs) {
-		if v.Role == llmwire.RoleTool && v.ToolName == toolName {
-			return v.Content
-		}
-	}
-	return ""
 }
 
 // In-memory inactivity races between model turns; only the durable task call proves the child park.

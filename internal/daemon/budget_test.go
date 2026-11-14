@@ -113,13 +113,12 @@ func TestReleaseArmedBudgetHonorsStateAndErrors(t *testing.T) {
 type budgetServiceProbe struct {
 	budget.Service
 	record       *budget.Record
-	getErr       error
 	releaseErr   error
 	releaseCalls int
 }
 
 func (s *budgetServiceProbe) Get(context.Context, int64) (*budget.Record, error) {
-	return s.record, s.getErr
+	return s.record, nil
 }
 
 func (s *budgetServiceProbe) Release(

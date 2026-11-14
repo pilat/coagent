@@ -3,7 +3,6 @@ package daemon
 import (
 	"fmt"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -24,7 +23,7 @@ import (
 func TestScenario_AutomaticCompactionRunsInsideTheDaemon(t *testing.T) {
 	respond := func(_ string, msgs []llmwire.Message) *llmwire.Response {
 		switch {
-		case isCompactionPrompt(msgs):
+		case isCompactionInstruction(msgs):
 			return textReply(autoCompactionBrief)
 		case hasUserContaining(msgs, contextSummaryPrefix):
 			return textReply("work complete")
@@ -64,8 +63,8 @@ func TestScenario_AutomaticCompactionRunsInsideTheDaemon(t *testing.T) {
 	for i, e := range trace {
 		t.Logf("TRACE %d: sess=%d type=%s msg=%q", i, e.SessionID, e.Notification.Type, e.Notification.Message)
 	}
-	assert.Equal(t, 1, countPublishedMessage(trace, parentID, compactionStartNotice))
-	assert.Equal(t, 1, countPublishedMessage(trace, parentID, compactionDoneNotice))
+	assert.Equal(t, 1, countPublishedMessage(trace, parentID, noticeCompacting))
+	assert.Equal(t, 1, countPublishedMessage(trace, parentID, noticeCompacted))
 	assert.Zero(t, countPublishedMessage(trace, parentID, "❌ Compaction failed"))
 }
 
@@ -77,7 +76,7 @@ func TestScenario_AutoCompactionWhileABackgroundChildIsInFlight(t *testing.T) {
 	var enteredOnce sync.Once
 	respond := func(_ string, msgs []llmwire.Message) *llmwire.Response {
 		switch {
-		case isCompactionPrompt(msgs):
+		case isCompactionInstruction(msgs):
 			// Release the child during compaction so its completion races the parent's stale snapshot.
 			enteredOnce.Do(func() { close(compactionEntered) })
 			<-compactionRelease
@@ -127,14 +126,7 @@ func TestScenario_AutoCompactionWhileABackgroundChildIsInFlight(t *testing.T) {
 	require.NoError(t, llmtest.ValidateToolPairing(msgs),
 		"a completion committed around a compaction must not cross or orphan a tool pair")
 	assert.Equal(t, 1, countSummaryRows(msgs), "exactly one summary row")
-	needle := "child_id: " + strconv.FormatInt(link.ChildID, 10)
-	completionCount := 0
-	for _, message := range msgs {
-		if message.Role == llmwire.RoleUser && strings.Contains(message.Content, "<subagent_completion>") &&
-			strings.Contains(message.Content, needle) {
-			completionCount++
-		}
-	}
+	completionCount := countSubagentCompletions(msgs, link.ChildID)
 	assert.Equal(t, 1, completionCount, "exactly one completion record")
 	assert.Zero(t, countToolResultsFor(msgs, "subagent_event"))
 
@@ -150,8 +142,8 @@ func TestScenario_AutoCompactionWhileABackgroundChildIsInFlight(t *testing.T) {
 	assert.Equal(t, "child completion handled", lastAssistantTextDTO(msgs),
 		"the parent kept running after the completion landed")
 	trace := events.snapshot()
-	assert.Equal(t, 1, countPublishedMessage(trace, parentID, compactionStartNotice))
-	assert.Equal(t, 1, countPublishedMessage(trace, parentID, compactionDoneNotice))
+	assert.Equal(t, 1, countPublishedMessage(trace, parentID, noticeCompacting))
+	assert.Equal(t, 1, countPublishedMessage(trace, parentID, noticeCompacted))
 }
 
 // A deferred compact notice marks a transition; repeated wakes must not re-announce it from rebuilt runners.
@@ -160,10 +152,7 @@ func TestScenario_DeferredCompactAnnouncesItselfOncePerEpisode(t *testing.T) {
 	h := newHarness(t, harnessOptions{respond: blockingCompactRespond(release)})
 	collector := h.collect()
 	defer closeOnce(release)
-	parentID := h.send("do work then spawn", nil)
-	link := h.waitLink(parentID, taskCallID)
-	require.True(t, link.Blocking)
-	h.waitUntil("parent suspended", func() bool { return !h.mgr.HasActiveLoop(parentID) })
+	parentID, link := parkOnBlockingChild(t, h)
 	h.say(parentID, "/compact")
 	collector.waitFor(
 		t,
@@ -241,10 +230,7 @@ func TestScenario_CompactWaitsForABlockingChildThenRuns(t *testing.T) {
 	release := make(chan struct{})
 	h := newHarness(t, harnessOptions{respond: blockingCompactRespond(release)})
 	defer closeOnce(release)
-	parentID := h.send("do work then spawn", nil)
-	link := h.waitLink(parentID, taskCallID)
-	require.True(t, link.Blocking)
-	h.waitUntil("parent suspended", func() bool { return !h.mgr.HasActiveLoop(parentID) })
+	parentID, link := parkOnBlockingChild(t, h)
 	h.say(parentID, "/compact")
 
 	// A pending task result keeps the session unrunnable and prevents compaction.
@@ -277,10 +263,7 @@ func TestScenario_DeferredCompactSurvivesADaemonRestart(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "restart.db")
 	release := make(chan struct{})
 	first := newHarness(t, harnessOptions{dbPath: dbPath, respond: blockingCompactRespond(release)})
-	parentID := first.send("do work then spawn", nil)
-	link := first.waitLink(parentID, taskCallID)
-	require.True(t, link.Blocking)
-	first.waitUntil("parent suspended", func() bool { return !first.mgr.HasActiveLoop(parentID) })
+	parentID, _ := parkOnBlockingChild(t, first)
 	first.say(parentID, "/compact")
 	require.False(t, hasSummaryRow(first.messages(parentID)))
 
@@ -372,7 +355,7 @@ func TestHarnessScenario_CompactSuccessChain(t *testing.T) {
 		return false
 	})
 	collector.waitFor(t, "idle after compact", func(events []controllerapi.SessionNotification) bool {
-		return containsState(events, root, sessionevent.StateIdle)
+		return hasStateEvent(events, root, sessionevent.StateIdle)
 	})
 	assertHarnessTrace(t, h, "compact_success_chain.json", collector.snapshot(), root)
 }
@@ -383,10 +366,6 @@ const autoCompactionPromptTokens = 190000
 const autoCompactionBrief = "## Goal\nfinish the scripted task\n" +
 	"## Progress\n- ran one tool\n" +
 	"## Context for Continuation\nkeep going"
-
-const compactionStartNotice = "🔄 Compacting context..."
-
-const compactionDoneNotice = "✅ Context compacted"
 
 // Only a provider usage measurement above the threshold may arm automatic compaction.
 func measuredResponse(resp *llmwire.Response) *llmwire.Response {
@@ -464,17 +443,4 @@ func compactOnlyRespond(_ string, msgs []llmwire.Message) *llmwire.Response {
 		return textReply("work done")
 	}
 	return callReply("ls-1", "ls", `{"path":"."}`)
-}
-
-func containsState(
-	events []controllerapi.SessionNotification,
-	sessionID int64,
-	status sessionevent.State,
-) bool {
-	for _, event := range events {
-		if event.SessionID == sessionID && event.Notification.Status == status {
-			return true
-		}
-	}
-	return false
 }

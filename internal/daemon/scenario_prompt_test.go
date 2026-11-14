@@ -7,7 +7,6 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"regexp"
-	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -19,10 +18,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/pilat/coagent/internal/backgroundprocess"
-	"github.com/pilat/coagent/internal/config"
 	"github.com/pilat/coagent/internal/configapply"
 	"github.com/pilat/coagent/internal/controllerapi"
-	"github.com/pilat/coagent/internal/llm"
 	"github.com/pilat/coagent/internal/llm/llmtest"
 	"github.com/pilat/coagent/internal/llmwire"
 	agentregistry "github.com/pilat/coagent/internal/registry"
@@ -104,19 +101,14 @@ func TestHarnessScenario_ActiveProcessPromptAndSleepGuard(t *testing.T) {
 	requestMu.Lock()
 	firstRequest := append([]llmwire.Message(nil), requestMessages...)
 	requestMu.Unlock()
-	matchingMessages := 0
-	for _, message := range firstRequest {
-		if strings.Contains(message.Content, "# Active background work") {
-			matchingMessages++
-		}
-	}
+	matchingMessages := countMessageContentContaining(firstRequest, "# Active background work")
 	require.Equal(t, 1, matchingMessages)
 	assert.True(t, hasUserContaining(firstRequest, "process bgp_prompt_guard (running)"))
 	assert.True(t, hasUserContaining(firstRequest, "Snapshot from activation start"))
 	messages := h.messages(root)
 	require.Equal(t, 1, countToolResultsFor(messages, tool.IDSleep))
-	assert.Contains(t, promptLastToolResultContent(messages, tool.IDSleep), "sleep is unavailable")
-	assert.Contains(t, promptLastToolResultContent(messages, tool.IDSleep), "end the response")
+	assert.Contains(t, lastToolResultContent(messages, tool.IDSleep), "sleep is unavailable")
+	assert.Contains(t, lastToolResultContent(messages, tool.IDSleep), "end the response")
 	assert.Equal(t, llmwire.RoleAssistant, messages[len(messages)-1].Role)
 	schedules, err := h.schedules.ListSchedules(h.ctx, root)
 	require.NoError(t, err)
@@ -140,12 +132,7 @@ func TestHarnessScenario_EmptyActiveBackgroundAddsNoProviderRow(t *testing.T) {
 	recorded := append([]llmwire.Message(nil), requestMessages...)
 	requestMu.Unlock()
 	require.NotEmpty(t, recorded)
-	matchingMessages := 0
-	for _, message := range recorded {
-		if strings.Contains(message.Content, "# Active background work") {
-			matchingMessages++
-		}
-	}
+	matchingMessages := countMessageContentContaining(recorded, "# Active background work")
 	assert.Zero(t, matchingMessages)
 }
 
@@ -160,7 +147,7 @@ func TestHarnessScenario_DynamicRegistryPromptMatchesEachActivation(t *testing.T
 	h.waitDelivered(link.ChildID)
 	h.waitAnswer(parentID, "")
 	assertInitialRegistryProjection(t, h, schemas, prompts, parentID, link.ChildID)
-	assert.Contains(t, promptLastToolResultContent(h.messages(parentID), "mcp__fake__ping"), "unknown tool")
+	assert.Contains(t, lastToolResultContent(h.messages(parentID), "mcp__fake__ping"), "unknown tool")
 	h.say(parentID, registryUseMarker)
 	h.waitAnswer(parentID, "")
 	assertNextRegistryProjection(t, h, schemas, prompts, parentID)
@@ -208,12 +195,12 @@ func TestHarnessScenario_UntrustedToolOutputCarriesWrapperAndGuidance(t *testing
 	h := newGatingHarness(t, nil, respond)
 	parentID := h.send("probe untrusted output", nil)
 	h.waitUntil("webfetch result stored", func() bool {
-		return strings.Contains(promptLastToolResultContent(h.messages(parentID), "webfetch"), untrustedProbeMarker)
+		return strings.Contains(lastToolResultContent(h.messages(parentID), "webfetch"), untrustedProbeMarker)
 	})
 	h.waitAnswer(parentID, "")
 	msgs := h.messages(parentID)
 	require.NoError(t, llmtest.ValidateToolPairing(msgs), "transcript must stay provider-valid")
-	content := promptLastToolResultContent(msgs, "webfetch")
+	content := lastToolResultContent(msgs, "webfetch")
 	markers := regexp.MustCompile(`<<<BEGIN_UNTRUSTED_EXTERNAL_DATA id="([0-9a-f]{16})">>>`).FindStringSubmatch(content)
 	require.Len(t, markers, 2)
 	assert.True(t, strings.HasSuffix(content, `<<<END_UNTRUSTED_EXTERNAL_DATA id="`+markers[1]+`">>>`))
@@ -222,15 +209,15 @@ func TestHarnessScenario_UntrustedToolOutputCarriesWrapperAndGuidance(t *testing
 	// The next model request re-derives its messages from the durable
 	// transcript: the persisted wrapper must survive into that request too.
 	requestMsgs := requests.lastMessages(t)
-	requestContent := promptLastToolResultContent(requestMsgs, "webfetch")
+	requestContent := lastToolResultContent(requestMsgs, "webfetch")
 	assert.Equal(t, content, requestContent)
 	h.say(parentID, "continue the probe")
 	h.waitUntil("next model activation", func() bool {
 		return hasUserContaining(requests.lastMessages(t), "continue the probe")
 	})
 	h.waitAnswer(parentID, "")
-	assert.Equal(t, content, promptLastToolResultContent(requests.lastMessages(t), "webfetch"))
-	assert.Equal(t, content, promptLastToolResultContent(h.messages(parentID), "webfetch"))
+	assert.Equal(t, content, lastToolResultContent(requests.lastMessages(t), "webfetch"))
+	assert.Equal(t, content, lastToolResultContent(h.messages(parentID), "webfetch"))
 
 	// The system prompt carries the matching dynamic guidance for the registered toolset.
 	prompt := prompts.last(t, "root")
@@ -261,15 +248,6 @@ func TestHarnessScenario_HelpIncludesGWT(t *testing.T) {
 	// The opener completes its candidate/confirmation pair; help itself must never invoke the model.
 	assert.Equal(t, int64(2), modelCalls.Load(), "/help must not invoke the model")
 	assertHarnessTrace(t, h, "help_includes_gwt.json", collector.snapshot(), sessionID)
-}
-
-func promptLastToolResultContent(msgs []llmwire.Message, toolName string) string {
-	for _, v := range slices.Backward(msgs) {
-		if v.Role == llmwire.RoleTool && v.ToolName == toolName {
-			return v.Content
-		}
-	}
-	return ""
 }
 
 const promptReviewerAgentFile = `---
@@ -326,7 +304,7 @@ func registryPromptRespond(fake *fakeMCPServer) func(string, []llmwire.Message) 
 			return mcpPingCall("ping-same-activation")
 		}
 		if hasToolResultFor(messages, tool.IDTask) {
-			return mcpToolCall("add-registry", tool.IDMCPAdd, fake.addParams("fake", "project"))
+			return callReply("add-registry", tool.IDMCPAdd, fake.addParams("fake", "project"))
 		}
 		return &llmwire.Response{ToolCalls: []llmwire.ToolCall{
 			spawnTaskCall("task-registry", "explore", registryChildMarker),
@@ -451,8 +429,18 @@ func newRegistryPromptHarness(
 	t.Helper()
 	recorder := &activationSchemas{byID: make(map[int64][][]string)}
 	prompts := newPromptRecorder()
-	h := newHarness(t, harnessOptions{clientFor: func(*config.Config) (llm.Client, error) {
-		return &registryPromptLLM{respond: respond, recorder: recorder, prompts: prompts}, nil
+	h := newHarness(t, harnessOptions{respond: respond, observeRequest: func(request providerRequest) {
+		id := request.SessionID
+		if index := strings.LastIndex(id, ":"); index >= 0 {
+			id = id[index+1:]
+		}
+		sessionID, _ := strconv.ParseInt(id, 10, 64)
+		prompts.record(strconv.FormatInt(sessionID, 10), providerSystemText(request))
+		var schemas []llmwire.ToolSchema
+		for _, entry := range request.Tools {
+			schemas = append(schemas, entry.Function)
+		}
+		recorder.record(sessionID, schemas)
 	}})
 	h.mgr.applier = configapply.New(newTestConfigOps(t, t.TempDir()))
 	return &registryPromptHarness{harness: h, schemas: recorder, prompts: prompts}
@@ -494,37 +482,3 @@ const helpWithGWT = "## Session commands\n" +
 	"`/schedules` — list schedules\n" +
 	"`/budget <request>` — arm, replace, inspect, or clear a one-shot cost/wall-time checkpoint\n" +
 	"`/gwt <name>` — fork into a worktree"
-
-type registryPromptLLM struct {
-	scriptedLLM
-	recorder *activationSchemas
-	prompts  *promptRecorder
-
-	mu        sync.Mutex
-	sessionID int64
-}
-
-func (c *registryPromptLLM) SetSessionID(id string) {
-	if index := strings.LastIndex(id, ":"); index >= 0 {
-		id = id[index+1:]
-	}
-	parsed, _ := strconv.ParseInt(id, 10, 64)
-	c.mu.Lock()
-	c.sessionID = parsed
-	c.mu.Unlock()
-}
-
-func (c *registryPromptLLM) Chat(
-	ctx context.Context,
-	system string,
-	messages []llmwire.Message,
-	tools []llmwire.ToolSchema,
-	opts ...llmwire.ChatOption,
-) (*llmwire.Response, error) {
-	c.mu.Lock()
-	sessionID := c.sessionID
-	c.mu.Unlock()
-	c.prompts.record(strconv.FormatInt(sessionID, 10), system)
-	c.recorder.record(sessionID, tools)
-	return c.scriptedLLM.Chat(ctx, system, messages, tools, opts...)
-}

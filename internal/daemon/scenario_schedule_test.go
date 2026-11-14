@@ -5,8 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"path/filepath"
-	"slices"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -91,12 +89,7 @@ func TestHarnessScenario_OneShotAckRetrySurvivesDaemonRestartAndRendersOnce(t *t
 }
 
 func TestHarnessScenario_SleepProjectsWakeAtAndUserInputInterruptsIt(t *testing.T) {
-	respond := func(_ string, messages []llmwire.Message) *llmwire.Response {
-		if hasToolResultFor(messages, tool.IDSleep) {
-			return textReply("sleep interruption handled")
-		}
-		return callReply("scenario-sleep", tool.IDSleep, `{"duration":"1h","reason":"scenario"}`)
-	}
+	respond := sleepThenAnswer("sleep interruption handled")
 	h := newHarness(t, harnessOptions{respond: respond})
 	collector := h.collect()
 	parentID := h.send("sleep", nil)
@@ -119,7 +112,7 @@ func TestHarnessScenario_SleepProjectsWakeAtAndUserInputInterruptsIt(t *testing.
 	messages := h.messages(parentID)
 	require.NoError(t, llmtest.ValidateToolPairing(messages))
 	assert.Equal(t, 1, countToolResultsFor(messages, tool.IDSleep))
-	assert.Contains(t, scheduleLastToolResultContent(messages, tool.IDSleep), "Sleep interrupted")
+	assert.Contains(t, lastToolResultContent(messages, tool.IDSleep), "Sleep interrupted")
 	schedules, err := h.schedules.ListSchedules(h.ctx, parentID)
 	require.NoError(t, err)
 	assert.Empty(t, schedules)
@@ -265,15 +258,6 @@ func newStaleSleepHarness(
 	return h, retired
 }
 
-func sleepThenAnswer(answer string) func(string, []llmwire.Message) *llmwire.Response {
-	return func(_ string, messages []llmwire.Message) *llmwire.Response {
-		if hasToolResultFor(messages, tool.IDSleep) {
-			return textReply(answer)
-		}
-		return callReply("scenario-sleep", tool.IDSleep, `{"duration":"1h","reason":"scenario"}`)
-	}
-}
-
 func interruptSleep(
 	t *testing.T,
 	h *harness,
@@ -361,7 +345,7 @@ func TestIntegration_UserInterruptCancelsSleepWithoutDeletingStandaloneOneShot(t
 	messages := h.messages(parentID)
 	require.NoError(t, llmtest.ValidateToolPairing(messages))
 	assert.Equal(t, 1, countToolResultsFor(messages, tool.IDSleep))
-	assert.Contains(t, scheduleLastToolResultContent(messages, tool.IDSleep), "Sleep interrupted")
+	assert.Contains(t, lastToolResultContent(messages, tool.IDSleep), "Sleep interrupted")
 	assert.Equal(t, "interrupt handled", lastAssistantTextDTO(messages))
 	schedules, err := h.schedules.ListSchedules(h.ctx, parentID)
 	require.NoError(t, err)
@@ -394,7 +378,7 @@ func TestIntegration_StandaloneOneShotFlowsThroughExecutorAndDaemonQueue(t *test
 	messages := h.messages(parentID)
 	require.NoError(t, llmtest.ValidateToolPairing(messages))
 	assert.Equal(t, 1, countToolResultsFor(messages, tool.IDSchedule))
-	assert.Contains(t, scheduleLastToolResultContent(messages, tool.IDSchedule), "one-time scheduled work")
+	assert.Contains(t, lastToolResultContent(messages, tool.IDSchedule), "one-time scheduled work")
 }
 
 func TestIntegration_OneShotAckFailureRedeliversWithoutDuplicateTranscriptOrPublication(t *testing.T) {
@@ -655,15 +639,6 @@ func TestHarnessScenario_ScheduledTurnChain(t *testing.T) {
 	assertHarnessTrace(t, h, "scheduled_turn_chain.json", collector.snapshot(), root)
 }
 
-func scheduleLastToolResultContent(msgs []llmwire.Message, toolName string) string {
-	for _, v := range slices.Backward(msgs) {
-		if v.Role == llmwire.RoleTool && v.ToolName == toolName {
-			return v.Content
-		}
-	}
-	return ""
-}
-
 type failFirstScheduleDeliveryStore struct {
 	schedule.Store
 	db        *sql.DB
@@ -859,7 +834,7 @@ func deliverOneShotBeforeRestart(
 	executor := schedule.NewExecutor(flaky, h.mgr)
 	executor.Start(h.ctx)
 	t.Cleanup(executor.Stop)
-	requireSignal(t, flaky.attempted)
+	waitForScenarioSignal(t, flaky.attempted, "scenario signal")
 	executor.Stop()
 	requireOneShotRemainsRetryable(t, h, parentID)
 	return parentID, events
@@ -983,16 +958,6 @@ func (s *orderedScheduleSender) NotifySession(sessionID int64, n sessionevent.No
 	s.SessionSender.NotifySession(sessionID, n)
 }
 
-func countMessageContentContaining(messages []llmwire.Message, fragment string) int {
-	count := 0
-	for _, message := range messages {
-		if strings.Contains(message.Content, fragment) {
-			count++
-		}
-	}
-	return count
-}
-
 type stoppedRootScheduleCase struct {
 	name, prompt, answer, trace string
 	fresh                       bool
@@ -1047,7 +1012,7 @@ func runDueStoppedRootSchedule(
 	executor := schedule.NewExecutor(h.schedules, sender)
 	executor.Start(t.Context())
 	t.Cleanup(executor.Stop)
-	requireSignal(t, started)
+	waitForScenarioSignal(t, started, "scenario signal")
 	assertStoppedRootActive(t, h, rootID)
 	close(release)
 	h.waitUntil("runDueStoppedRootSchedule", func() bool {
@@ -1071,21 +1036,9 @@ func assertStoppedRootScheduleResult(t *testing.T, h *harness, rootID int64, tc 
 	messages := h.messages(rootID)
 	if tc.fresh {
 		// The confirmed stop publishes one answer; its hidden candidate row stays in the transcript with the same text.
-		prompt := tc.prompt
-		promptCount := 0
-		for _, message := range messages {
-			if strings.Contains(message.Content, prompt) {
-				promptCount++
-			}
-		}
+		promptCount := countMessageContentContaining(messages, tc.prompt)
 		assert.Equal(t, 1, promptCount)
-		answer := tc.answer
-		answerCount := 0
-		for _, message := range messages {
-			if strings.Contains(message.Content, answer) {
-				answerCount++
-			}
-		}
+		answerCount := countMessageContentContaining(messages, tc.answer)
 		assert.Equal(t, 2, answerCount)
 		return
 	}

@@ -145,34 +145,18 @@ func TestScenario_SubagentContinuedCheckPublishesLastAnswerAndRenudgesOnFollowUp
 	assert.Contains(t, h.link(childID).Result, "complete child answer after tool")
 	assert.NotContains(t, h.link(childID).Result, "initial child candidate")
 	assert.Equal(t, 1, countToolResultsFor(h.messages(childID), "read"))
-	countNudges := func() int {
-		count := 0
-		for _, message := range h.messages(childID) {
-			if message.Role == llmwire.RoleUser &&
-				strings.Contains(message.Content, "You ended your previous response") {
-				count++
-			}
-		}
-		return count
-	}
-	assert.Equal(t, 1, countNudges())
+	assert.Equal(t, 1, countUserCompletions(h.messages(childID), "You ended your previous response"))
 	require.NoError(t, h.mgr.SendToChild(h.ctx, childID, "FOLLOW_UP answer another question"))
 	h.waitUntil("follow-up delivered", func() bool {
 		link := h.link(childID)
 		return link != nil && link.ActivationSeq == 2 && link.DeliveredAt != 0 &&
 			strings.Contains(link.Result, "follow-up candidate")
 	})
-	assert.Equal(t, 2, countNudges())
+	assert.Equal(t, 2, countUserCompletions(h.messages(childID), "You ended your previous response"))
 }
 
 func continuedChildResponse(msgs []llmwire.Message) *llmwire.Response {
-	nudges := 0
-	for _, message := range msgs {
-		if message.Role == llmwire.RoleUser &&
-			strings.Contains(message.Content, "You ended your previous response") {
-			nudges++
-		}
-	}
+	nudges := countUserCompletions(msgs, "You ended your previous response")
 	if hasUserContaining(msgs, "FOLLOW_UP") {
 		if nudges >= 2 {
 			return textReply("follow-up confirmed")
@@ -496,9 +480,7 @@ func TestIntegration_ConfigToolsReachOnlyManagerOwnedRoots(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			h := newGatingHarness(t, nil, func(string, []llmwire.Message) *llmwire.Response {
-				return textReply("done")
-			})
+			h := newGatingHarness(t, nil, trivialRespond)
 			h.startInboxWake()
 			sessionID := h.createRoot(tt.attrs)
 			if tt.agent != "" {
@@ -639,7 +621,7 @@ func TestHarnessScenario_BatchCannotEscapeSubagentAllowlist(t *testing.T) {
 	msgs := h.messages(link.ChildID)
 	require.NoError(t, llmtest.ValidateToolPairing(msgs), "child transcript must stay provider-valid")
 	assert.Equal(t, 1, countToolResultsFor(msgs, tool.IDBatch))
-	batchResult := subagentLastToolResultContent(msgs, tool.IDBatch)
+	batchResult := lastToolResultContent(msgs, tool.IDBatch)
 	assert.Contains(t, batchResult, `unknown tool "bash"`)
 	assert.NotContains(t, batchResult, escapeMarker, "the forbidden call must not have run")
 	assert.NoFileExists(t, filepath.Join(h.workDir(), escapeFile))
@@ -754,7 +736,7 @@ func TestHarnessScenario_SubagentTextWithToolsCompletes(t *testing.T) {
 	link := h.linkByCall(parentID, taskCallID)
 	require.NotNil(t, link)
 	assert.Equal(t, subagent.OutcomeCompleted, link.Outcome)
-	assert.Equal(t, 1, countToolResultsFor(transcriptOf(h, link.ChildID), "ls"))
+	assert.Equal(t, 1, countToolResultsFor(h.messages(link.ChildID), "ls"))
 	assertHarnessTrace(t, h, "subagent_text_with_tools.json", collector.snapshot(), parentID)
 }
 
@@ -831,7 +813,7 @@ func TestHarnessScenario_ForegroundChildContinuesWithoutSleep(t *testing.T) {
 	assert.False(t, continued.Blocking, "a foreground child continues asynchronously after its task result")
 	parentMessages := h.messages(parentID)
 	assert.Equal(t, 1, countToolResultsFor(parentMessages, tool.IDSleep))
-	assert.Contains(t, subagentLastToolResultContent(parentMessages, tool.IDSleep),
+	assert.Contains(t, lastToolResultContent(parentMessages, tool.IDSleep),
 		"sleep cannot be combined with send_to_subagent")
 	schedules, err := h.schedules.ListSchedules(h.ctx, parentID)
 	require.NoError(t, err)
@@ -879,7 +861,7 @@ func TestHarnessScenario_BackgroundChildIsTheWakeSource(t *testing.T) {
 	assert.Contains(t, status, "- Active subagents: 0 foreground · 1 background")
 	parentMessages := h.messages(parentID)
 	assert.Equal(t, 1, countToolResultsFor(parentMessages, tool.IDSleep))
-	assert.Contains(t, subagentLastToolResultContent(parentMessages, tool.IDSleep),
+	assert.Contains(t, lastToolResultContent(parentMessages, tool.IDSleep),
 		"result arrives automatically in a later turn")
 	schedules, err := h.schedules.ListSchedules(h.ctx, parentID)
 	require.NoError(t, err)
@@ -994,25 +976,28 @@ func TestHarnessScenario_ForegroundScatterGatherProjectsShrinkingAllWaitSet(t *t
 		childIDs = append(childIDs, link.ChildID)
 	}
 	slices.Sort(childIDs)
-	collector.waitFor(t, "subagent wait set", func(events []controllerapi.SessionNotification) bool {
-		for _, event := range events {
-			if event.SessionID != parentID || event.Notification.Type != sessionevent.NotifyWaiting {
-				continue
-			}
-			var got []int64
-			for _, item := range event.Notification.Waiting {
-				if item.Kind != sessionevent.WaitSubagent {
-					return false
+	waitSet := func(want []int64) {
+		collector.waitFor(t, "subagent wait set", func(events []controllerapi.SessionNotification) bool {
+			for _, event := range events {
+				if event.SessionID != parentID || event.Notification.Type != sessionevent.NotifyWaiting {
+					continue
 				}
-				got = append(got, item.ChildID)
+				var got []int64
+				for _, item := range event.Notification.Waiting {
+					if item.Kind != sessionevent.WaitSubagent {
+						return false
+					}
+					got = append(got, item.ChildID)
+				}
+				slices.Sort(got)
+				if slices.Equal(got, want) {
+					return true
+				}
 			}
-			slices.Sort(got)
-			if slices.Equal(got, childIDs) {
-				return true
-			}
-		}
-		return false
-	})
+			return false
+		})
+	}
+	waitSet(childIDs)
 	assert.Zero(t, countPublishedMessage(collector.snapshot(), parentID, "all children delivered"),
 		"the model must not run while any foreground child is pending")
 
@@ -1021,25 +1006,7 @@ func TestHarnessScenario_ForegroundScatterGatherProjectsShrinkingAllWaitSet(t *t
 		close(releaseOf[childID])
 		h.waitDelivered(childID)
 		if i < len(childIDs)-1 {
-			collector.waitFor(t, "subagent wait set", func(events []controllerapi.SessionNotification) bool {
-				for _, event := range events {
-					if event.SessionID != parentID || event.Notification.Type != sessionevent.NotifyWaiting {
-						continue
-					}
-					var got []int64
-					for _, item := range event.Notification.Waiting {
-						if item.Kind != sessionevent.WaitSubagent {
-							return false
-						}
-						got = append(got, item.ChildID)
-					}
-					slices.Sort(got)
-					if slices.Equal(got, childIDs[i+1:]) {
-						return true
-					}
-				}
-				return false
-			})
+			waitSet(childIDs[i+1:])
 		}
 	}
 	collector.waitMessage(parentID, "all children delivered")
@@ -1201,8 +1168,8 @@ func TestLedgerFailure_SpawnRefusesInsteadOfDegrading(t *testing.T) {
 	require.NotZero(t, ok.ChildID)
 	h.waitDelivered(ok.ChildID)
 	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(ok.ChildID) })
-	h.waitUntil("healthy child runner removed", func() bool { return runnerCount(h.mgr.runners) == 0 })
-	loopsBefore := runnerCount(h.mgr.runners)
+	h.waitUntil("healthy child runner removed", func() bool { return runnerLiveCount(h.mgr.runners) == 0 })
+	loopsBefore := runnerLiveCount(h.mgr.runners)
 	childrenBefore := runnerChildCount(h.mgr.runners)
 	flaky.failGetLink(1, 0)
 
@@ -1210,7 +1177,7 @@ func TestLedgerFailure_SpawnRefusesInsteadOfDegrading(t *testing.T) {
 	res, err := h.mgr.Spawn(h.ctx, subagent.SpawnRequest{ParentID: root, AgentType: "general", Prompt: "x"})
 	require.Error(t, err)
 	assert.Equal(t, subagent.ChildResult{}, res)
-	loopsAfter := runnerCount(h.mgr.runners)
+	loopsAfter := runnerLiveCount(h.mgr.runners)
 	assert.Equal(t, loopsBefore, loopsAfter, "no runner was started")
 	assert.Equal(t, childrenBefore, runnerChildCount(h.mgr.runners), "no child slot was taken")
 }
@@ -1585,16 +1552,6 @@ func TestSubagentResult_BackgroundYieldFallsBackToYieldText(t *testing.T) {
 	assert.Contains(t, link.Result, "fresh yield text", "the fallback is the real final text")
 	assert.NotContains(t, link.Result, "the full child answer",
 		"the stale confirmed answer must not resurface as the result")
-	_ = sessionstore.SessionStatusCompleted
-}
-
-func subagentLastToolResultContent(msgs []llmwire.Message, toolName string) string {
-	for _, v := range slices.Backward(msgs) {
-		if v.Role == llmwire.RoleTool && v.ToolName == toolName {
-			return v.Content
-		}
-	}
-	return ""
 }
 
 type panickingChildCommitStore struct {
@@ -1729,18 +1686,6 @@ const childHoldRounds = 3
 
 const childTotalRounds = 12
 
-func countSubagentCompletions(messages []llmwire.Message, childID int64) int {
-	needle := "child_id: " + strconv.FormatInt(childID, 10)
-	count := 0
-	for _, message := range messages {
-		if message.Role == llmwire.RoleUser && strings.Contains(message.Content, "<subagent_completion>") &&
-			strings.Contains(message.Content, needle) {
-			count++
-		}
-	}
-	return count
-}
-
 func runIncompleteChildResponse(
 	t *testing.T,
 	childResponse *llmwire.Response,
@@ -1769,10 +1714,6 @@ func runIncompleteChildResponse(
 func taskResponse(prompt, description string) *llmwire.Response {
 	return callReply(taskCallID, tool.IDTask, `{"prompt":"`+prompt+`","description":"`+description+
 		`","subagent_type":"general"}`)
-}
-
-func runnerCount(runners *runnerSet) int {
-	return runnerLiveCount(runners)
 }
 
 // Stages a hidden candidate and host nudge followed by confirmation, returning the candidate's transcript ID.
@@ -1826,13 +1767,7 @@ func (h *gatingHarness) assertUnknownTools(sessionID int64, ids []string) {
 	require.NoError(h.t, llmtest.ValidateToolPairing(msgs), "child transcript must stay provider-valid")
 	for _, id := range ids {
 		assert.Equal(h.t, 1, countToolResultsFor(msgs, id), "one result for the %q probe", id)
-		toolOutput := ""
-		for _, v := range slices.Backward(msgs) {
-			if v.Role == llmwire.RoleTool && v.ToolName == id {
-				toolOutput = v.Content
-				break
-			}
-		}
+		toolOutput := lastToolResultContent(msgs, id)
 		assert.Contains(h.t, toolOutput, "unknown tool: "+id)
 	}
 }

@@ -1,7 +1,6 @@
 package daemon
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -42,17 +41,9 @@ func TestHarnessScenario_SkillSeededTaskStartsWithRenderedEnvelope(t *testing.T)
 			`{"skill":" REVIEW ","skill_args":"the diff","description":"review","subagent_type":"general"}`,
 		)
 	}
-	h := newHarness(t, harnessOptions{respond: respond})
-	workDir, err := h.mgr.store.GetProjectWorkDir(h.ctx, h.projectID)
-	require.NoError(t, err)
-	skillDir := filepath.Join(workDir, ".claude", "skills", "review")
-	require.NoError(t, os.MkdirAll(skillDir, 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte(`---
-name: review
-description: Review changes
----
-Review $ARGUMENTS.
-`), 0o600))
+	h := newSkillHarness(t, map[string]string{
+		"review": skillDoc("review", "Review changes", "Review $ARGUMENTS."),
+	}, respond)
 	parentID := h.send("run review skill", nil)
 	h.waitAnswer(parentID, "")
 	select {
@@ -75,8 +66,8 @@ func TestHarnessScenario_SkillActivationReceiptOrdersTheOutputChain(t *testing.T
 		if hasUserContaining(msgs, "invoke the skill yourself") {
 			return callReply("receipt-skill", "skill", `{"name":"review"}`)
 		}
-		if skillScenarioHasEnvelope(msgs) || hasToolResultFor(msgs, "ls") {
-			if skillScenarioHasEnvelope(msgs) {
+		if hasUserContaining(msgs, "<name>review</name>") || hasToolResultFor(msgs, "ls") {
+			if hasUserContaining(msgs, "<name>review</name>") {
 				<-modelFollowUpQueued
 			}
 			return textReply("probe answer")
@@ -86,10 +77,9 @@ func TestHarnessScenario_SkillActivationReceiptOrdersTheOutputChain(t *testing.T
 			ToolCalls: []llmwire.ToolCall{{ID: "receipt-ls", Name: "ls", Arguments: []byte(`{"path":"."}`)}},
 		}
 	}
-	h := newHarness(t, harnessOptions{respond: respond})
-	skillsDir := filepath.Join(h.workDir(), ".claude", "skills", "review")
-	require.NoError(t, os.MkdirAll(skillsDir, 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(skillsDir, "SKILL.md"), []byte(skillScenarioSkill), 0o600))
+	h := newSkillHarness(t, map[string]string{
+		"review": skillDoc("review", "Review the current change", "Review the change carefully."),
+	}, respond)
 	defer h.shutdown()
 	defer closeOnce(modelFollowUpQueued)
 
@@ -110,7 +100,7 @@ func TestHarnessScenario_SkillActivationReceiptOrdersTheOutputChain(t *testing.T
 	closeOnce(modelFollowUpQueued)
 	collector.waitMessage(root, "model activation complete")
 	collector.waitIdleAfter(root, "model activation complete")
-	assertHarnessTrace(t, h, "skill_activation_receipt.json", collector.snapshot(), root)
+	assertHarnessTrace(t, h.harness, "skill_activation_receipt.json", collector.snapshot(), root)
 
 	// Exactly one receipt row per activation path, each a persistent message
 	// carrying the canonical skill name and nothing else.
@@ -128,8 +118,8 @@ func TestHarnessScenario_SkillActivationReceiptOrdersTheOutputChain(t *testing.T
 
 	// The accepted input binds one skill receipt across promotion replay, published as its own output row.
 	var receiptClaim int
-	for _, claim := range traceOutputs(t, "skill_activation_receipt.json") {
-		if claim.SourceKey == fmt.Sprintf("input:%d:skill_receipt", inputIDOf(t, h, root)) {
+	for _, claim := range readHarnessTraceFile(t, harnessTracePath("skill_activation_receipt.json")).Outputs {
+		if claim.SourceKey == fmt.Sprintf("input:%d:skill_receipt", inputIDOf(t, h.harness, root)) {
 			receiptClaim++
 		}
 	}
@@ -151,10 +141,10 @@ func TestHarnessScenario_SkillActivationReceiptOrdersTheOutputChain(t *testing.T
 // Compaction must reattach a skill once, including repeated compaction that encounters its existing reattachment.
 func TestHarnessScenario_SkillSurvivesTwoCompactionsExactlyOnce(t *testing.T) {
 	const skillName = "playbook"
-	wrapped := newSkillHarness(t, map[string]string{
+	h := newSkillHarness(t, map[string]string{
 		skillName: skillDoc(skillName, "The playbook", "Follow these steps for $ARGUMENTS."),
 	}, skillCompactRespond)
-	h, rec := wrapped.harness, wrapped.recorder
+	rec := h.recorder
 	collector := h.collect()
 	sessionID := h.send("start the work", nil)
 	h.waitAnswer(sessionID, "")
@@ -209,10 +199,10 @@ func TestHarnessScenario_ModelLoadedSkillSurvivesCompaction(t *testing.T) {
 		}
 		return skillCompactRespond(model, msgs)
 	}
-	wrapped := newSkillHarness(t, map[string]string{
+	h := newSkillHarness(t, map[string]string{
 		skillName: skillDoc(skillName, "The playbook", "Follow these steps for $ARGUMENTS."),
 	}, respond)
-	h, rec := wrapped.harness, wrapped.recorder
+	rec := h.recorder
 	collector := h.collect()
 	sessionID := h.send("load the playbook and start the work", nil)
 	h.waitAnswer(sessionID, "")
@@ -261,10 +251,10 @@ func TestHarnessScenario_ModelLoadedSkillSurvivesCompaction(t *testing.T) {
 // envelope with its arguments substituted, not the command the human typed.
 func TestHarnessScenario_SkillCommandExpandsBeforeTheModelCall(t *testing.T) {
 	const skillName = "release-notes"
-	wrapped := newSkillHarness(t, map[string]string{
+	h := newSkillHarness(t, map[string]string{
 		skillName: skillDoc(skillName, "Draft release notes", "Draft notes for $ARGUMENTS."),
 	}, plainRespond)
-	h, rec := wrapped.harness, wrapped.recorder
+	rec := h.recorder
 	collector := h.collect()
 	sessionID := h.send("warm up", nil)
 	h.waitAnswer(sessionID, "")
@@ -307,10 +297,10 @@ func TestHarnessScenario_SkillInvocationPolicySeparatesUserAndModelPaths(t *test
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			wrapped := newSkillHarness(t, map[string]string{
+			h := newSkillHarness(t, map[string]string{
 				tc.skill: skillDoc(tc.skill, "policy probe", "Body of "+tc.skill+".", tc.frontmatter),
 			}, plainRespond)
-			h, rec := wrapped.harness, wrapped.recorder
+			rec := h.recorder
 			collector := h.collect()
 			sessionID := h.send("warm up", nil)
 			h.waitAnswer(sessionID, "")
@@ -338,33 +328,6 @@ func TestHarnessScenario_SkillInvocationPolicySeparatesUserAndModelPaths(t *test
 	}
 }
 
-// skillScenarioSkill is the project-local user-invocable skill the scenario
-// activates through both the /skill command and the model skill tool.
-const skillScenarioSkill = `---
-name: review
-description: Review the current change
----
-Review the change carefully.
-`
-
-func skillScenarioHasEnvelope(msgs []llmwire.Message) bool {
-	for _, m := range msgs {
-		if m.Role == llmwire.RoleUser && strings.Contains(m.Content, "<name>review</name>") {
-			return true
-		}
-	}
-	return false
-}
-
-func traceOutputs(t *testing.T, name string) []harnessTraceOutput {
-	t.Helper()
-	data, err := os.ReadFile(harnessTracePath(name))
-	require.NoError(t, err)
-	var file harnessTraceFile
-	require.NoError(t, json.Unmarshal(data, &file))
-	return file.Outputs
-}
-
 func inputIDOf(t *testing.T, h *harness, root int64) int64 {
 	t.Helper()
 	var inputID int64
@@ -380,37 +343,6 @@ func skillCompactRespond(_ string, msgs []llmwire.Message) *llmwire.Response {
 		return textReply("## Goal\nfollow the playbook\n## Progress\n- read it\n## Context for Continuation\ncarry on")
 	}
 	return textReply("work done")
-}
-
-type skillHarness struct {
-	*harness
-	recorder *skillRecorder
-}
-
-func newSkillHarness(
-	t *testing.T,
-	skills map[string]string,
-	respond func(string, []llmwire.Message) *llmwire.Response,
-) *skillHarness {
-	t.Helper()
-	rec := &skillRecorder{}
-	h := newHarness(t, harnessOptions{respond: rec.wrap(respond)})
-	for name, body := range skills {
-		dir := filepath.Join(h.workDir(), ".claude", "skills", name)
-		require.NoError(t, os.MkdirAll(dir, 0o755))
-		require.NoError(t, os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(body), 0o600))
-	}
-	return &skillHarness{harness: h, recorder: rec}
-}
-
-func skillDoc(name, description, body string, extraFrontmatter ...string) string {
-	var b strings.Builder
-	b.WriteString("---\nname: " + name + "\ndescription: " + description + "\n")
-	for _, line := range extraFrontmatter {
-		b.WriteString(line + "\n")
-	}
-	b.WriteString("---\n" + body + "\n")
-	return b.String()
 }
 
 // countMessagesWithSkill counts transcript rows carrying the named skill envelope.
@@ -438,8 +370,8 @@ func warningNotices(events []controllerapi.SessionNotification, sessionID int64)
 
 // An unknown skill is consumed and rejected once on the control plane, without any model call.
 func TestHarnessScenario_UnknownSkillCommandIsRejectedOnceAndDrains(t *testing.T) {
-	wrapped := newSkillHarness(t, nil, plainRespond)
-	h, rec := wrapped.harness, wrapped.recorder
+	h := newSkillHarness(t, nil, plainRespond)
+	rec := h.recorder
 	collector := h.collect()
 	sessionID := h.send("warm up", nil)
 	h.waitAnswer(sessionID, "")
@@ -471,8 +403,8 @@ func TestHarnessScenario_UnknownSkillOnAFreshSessionCostsNoModelTurn(t *testing.
 		{name: "project with a CLAUDE.md header", claudeMD: "# House rules\nBe careful.", wantStart: 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			wrapped := newSkillHarness(t, nil, plainRespond)
-			h, rec := wrapped.harness, wrapped.recorder
+			h := newSkillHarness(t, nil, plainRespond)
+			rec := h.recorder
 			collector := h.collect()
 			if tc.claudeMD != "" {
 				require.NoError(t, os.WriteFile(filepath.Join(h.workDir(), "CLAUDE.md"), []byte(tc.claudeMD), 0o600))

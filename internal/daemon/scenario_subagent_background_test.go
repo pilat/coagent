@@ -5,7 +5,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -30,6 +29,7 @@ const (
 // backgroundChildScript reproduces the 2026-10-12 incident: a research child
 // backgrounds a slow search and answers before it finishes.
 type backgroundChildScript struct {
+	h          *harness
 	release    string
 	background bool
 	cancel     bool
@@ -92,21 +92,6 @@ func (s *backgroundChildScript) child(messages []llmwire.Message) *llmwire.Respo
 	return callReply("search", "bash", `{"command":"`+command+`","background":true}`)
 }
 
-func backgroundProcessID(messages []llmwire.Message) string {
-	for _, message := range slices.Backward(messages) {
-		if message.Role != llmwire.RoleTool || message.ToolName != "bash" {
-			continue
-		}
-		_, after, found := strings.Cut(message.Content, backgroundProcessPrefix)
-		if !found {
-			return ""
-		}
-		id, _, _ := strings.Cut(after, "\n")
-		return id
-	}
-	return ""
-}
-
 func (s *backgroundChildScript) releaseSearch(t *testing.T) {
 	t.Helper()
 	require.NoError(t, os.WriteFile(s.release, nil, 0o600))
@@ -151,13 +136,13 @@ func assertOneChildResult(t *testing.T, h *harness, parentID int64, link *subage
 }
 
 // releaseAndAwaitExit lets the search finish and waits for its durable terminal row.
-func (s *backgroundChildScript) releaseAndAwaitExit(t *testing.T, h **harness) {
+func (s *backgroundChildScript) releaseAndAwaitExit(t *testing.T) {
 	t.Helper()
 	s.releaseSearch(t)
 	id, _ := s.processID.Load().(string)
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		process, err := (*h).mgr.processStore.GetProcess(context.Background(), id)
+		process, err := s.h.mgr.processStore.GetProcess(context.Background(), id)
 		if err == nil && process.State.Terminal() {
 			return
 		}
@@ -168,10 +153,7 @@ func (s *backgroundChildScript) releaseAndAwaitExit(t *testing.T, h **harness) {
 
 func TestHarnessScenario_ForegroundSubagentBackgroundWorkDeliversOneResult(t *testing.T) {
 	script := newBackgroundChildScript(t)
-	h := newHarness(t, harnessOptions{respond: script.respond})
-	installScenarioProcessService(t, h)
-	parentID, err := h.mgr.Send(h.ctx, h.projectID, "research", "fake-model", managerAttrs(scenarioManagerID))
-	require.NoError(t, err)
+	h, parentID := script.start(t)
 
 	link := h.waitChildYield(parentID)
 	assert.True(t, link.Blocking)
@@ -181,20 +163,15 @@ func TestHarnessScenario_ForegroundSubagentBackgroundWorkDeliversOneResult(t *te
 	assert.Zero(t, countToolResultsFor(h.messages(parentID), tool.IDTask))
 
 	script.releaseSearch(t)
-	h.waitUntil("parent answer", func() bool {
-		return lastAssistantTextDTO(h.messages(parentID)) == "parent final" && !h.mgr.HasActiveLoop(parentID)
-	})
+	h.waitParentAnswer(parentID)
 	assertOneChildResult(t, h, parentID, link, "final report with search")
-	assert.Contains(t, subagentLastToolResultContent(h.messages(parentID), tool.IDTask), "final report with search")
+	assert.Contains(t, lastToolResultContent(h.messages(parentID), tool.IDTask), "final report with search")
 }
 
 func TestHarnessScenario_BackgroundSubagentBackgroundWorkDeliversOneResult(t *testing.T) {
 	script := newBackgroundChildScript(t)
 	script.background = true
-	h := newHarness(t, harnessOptions{respond: script.respond})
-	installScenarioProcessService(t, h)
-	parentID, err := h.mgr.Send(h.ctx, h.projectID, "research", "fake-model", managerAttrs(scenarioManagerID))
-	require.NoError(t, err)
+	h, parentID := script.start(t)
 
 	link := h.waitChildYield(parentID)
 	assert.False(t, link.Blocking)
@@ -203,9 +180,7 @@ func TestHarnessScenario_BackgroundSubagentBackgroundWorkDeliversOneResult(t *te
 	assert.Zero(t, h.parentDeliveries(parentID, link.ChildID))
 
 	script.releaseSearch(t)
-	h.waitUntil("parent answer", func() bool {
-		return lastAssistantTextDTO(h.messages(parentID)) == "parent final" && !h.mgr.HasActiveLoop(parentID)
-	})
+	h.waitParentAnswer(parentID)
 	assertOneChildResult(t, h, parentID, link, "final report with search")
 	parent := h.messages(parentID)
 	assert.Equal(t, 1, countUserCompletions(parent, "<subagent_completion>"))
@@ -215,14 +190,9 @@ func TestHarnessScenario_BackgroundSubagentBackgroundWorkDeliversOneResult(t *te
 func TestHarnessScenario_SubagentCancelsUnneededProcessAfterNudge(t *testing.T) {
 	script := newBackgroundChildScript(t)
 	script.cancel = true
-	h := newHarness(t, harnessOptions{respond: script.respond})
-	installScenarioProcessService(t, h)
-	parentID, err := h.mgr.Send(h.ctx, h.projectID, "research", "fake-model", managerAttrs(scenarioManagerID))
-	require.NoError(t, err)
+	h, parentID := script.start(t)
 
-	h.waitUntil("parent answer", func() bool {
-		return lastAssistantTextDTO(h.messages(parentID)) == "parent final" && !h.mgr.HasActiveLoop(parentID)
-	})
+	h.waitParentAnswer(parentID)
 	link := h.linkByCall(parentID, taskCallID)
 	require.NotNil(t, link)
 	assertOneChildResult(t, h, parentID, link, "final report without search")
@@ -260,9 +230,7 @@ func TestHarnessScenario_SubagentBackgroundYieldSurvivesRestart(t *testing.T) {
 
 	second := newHarness(t, harnessOptions{dbPath: dbPath, respond: script.respond})
 	require.NoError(t, second.mgr.Start(second.ctx))
-	second.waitUntil("parent answer", func() bool {
-		return lastAssistantTextDTO(second.messages(parentID)) == "parent final" && !second.mgr.HasActiveLoop(parentID)
-	})
+	second.waitParentAnswer(parentID)
 	assertOneChildResult(t, second, parentID, link, "final report with search")
 	assert.True(t, hasUserContaining(second.messages(link.ChildID), "state: interrupted"))
 }
@@ -298,4 +266,13 @@ func TestHarnessScenario_RootBackgroundYieldIsUnchanged(t *testing.T) {
 		return lastAssistantTextDTO(h.messages(rootID)) == "root done" && !h.mgr.HasActiveLoop(rootID)
 	})
 	assert.Zero(t, countUserCompletions(h.messages(rootID), backgroundExitNudgeMarker))
+}
+
+func (s *backgroundChildScript) start(t *testing.T) (*harness, int64) {
+	t.Helper()
+	s.h = newHarness(t, harnessOptions{respond: s.respond})
+	installScenarioProcessService(t, s.h)
+	parentID, err := s.h.mgr.Send(s.h.ctx, s.h.projectID, "research", "fake-model", managerAttrs(scenarioManagerID))
+	require.NoError(t, err)
+	return s.h, parentID
 }
