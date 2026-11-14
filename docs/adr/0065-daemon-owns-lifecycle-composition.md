@@ -3,6 +3,7 @@
 - **Status:** Accepted
 - **Date:** 2026-10-03
 - **Amends:** [ADR-0038](0038-runtime-owners-replace-daemon-capability-discovery.md)
+- **Amended by:** [ADR-0094](0094-budget-park-and-length-retry-keep-no-durable-state.md)
 
 ## Context
 

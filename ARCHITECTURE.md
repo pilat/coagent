@@ -131,8 +131,8 @@ root-tree budgets, durable
 TODO state, per-session file-read ledger (storing `{mtime_unix_nano, size, hash}`
 for write-guard checks), and the background-process lifecycle ledger. Configuration files, their recoverable
 backups and the pending-apply marker are atomic filesystem state owned by config operations.
-Coordination and caches are reconstructible from durable state; one-turn tool
-grants are deliberately process-local authority. A runtime state label shown by a controller is an in-memory
+Coordination and caches are reconstructible from durable state; budget parking
+and one-turn tool grants are deliberately process-local. A runtime state label shown by a controller is an in-memory
 projection; persisted session status is the recovery source.
 
 Session-store operations own transactional message ordering and compare-and-swap
@@ -306,7 +306,7 @@ shape. They describe one attempt, never task completion ([ADR-0060](docs/adr/006
 Actual calls returned with `stop` or `tool_calls` retain structural tool
 routing, while `tool_calls` without calls follows empty-response recovery. An
 ordinary `length` or unknown finish is rejected before output, waiting or tool
-execution. The first `length` adds one linked recovery input; a repeated
+execution. The first `length` appends one recovery input directly after its rejected attempt; a repeated
 `length` or unknown finish commits a terminal error. Compaction model calls
 retain their separate no-retry contract.
 
@@ -516,16 +516,20 @@ a one-shot root-tree cost/duration checkpoint. The budget mutation and its keyed
 receipt share a transaction; the session spends its in-memory grant once it executes.
 Model responses and successful
 compaction summaries commit usage, fire comparison, skipped returned-tool
-results and checkpoint intent in one session-store transaction. The daemon
-closes admission before a generation drains and parks. Rearming refuses a fired
-generation whose park is requested or draining, preserving its owner and generation;
-a released row's leftover phase does not block rearming. Managed park workers are
-cancelled and joined at shutdown. Startup reconciles armed and half-parked
-generations before normal session recovery. A synchronized budget clock sends
-due roots to the inbox wake worker; timer callbacks never perform ledger writes.
-Failed deadline observations and unfinished parks remain retryable without
-reviving a newer generation. Parking joins runners before taking the tree fence,
-then rechecks liveness under that fence.
+results and checkpoint intent in one session-store transaction. Firing closes
+admission. The daemon parks the tree in memory: in-flight calls finish, then
+under the tree fence one conditional update moves the root to stopping only
+while its budget is still fired. Stop cleanup preserves background processes.
+While parking is in progress, model-bound human input to the root is refused
+with a parking notice. A release, clear or re-arm committed first skips the park.
+Park triggers received before a worker exits are coalesced into a successor.
+Managed park workers are cancelled and joined at shutdown; a park interrupted
+by a crash is not resumed. Startup reconciles armed budgets before normal session
+recovery, synchronously parking any that fired while the daemon was down.
+A synchronized budget clock sends due roots to the inbox wake worker; timer
+callbacks never perform ledger writes. Failed deadline loads or observations
+are retried without reviving a newer generation. Parking joins runners before
+taking the tree fence, then rechecks liveness under that fence.
 The next direct model-bound human input to the root atomically releases a fired
 checkpoint and resumes only the root; control and read-only commands still pass.
 Every user-source input has human authority, while only model-bound root input
@@ -544,8 +548,8 @@ blocking pending input from continuing. Other release failures still propagate.
 For a rejected ordinary model attempt, the session chooses recovery or terminal
 error. Its store commit advances the iteration, records usage and finish evidence,
 and observes the root-tree budget before applying conditional outcome parts. Budget
-crossing takes precedence. Recovery identity is the explicit link from its
-host-authored input to the rejected attempt; later manager input supersedes an
+crossing takes precedence. Recovery identity is positional: its host-authored
+input is the row directly after the rejected attempt; later manager input supersedes an
 unfinished chain through durable inbox provenance rather than transcript text.
 
 For an accepted ordinary model attempt the step transaction inserts the
@@ -937,7 +941,8 @@ the stop and cancels
 producer obligations. Explicit stop completes the manager-owned root atomically
 with its terminal output; pending scheduled input can then reactivate it.
 Boot finishes interrupted lifecycle operations and process interruptions,
-reconciles budgets and parks, enqueues orphaned external-call cancellations and
+reconciles armed budgets, parking any that fired while the daemon was down,
+enqueues orphaned external-call cancellations and
 commits interrupted in-loop failures before enabling inbox wake and resume.
 Session keeps row identities in a positional transcript sidecar. Attachment
 read authority is the narrow persistence metadata carried in `llmwire.Message`
@@ -1005,7 +1010,8 @@ workflow engine.
 
 Budget types and crossing policy are pure `budget` code. Session-store imports
 that policy to observe aggregate cost within a step; daemon park and recovery
-operations use `budget.Service`. The budget tool mutates through its narrow
+operations read and release through `budget.Service`, while the park's
+fired-root stop is a session-store conditional update. The budget tool mutates through its narrow
 store contract, implemented by session-store.
 
 ### Language-server boundary

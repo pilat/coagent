@@ -1,7 +1,6 @@
 package sessionstore
 
 import (
-	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -44,16 +43,9 @@ func TestBudgetStore_TargetedMutationDeliversReceiptToCaller(t *testing.T) {
 	}
 }
 
-func TestBudgetStore_ArmProtectsParkingAndAllowsReleasedPhases(t *testing.T) {
-	for _, tc := range []struct {
-		state, phase string
-	}{
-		{"fired", "requested"},
-		{"fired", "draining"},
-		{"released", "requested"},
-		{"released", "parked"},
-	} {
-		t.Run(tc.state+"/"+tc.phase, func(t *testing.T) {
+func TestBudgetStore_ArmReplacesFiredAndReleasedGenerations(t *testing.T) {
+	for _, state := range []budget.State{budget.Fired, budget.Released} {
+		t.Run(string(state), func(t *testing.T) {
 			t.Parallel()
 			ctx := t.Context()
 			store, _, project := newTestStore(t)
@@ -64,15 +56,7 @@ func TestBudgetStore_ArmProtectsParkingAndAllowsReleasedPhases(t *testing.T) {
 			require.NoError(t, err)
 			fired, _, err := store.FireBudget(ctx, target.ID, armed.Generation, "duration", 0, "checkpoint")
 			require.NoError(t, err)
-			if tc.phase == "draining" || tc.phase == "parked" {
-				_, err = store.BeginBudgetDrain(ctx, target.ID, fired.Generation, fired.ParkOwner)
-				require.NoError(t, err)
-			}
-			if tc.phase == "parked" {
-				_, err = store.MarkBudgetParked(ctx, target.ID, fired.Generation, fired.ParkOwner)
-				require.NoError(t, err)
-			}
-			if tc.state == "released" {
+			if state == budget.Released {
 				_, err = store.ReleaseBudget(ctx, target.ID, fired.Generation, "resumed")
 				require.NoError(t, err)
 			}
@@ -80,21 +64,9 @@ func TestBudgetStore_ArmProtectsParkingAndAllowsReleasedPhases(t *testing.T) {
 			require.NoError(t, err)
 			mutation = targetedBudgetMutation(t, store, caller.ID, target.ID, "rearm")
 			record, armErr := store.Arm(ctx, mutation)
-			if tc.state == "fired" {
-				require.EqualError(
-					t,
-					armErr,
-					fmt.Sprintf("session #%d is parking after a budget checkpoint; try again once it stops", target.ID),
-				)
-				after, loadErr := store.Get(ctx, target.ID)
-				require.NoError(t, loadErr)
-				assert.Equal(t, before, after)
-				return
-			}
 			require.NoError(t, armErr)
 			assert.Equal(t, before.Generation+1, record.Generation)
 			assert.Equal(t, budget.Armed, record.State)
-			assert.Empty(t, record.ParkPhase)
 		})
 	}
 }

@@ -17,12 +17,12 @@ import (
 	"github.com/pilat/coagent/internal/sessionstore"
 )
 
-const (
-	budgetParkRequested = "requested"
-	budgetParkDraining  = "draining"
-)
-
 var errUnpricedModel = errors.New("model has no catalog pricing")
+
+type parkSet struct {
+	mu    sync.Mutex
+	roots map[int64]bool // Retain triggers arriving while the current park exits.
+}
 
 type budgetClock struct {
 	mu     sync.Mutex
@@ -34,7 +34,6 @@ type budgetClock struct {
 
 type budgetTimer struct {
 	generation int64
-	park       bool
 	retry      bool
 	t          *time.Timer
 }
@@ -137,12 +136,10 @@ func (s *Service) settleRunBudget(
 		record, budgetErr := s.budgets.Get(ctx, sessionRootID(rec))
 		if budgetErr != nil {
 			runErr = errors.Join(runErr, budgetErr)
-		} else if record.ParkPhase == budgetParkRequested {
-			s.startPark(record)
+		} else if record.State == budget.Fired {
+			s.startPark(record.RootSessionID)
 		}
-	}
-
-	if rec.ParentID == 0 && !result.BudgetFired {
+	} else if rec.ParentID == 0 {
 		runErr = errors.Join(runErr, s.settleRootBudget(ctx, rec.ID, result.Suspended, runErr))
 	}
 
@@ -165,43 +162,28 @@ func (c *budgetClock) set(record *budget.Record) {
 		return
 	}
 
-	previous := c.timers[record.RootSessionID]
 	armed := record.State == budget.Armed && record.DurationSeconds != nil
+	if previous := c.timers[record.RootSessionID]; previous != nil {
+		if armed && !previous.retry && previous.generation == record.Generation {
+			return
+		}
 
-	parking := record.State == budget.Fired &&
-		(record.ParkPhase == budgetParkRequested || record.ParkPhase == budgetParkDraining)
-	if previous != nil && !previous.retry && (armed || parking) && previous.generation == record.Generation &&
-		previous.park == parking {
-		return
-	}
-
-	if previous != nil {
 		previous.t.Stop()
 		delete(c.timers, record.RootSessionID)
 	}
 
-	if !armed && !parking {
-		return
-	}
-
-	deadline := time.Now().Add(time.Second)
 	if armed {
-		deadline = record.ArmedAt.Add(time.Duration(*record.DurationSeconds) * time.Second)
+		deadline := record.ArmedAt.Add(time.Duration(*record.DurationSeconds) * time.Second)
+		c.install(record.RootSessionID, &budgetTimer{generation: record.Generation}, time.Until(deadline))
 	}
-
-	c.install(record.RootSessionID, &budgetTimer{generation: record.Generation, park: parking}, time.Until(deadline))
 }
 
 func (c *budgetClock) retry(rootID int64) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if c.closed {
-		return
-	}
-
 	previous := c.timers[rootID]
-	if previous != nil && previous.retry {
+	if c.closed || (previous != nil && previous.retry) {
 		return
 	}
 
@@ -263,37 +245,26 @@ func (c *budgetClock) close() {
 }
 
 func (s *Service) refreshBudget(ctx context.Context, rootID int64) {
+	if record := s.timerBudget(ctx, rootID); record != nil {
+		s.clock.set(record)
+	}
+}
+
+func (s *Service) timerBudget(ctx context.Context, rootID int64) *budget.Record {
 	record, err := s.store.Get(ctx, rootID)
-	if errors.Is(err, budget.ErrNotFound) {
-		return
+	if err == nil || errors.Is(err, budget.ErrNotFound) {
+		return record
 	}
 
-	if err != nil {
-		logger.Ctx(ctx).Named("daemon.budget").Warn("load_timer_budget", zap.Error(err))
-		s.clock.retry(rootID)
+	logger.Ctx(ctx).Named("daemon.budget").Warn("load_timer_budget", zap.Error(err))
+	s.clock.retry(rootID)
 
-		return
-	}
-
-	s.clock.set(record)
+	return nil
 }
 
 func (s *Service) budgetDue(ctx context.Context, rootID int64) {
-	record, err := s.store.Get(ctx, rootID)
-	if errors.Is(err, budget.ErrNotFound) {
-		return
-	}
-
-	if err != nil {
-		logger.Ctx(ctx).Named("daemon.budget").Warn("load_timer_budget", zap.Error(err))
-		s.clock.retry(rootID)
-
-		return
-	}
-
-	if record.State == budget.Fired &&
-		(record.ParkPhase == budgetParkRequested || record.ParkPhase == budgetParkDraining) {
-		s.startPark(record)
+	record := s.timerBudget(ctx, rootID)
+	if record == nil {
 		return
 	}
 
@@ -307,13 +278,13 @@ func (s *Service) budgetDue(ctx context.Context, rootID int64) {
 			return
 		}
 
-		if fired && observed.ParkPhase == budgetParkRequested {
-			s.startPark(observed)
-		} else {
-			s.clock.set(observed)
+		if fired {
+			s.startPark(rootID)
+
+			return
 		}
 
-		return
+		record = observed
 	}
 
 	s.clock.set(record)
@@ -349,7 +320,9 @@ func (s *Service) reconcileArmedBudgets(ctx context.Context) error {
 			return fmt.Errorf("reconcile budget %d: %w", record.RootSessionID, err)
 		}
 
-		if !fired {
+		if fired {
+			s.parkNow(ctx, record.RootSessionID)
+		} else {
 			s.clock.set(observed)
 		}
 	}
@@ -357,31 +330,14 @@ func (s *Service) reconcileArmedBudgets(ctx context.Context) error {
 	return nil
 }
 
-func (s *Service) parkBudgetTree(ctx context.Context, record *budget.Record) {
-	if record == nil || record.State != budget.Fired || record.ParkOwner == "" {
-		return
-	}
-	defer s.refreshBudget(context.WithoutCancel(ctx), record.RootSessionID)
+func (s *Service) parkBudgetTree(ctx context.Context, rootID int64) {
+	defer s.refreshBudget(context.WithoutCancel(ctx), rootID)
 
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-
-	owner := record.ParkOwner
-	if record.ParkPhase == budgetParkRequested {
-		_, err := s.budgets.BeginDrain(ctx, record.RootSessionID, record.Generation, owner)
-		if errors.Is(err, budget.ErrConflict) {
-			return
-		}
-
-		if err != nil {
-			logger.Ctx(ctx).Named("daemon.budget").Warn("begin_drain_failed", zap.Error(err))
-			return
-		}
-	}
-
-	unlock, err := s.awaitParkTree(ctx, record.RootSessionID)
+	unlock, err := s.awaitParkTree(ctx, rootID)
 	if err != nil {
-		if ctx.Err() == nil {
+		if errors.Is(err, errParkSuperseded) {
+			s.publishIdle(ctx, rootID)
+		} else if ctx.Err() == nil {
 			logger.Ctx(ctx).Named("daemon.budget").Warn("lock_park_tree_failed", zap.Error(err))
 		}
 
@@ -390,38 +346,87 @@ func (s *Service) parkBudgetTree(ctx context.Context, record *budget.Record) {
 
 	defer unlock()
 
-	current, err := s.budgets.Get(ctx, record.RootSessionID)
+	failureEvent := "park_root_stop_failed"
+
+	stopped, err := s.store.StopFiredBudgetRoot(ctx, rootID)
+	if err == nil && stopped {
+		failureEvent = "park_cleanup_failed"
+		err = s.stopTreeCleanup(ctx, rootID, stopTreeOptions{preserveBackgroundProcesses: true})
+	}
+
 	if err != nil {
-		logger.Ctx(ctx).Named("daemon.budget").Warn("load_park_generation", zap.Error(err))
+		logger.Ctx(ctx).Named("daemon.budget").Warn(failureEvent, zap.Error(err))
 		return
 	}
 
-	if current.Generation != record.Generation || current.State != budget.Fired || current.ParkOwner != owner ||
-		(current.ParkPhase != budgetParkRequested && current.ParkPhase != budgetParkDraining) {
-		return
-	}
-
-	if err := s.stopTreeCleanup(ctx, record.RootSessionID, stopTreeOptions{
-		preserveBackgroundProcesses: true,
-	}); err != nil {
-		logger.Ctx(ctx).Named("daemon.budget").Warn("park_cleanup_failed", zap.Error(err))
-		return
-	}
-
-	if _, err := s.budgets.MarkParked(ctx, record.RootSessionID, record.Generation, owner); err != nil {
-		logger.Ctx(ctx).Named("daemon.budget").Warn("mark_parked_failed", zap.Error(err))
-		return
-	}
-
-	s.publishIdle(ctx, record.RootSessionID)
+	s.publishIdle(ctx, rootID)
 }
 
-func (s *Service) startPark(record *budget.Record) {
-	s.life.Go("daemon.budget", func(ctx context.Context) { s.parkBudgetTree(ctx, record) })
+func (s *Service) startPark(rootID int64) {
+	if s.parks.begin(rootID) && !s.life.Go("daemon.budget", func(ctx context.Context) {
+		defer s.parks.end(rootID, func() { s.startPark(rootID) })
+
+		s.parkBudgetTree(ctx, rootID)
+	}) {
+		s.parks.end(rootID, nil)
+	}
+}
+
+func (s *Service) parkNow(ctx context.Context, rootID int64) {
+	if s.parks.begin(rootID) {
+		defer s.parks.end(rootID, func() { s.parkNow(ctx, rootID) })
+
+		s.parkBudgetTree(ctx, rootID)
+	}
+}
+
+func (s *Service) parkRefuses(sessionID int64, prompt string) bool {
+	return s.parks.active(sessionID) && !isReadOnlyCommand(prompt) && !isEnqueueCommand(prompt)
+}
+
+func (p *parkSet) begin(rootID int64) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if p.roots == nil {
+		p.roots = make(map[int64]bool)
+	}
+
+	_, exists := p.roots[rootID]
+	p.roots[rootID] = exists
+
+	return !exists
+}
+
+func (p *parkSet) end(rootID int64, rerun func()) {
+	p.mu.Lock()
+	pending := p.roots[rootID]
+	delete(p.roots, rootID)
+	p.mu.Unlock()
+
+	if pending && rerun != nil {
+		rerun()
+	}
+}
+
+func (p *parkSet) active(rootID int64) bool {
+	p.mu.Lock()
+	_, exists := p.roots[rootID]
+	p.mu.Unlock()
+
+	return exists
 }
 
 func (s *Service) awaitParkTree(ctx context.Context, rootID int64) (func(), error) {
 	for {
+		record, err := s.budgets.Get(ctx, rootID)
+		switch {
+		case err != nil:
+			return nil, fmt.Errorf("load budget before park join: %w", err)
+		case record.State != budget.Fired:
+			return nil, errParkSuperseded
+		}
+
 		t, err := s.loadTree(ctx, rootID)
 		if err != nil {
 			return nil, err

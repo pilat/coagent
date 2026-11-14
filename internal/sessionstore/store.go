@@ -112,7 +112,6 @@ type scannedMessageValues struct {
 	toolCallID, toolName, toolCallsRaw, reasoningContent, reasoningRaw sql.NullString
 	attachmentsRaw, usageRaw, finishType, providerFinishReason         sql.NullString
 	rejectedReason                                                     sql.NullString
-	retryOfMessageID                                                   sql.NullInt64
 	compactedAt                                                        sql.NullTime
 	costUSD                                                            sql.NullFloat64
 }
@@ -593,7 +592,7 @@ func (s *Store) LoadActiveMessages(ctx context.Context, sessionID int64) ([]*tra
 		ctx,
 		`SELECT id, session_id, role, content, tool_call_id, tool_name, tool_error, tool_calls,
 			reasoning_content, reasoning_raw, attachments, cost_usd, usage, finish_type,
-			provider_finish_reason, rejected_reason, retry_of_message_id, compacted_at, created_at
+			provider_finish_reason, rejected_reason, compacted_at, created_at
 		FROM messages WHERE session_id = ? AND compacted_at IS NULL AND rejected_reason IS NULL
 		ORDER BY position IS NULL, position, id`,
 		sessionID,
@@ -623,16 +622,12 @@ func (s SessionStatus) valid() bool {
 }
 
 func insertMessageWith(ctx context.Context, q execer, sessionID int64, msg *transcript.Message) (int64, error) {
-	if err := validateRetryReference(ctx, q, sessionID, msg.RetryOfMessageID); err != nil {
-		return 0, err
-	}
-
 	result, err := q.ExecContext(
 		ctx,
 		`INSERT INTO messages (session_id, role, content, tool_call_id, tool_name, tool_error,
 			tool_calls, reasoning_content, reasoning_raw, attachments, cost_usd, usage,
-			finish_type, provider_finish_reason, rejected_reason, retry_of_message_id)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			finish_type, provider_finish_reason, rejected_reason)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		sessionID,
 		msg.Role,
 		msg.Content,
@@ -648,7 +643,6 @@ func insertMessageWith(ctx context.Context, q execer, sessionID int64, msg *tran
 		nullString(msg.FinishType),
 		nullString(msg.ProviderFinishReason),
 		nullString(msg.RejectedReason),
-		nullMessageID(msg.RetryOfMessageID),
 	)
 	if err != nil {
 		return 0, fmt.Errorf("insert message: %w", err)
@@ -660,28 +654,6 @@ func insertMessageWith(ctx context.Context, q execer, sessionID int64, msg *tran
 	}
 
 	return id, nil
-}
-
-func validateRetryReference(ctx context.Context, q execer, sessionID, retryOfMessageID int64) error {
-	if retryOfMessageID == 0 {
-		return nil
-	}
-
-	var referencedSessionID int64
-	var role string
-	var rejectedReason sql.NullString
-
-	err := q.QueryRowContext(ctx, `SELECT session_id, role, rejected_reason FROM messages WHERE id = ?`,
-		retryOfMessageID).Scan(&referencedSessionID, &role, &rejectedReason)
-	if err != nil {
-		return fmt.Errorf("load retry attempt: %w", err)
-	}
-
-	if referencedSessionID != sessionID || role != assistantRole || !rejectedReason.Valid {
-		return errors.New("retry message does not reference a rejected assistant attempt in the same session")
-	}
-
-	return nil
 }
 
 func replaceCompactedMessagesTx(
@@ -888,7 +860,7 @@ func scanMessage(sc rowScanner) (*transcript.Message, error) {
 		&values.toolCallID, &values.toolName, &msg.ToolError, &values.toolCallsRaw,
 		&values.reasoningContent, &values.reasoningRaw, &values.attachmentsRaw,
 		&values.costUSD, &values.usageRaw, &values.finishType, &values.providerFinishReason,
-		&values.rejectedReason, &values.retryOfMessageID, &values.compactedAt, &msg.CreatedAt,
+		&values.rejectedReason, &values.compactedAt, &msg.CreatedAt,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("scan message: %w", err)
@@ -926,7 +898,6 @@ func (v scannedMessageValues) apply(msg *transcript.Message) {
 	msg.FinishType = v.finishType.String
 	msg.ProviderFinishReason = v.providerFinishReason.String
 	msg.RejectedReason = v.rejectedReason.String
-	msg.RetryOfMessageID = v.retryOfMessageID.Int64
 
 	if v.compactedAt.Valid {
 		msg.CompactedAt = &v.compactedAt.Time

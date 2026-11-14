@@ -83,10 +83,8 @@ type Session struct {
 	budgetFired     bool
 
 	// Loop execution state
-	ms           *messageStore
-	loopDetector *loopDetector
-	// Durable completion state is re-read each turn; this only seeds the cache.
-	resumeCompletion  *sessionstore.CompletionCheckState
+	ms                *messageStore
+	loopDetector      *loopDetector
 	compactionFocus   string // optional /compact focus, set for one compact() then cleared
 	pendingCompaction bool
 	compactionInput   *PendingInput
@@ -173,12 +171,6 @@ func New(ctx context.Context, in Input) (*Session, error) {
 	}
 
 	s.installPersistedBaseline(r.ContextBaseline())
-	s.seedResumeCompletion(
-		&sessionstore.CompletionCheckState{
-			CandidateID:     r.CompletionCheckCandidateID,
-			EmptyStopStreak: r.EmptyStopStreak,
-		},
-	)
 
 	if len(s.ms.getMessages()) == 0 {
 		if err := s.persistState(ctx, 0, sessionstore.SessionStatusActive); err != nil {
@@ -329,10 +321,6 @@ func (s *Session) contextWindow() int {
 	}
 
 	return compactionThreshold
-}
-
-func (s *Session) seedResumeCompletion(state *sessionstore.CompletionCheckState) {
-	s.resumeCompletion = state
 }
 
 func (s *Session) persistState(ctx context.Context, iteration int, status sessionstore.SessionStatus) error {

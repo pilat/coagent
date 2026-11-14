@@ -43,7 +43,7 @@ func (s *Store) CompleteExplicitStop(
 	now := time.Now().UTC()
 
 	if _, err := tx.ExecContext(ctx, `UPDATE session_budgets
-		SET state = 'released', released_at = ?, released_reason = 'stopped', park_owner = ''
+		SET state = 'released', released_at = ?, released_reason = 'stopped'
 		WHERE root_session_id = ? AND state = 'armed'`, now, rootID); err != nil {
 		return nil, fmt.Errorf("release armed budget for stop: %w", err)
 	}

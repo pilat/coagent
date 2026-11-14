@@ -1464,6 +1464,15 @@ func TestResponseIntegrity_IncompleteChildResponseCannotBecomeCompletion(t *test
 	}
 }
 
+func TestResponseIntegrity_ChildSecondLengthCutoffIsATerminalError(t *testing.T) {
+	_, current := runIncompleteChildResponse(t, &llmwire.Response{
+		Text: "cut child text", FinishType: llmwire.FinishLength,
+	})
+	assert.Equal(t, subagent.OutcomeError, current.Outcome)
+	assert.Equal(t, sessionstore.OutputLengthTerminalError, current.Result)
+	assert.NotContains(t, current.Result, "cut child text")
+}
+
 func TestResponseIntegrity_MissingTerminalRejectionNeverReusesOlderAnswer(t *testing.T) {
 	h := newHarness(t, harnessOptions{respond: trivialRespond})
 	var err error

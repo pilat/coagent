@@ -2,6 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-09-10
+- **Amended by:** [ADR-0094](0094-budget-park-and-length-retry-keep-no-durable-state.md)
 
 ## Context
 

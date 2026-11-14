@@ -107,7 +107,7 @@ func (p *integrityProtocolProduction) apply(command integrityProtocolCommand) {
 			}
 		} else {
 			step.Unfired.Messages = []*transcript.Message{
-				{Role: "user", Content: OutputLengthRecoveryPrompt, RetryOfRef: new(0)},
+				{Role: "user", Content: OutputLengthRecoveryPrompt},
 			}
 		}
 		_, err = p.store.Commit(p.ctx, step)
@@ -148,9 +148,9 @@ func (p *integrityProtocolProduction) assertMatches(model *integrityProtocolMode
 	require.NoError(p.t, p.db.QueryRowContext(p.ctx, `SELECT
 		COUNT(*) FILTER (WHERE role = 'assistant' AND finish_type IS NOT NULL),
 		COUNT(*) FILTER (WHERE rejected_reason IS NOT NULL),
-		COUNT(*) FILTER (WHERE retry_of_message_id IS NOT NULL),
+		COUNT(*) FILTER (WHERE role = 'user' AND content = ?),
 		COALESCE(SUM(json_extract(usage, '$.completionTokens')), 0)
-		FROM messages WHERE session_id = ?`, p.rootID).
+		FROM messages WHERE session_id = ?`, OutputLengthRecoveryPrompt, p.rootID).
 		Scan(&attempts, &rejected, &recoveries, &usageOut))
 
 	assert.Equal(p.t, model.attempts, attempts, "step %d: attempts", step)
@@ -161,13 +161,14 @@ func (p *integrityProtocolProduction) assertMatches(model *integrityProtocolMode
 	assert.Equal(p.t, model.status, p.currentStatus(), "step %d: status", step)
 
 	if recoveries > 0 {
-		var rejectedID, retryOf int64
+		var rejectedID, recoveryID int64
 		require.NoError(p.t, p.db.QueryRowContext(p.ctx, `SELECT id FROM messages
 			WHERE session_id = ? AND rejected_reason = 'output_length' ORDER BY id LIMIT 1`, p.rootID).
 			Scan(&rejectedID))
-		require.NoError(p.t, p.db.QueryRowContext(p.ctx, `SELECT retry_of_message_id FROM messages
-			WHERE session_id = ? AND retry_of_message_id IS NOT NULL`, p.rootID).Scan(&retryOf))
-		assert.Equal(p.t, rejectedID, retryOf, "step %d: retry identity", step)
+		require.NoError(p.t, p.db.QueryRowContext(p.ctx, `SELECT id FROM messages
+			WHERE session_id = ? AND role = 'user' AND content = ?`, p.rootID, OutputLengthRecoveryPrompt).
+			Scan(&recoveryID))
+		assert.Equal(p.t, rejectedID+1, recoveryID, "step %d: retry identity", step)
 	}
 }
 

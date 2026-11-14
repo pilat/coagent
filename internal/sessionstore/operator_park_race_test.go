@@ -10,9 +10,6 @@ import (
 	"github.com/pilat/coagent/internal/budget"
 )
 
-// TestOperatorProtocolModel_UserInputRacesPark pins the plan's park arbitration:
-// either the input atomically wins release+acceptance, or the drain owns the
-// tree and the input observes that committed state without being recorded.
 func TestOperatorProtocolModel_UserInputRacesPark(t *testing.T) {
 	t.Parallel()
 
@@ -36,32 +33,45 @@ func TestOperatorProtocolModel_UserInputRacesPark(t *testing.T) {
 		return store, root.ID, record
 	}
 
-	t.Run("input wins release while drain has not begun", func(t *testing.T) {
+	t.Run("input wins release while the park has not begun", func(t *testing.T) {
 		t.Parallel()
 
 		store, rootID, _ := armFired(t)
+		before, err := store.GetSession(ctx, rootID)
+		require.NoError(t, err)
 
-		_, err := enqueueUser(ctx, store, rootID, "continue")
+		_, err = enqueueUser(ctx, store, rootID, "continue")
 		require.NoError(t, err)
 
 		record, err := store.Get(ctx, rootID)
 		require.NoError(t, err)
 		assert.Equal(t, budget.Released, record.State)
+		assert.Equal(t, "resumed", record.ReleasedReason)
+		stopped, err := store.StopFiredBudgetRoot(ctx, rootID)
+		require.NoError(t, err)
+		assert.False(t, stopped)
+		after, err := store.GetSession(ctx, rootID)
+		require.NoError(t, err)
+		assert.Equal(t, before.Status, after.Status)
 	})
 
-	t.Run("draining owns the tree and rejects the input", func(t *testing.T) {
+	t.Run("the park's root stop rejects later input", func(t *testing.T) {
 		t.Parallel()
 
-		store, rootID, record := armFired(t)
-		_, err := store.BeginBudgetDrain(ctx, rootID, record.Generation, record.ParkOwner)
+		store, rootID, _ := armFired(t)
+		stopped, err := store.StopFiredBudgetRoot(ctx, rootID)
 		require.NoError(t, err)
+		require.True(t, stopped)
+		root, err := store.GetSession(ctx, rootID)
+		require.NoError(t, err)
+		assert.Equal(t, SessionStatusStopping, root.Status)
 
 		_, err = enqueueUser(ctx, store, rootID, "continue")
-		require.ErrorIs(t, err, budget.ErrConflict)
+		require.ErrorIs(t, err, ErrSessionNotAcceptingInput)
 		_, pendingErr := store.PeekPending(ctx, rootID)
 		require.ErrorIs(t, pendingErr, ErrNoPendingInput)
 
-		record, err = store.Get(ctx, rootID)
+		record, err := store.Get(ctx, rootID)
 		require.NoError(t, err)
 		assert.Equal(t, budget.Fired, record.State, "a rejected race must not release the budget")
 	})
@@ -69,36 +79,61 @@ func TestOperatorProtocolModel_UserInputRacesPark(t *testing.T) {
 	t.Run("parked budget releases on the next user turn", func(t *testing.T) {
 		t.Parallel()
 
-		store, rootID, record := armFired(t)
-		_, err := store.BeginBudgetDrain(ctx, rootID, record.Generation, record.ParkOwner)
+		store, rootID, _ := armFired(t)
+		stopped, err := store.StopFiredBudgetRoot(ctx, rootID)
 		require.NoError(t, err)
-		_, err = store.MarkBudgetParked(ctx, rootID, record.Generation, record.ParkOwner)
-		require.NoError(t, err)
+		require.True(t, stopped)
+		require.NoError(t, store.UpdateSessionStatus(ctx, rootID, SessionStatusStopped))
 
 		_, err = enqueueUser(ctx, store, rootID, "continue")
 		require.NoError(t, err)
 
-		record, err = store.Get(ctx, rootID)
+		record, err := store.Get(ctx, rootID)
 		require.NoError(t, err)
 		assert.Equal(t, budget.Released, record.State)
+		assert.Equal(t, "resumed", record.ReleasedReason)
 	})
 
-	// A clear racing the drain must not release a budget the park coordinator
-	// still owns: the drain window refuses every external release, /budget included.
-	t.Run("draining budget refuses clear", func(t *testing.T) {
+	t.Run("a re-armed budget is not stopped, its next fire is", func(t *testing.T) {
 		t.Parallel()
+
 		store, rootID, record := armFired(t)
-		_, err := store.BeginBudgetDrain(ctx, rootID, record.Generation, record.ParkOwner)
+		armed, err := store.Arm(ctx, targetedBudgetMutation(t, store, rootID, rootID, "rearm"))
 		require.NoError(t, err)
-
-		_, err = store.Clear(ctx, budget.Mutation{
-			RootSessionID: rootID, ToolCallID: "clear-call", Receipt: "Budget cleared",
-		})
-		require.ErrorIs(t, err, budget.ErrConflict)
-
-		record, err = store.Get(ctx, rootID)
+		require.Equal(t, record.Generation+1, armed.Generation)
+		stopped, err := store.StopFiredBudgetRoot(ctx, rootID)
 		require.NoError(t, err)
-		assert.Equal(t, budget.Fired, record.State, "a refused clear must not touch the budget")
-		assert.Equal(t, "draining", record.ParkPhase)
+		assert.False(t, stopped)
+		_, _, err = store.FireBudget(ctx, rootID, armed.Generation, "cost", 2, "next checkpoint")
+		require.NoError(t, err)
+		stopped, err = store.StopFiredBudgetRoot(ctx, rootID)
+		require.NoError(t, err)
+		assert.True(t, stopped)
+	})
+
+	t.Run("a completed root is stopped", func(t *testing.T) {
+		t.Parallel()
+
+		store, rootID, _ := armFired(t)
+		require.NoError(t, store.UpdateSessionStatus(ctx, rootID, SessionStatusCompleted))
+		stopped, err := store.StopFiredBudgetRoot(ctx, rootID)
+		require.NoError(t, err)
+		assert.True(t, stopped)
+		root, err := store.GetSession(ctx, rootID)
+		require.NoError(t, err)
+		assert.Equal(t, SessionStatusStopping, root.Status)
+	})
+
+	t.Run("a root under /stop is left alone", func(t *testing.T) {
+		t.Parallel()
+
+		store, rootID, _ := armFired(t)
+		require.NoError(t, store.UpdateSessionStatus(ctx, rootID, SessionStatusStopping))
+		stopped, err := store.StopFiredBudgetRoot(ctx, rootID)
+		require.NoError(t, err)
+		assert.False(t, stopped)
+		root, err := store.GetSession(ctx, rootID)
+		require.NoError(t, err)
+		assert.Equal(t, SessionStatusStopping, root.Status)
 	})
 }

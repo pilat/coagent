@@ -119,9 +119,8 @@ func (s *Session) prepareRejectedAttempt(
 		}
 
 		if !outstanding {
-			ref := 0
 			c.Unfired.Messages = []*transcript.Message{
-				{Role: llmwire.RoleUser, Content: sessionstore.OutputLengthRecoveryPrompt, RetryOfRef: &ref},
+				{Role: llmwire.RoleUser, Content: sessionstore.OutputLengthRecoveryPrompt},
 			}
 		}
 	}

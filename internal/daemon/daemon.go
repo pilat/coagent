@@ -51,6 +51,7 @@ type Service struct {
 	trees        *treeLocks
 	routes       *routes
 	clock        *budgetClock
+	parks        parkSet
 	liveMu       sync.Mutex
 }
 

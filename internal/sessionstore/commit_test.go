@@ -105,7 +105,7 @@ func TestCommit_Parts(t *testing.T) {
 					},
 				}
 				step.Unfired.Messages = []*transcript.Message{
-					{Role: "user", Content: OutputLengthRecoveryPrompt, RetryOfRef: new(0)},
+					{Role: "user", Content: OutputLengthRecoveryPrompt},
 				}
 			case "call pending":
 				_, writeErr := store.Commit(
@@ -281,7 +281,7 @@ func TestCommit_Parts(t *testing.T) {
 					step.Messages[0].FinishType = "length"
 					step.Messages[0].RejectedReason = RejectedReasonOutputLength
 					step.Unfired.Messages = []*transcript.Message{
-						{Role: "user", Content: OutputLengthRecoveryPrompt, RetryOfRef: new(0)},
+						{Role: "user", Content: OutputLengthRecoveryPrompt},
 					}
 				}
 				if name != "unfired" {
@@ -344,7 +344,13 @@ func TestCommit_Parts(t *testing.T) {
 				assert.Equal(t, messages[1].ID, acceptedID)
 			case "messages and retry":
 				require.Len(t, messages, 1)
-				assert.Equal(t, result.MessageIDs[0], messages[0].RetryOfMessageID)
+				require.Len(t, result.MessageIDs, 2)
+				assert.Equal(t, result.MessageIDs[0]+1, messages[0].ID)
+				assert.Equal(t, result.MessageIDs[1], messages[0].ID)
+				assert.Equal(t, root.ID, messages[0].SessionID)
+				outstanding, recoveryErr := store.HasOutstandingResponseRecovery(ctx, root.ID)
+				require.NoError(t, recoveryErr)
+				assert.True(t, outstanding)
 				_, completion, cost, usageErr := store.GetSessionTreeUsage(ctx, root.ID)
 				require.NoError(t, usageErr)
 				assert.Equal(t, 4, completion)
@@ -390,7 +396,7 @@ func TestCommit_Parts(t *testing.T) {
 					var cost float64
 					require.NoError(
 						t,
-						db.QueryRowContext(ctx, `SELECT COUNT(*) FILTER(WHERE cost_usd=.75),COUNT(*) FILTER(WHERE role='tool'),COUNT(*) FILTER(WHERE retry_of_message_id IS NOT NULL),SUM(cost_usd) FROM messages WHERE session_id=?`, root.ID).
+						db.QueryRowContext(ctx, `SELECT COUNT(*) FILTER(WHERE cost_usd=.75),COUNT(*) FILTER(WHERE role='tool'),COUNT(*) FILTER(WHERE role='user' AND content=?),SUM(cost_usd) FROM messages WHERE session_id=?`, OutputLengthRecoveryPrompt, root.ID).
 							Scan(&paidRows, &toolRows, &retryRows, &cost),
 					)
 					assert.Equal(t, 1, paidRows)
