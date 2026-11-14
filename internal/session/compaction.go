@@ -514,9 +514,8 @@ func (s *Session) summarizeCheckpoint(
 	return summaryText, acc, nil
 }
 
-// rejectSummarizerToolCall answers a tool-calling summarizer once, in role:
-// the call keeps its recorded tool results, so the transcript stays provider-
-// valid, and the demand to summarize is restated. One nudge only.
+// rejectSummarizerToolCall echoes the attempted turn with tools-unavailable results
+// so the request stays provider-valid without persisting the exchange. One nudge only.
 func (s *Session) rejectSummarizerToolCall(
 	ctx context.Context,
 	messages []llmwire.Message,
@@ -535,7 +534,9 @@ func (s *Session) rejectSummarizerToolCall(
 		})
 	}
 
-	followUp := append(append([]llmwire.Message{}, messages...), replies...)
+	followUp := append([]llmwire.Message{}, messages...)
+	followUp = append(followUp, assistantTurnMessage(resp))
+	followUp = append(followUp, replies...)
 
 	retry, err := s.chat(ctx, s.prompt.SystemPrompt(), followUp, schemas, llmwire.WithMaxTokens(reserve))
 	if err != nil {

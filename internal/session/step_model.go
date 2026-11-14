@@ -74,12 +74,7 @@ func (s *Session) modelResponseCommit(
 	sentCount int,
 	generation uint64,
 ) (sessionstore.Commit, error) {
-	wire := llmwire.Message{
-		Role: llmwire.RoleAssistant, Content: response.Text, ToolCalls: response.ToolCalls,
-		ReasoningContent: response.ReasoningContent, ReasoningRaw: response.ReasoningRaw,
-		CostUSD: response.CostUSD, Usage: response.Usage, FinishType: response.FinishType,
-		ProviderFinishReason: response.ProviderFinishReason,
-	}
+	wire := assistantTurnMessage(response)
 
 	message, err := storedMessage(&wire)
 	if err != nil {
@@ -207,6 +202,15 @@ func (s *Session) commitModelAttempt(ctx context.Context, r *runState, c session
 	}
 
 	return nil
+}
+
+func assistantTurnMessage(response *llmwire.Response) llmwire.Message {
+	return llmwire.Message{
+		Role: llmwire.RoleAssistant, Content: response.Text, ToolCalls: response.ToolCalls,
+		ReasoningContent: response.ReasoningContent, ReasoningRaw: response.ReasoningRaw,
+		CostUSD: response.CostUSD, Usage: response.Usage, FinishType: response.FinishType,
+		ProviderFinishReason: response.ProviderFinishReason,
+	}
 }
 
 func normalizedFinishType(value string) string {
