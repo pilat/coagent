@@ -621,23 +621,32 @@ func TestAcceptedCheckpointTextRejections(t *testing.T) {
 	})
 }
 
-// A summarizer that answers with a tool call gets one tools-unavailable nudge
-// restating the demand; the retry's cost joins the summary row and no tool
-// result is persisted — the nudge lives only inside the summarizer request.
+// The attempted turn is echoed with one tools-unavailable result per call;
+// only the summary and combined usage survive in the durable transcript.
 func TestSummarizerToolCallGetsOneNudgeAndRetries(t *testing.T) {
 	ctx := context.Background()
+	firstResponse := &llmwire.Response{
+		Text:             "checking first",
+		ReasoningContent: "thinking",
+		ReasoningRaw:     json.RawMessage(`{"sealed":"r1"}`),
+		FinishType:       llmwire.FinishToolCalls,
+		ToolCalls:        []llmwire.ToolCall{{ID: "sum-1", Name: "read"}, {ID: "sum-2", Name: "grep"}},
+		Usage:            &llmwire.MessageUsage{PromptTokens: 10, CompletionTokens: 5},
+		CostUSD:          0.01,
+	}
 	llm := &compactionMockLLM{
 		contextWindow: 32000,
 		chat: func(call int, _ string) (*llmwire.Response, error) {
 			if call == 1 {
-				return &llmwire.Response{
-					FinishType: llmwire.FinishToolCalls,
-					ToolCalls:  []llmwire.ToolCall{{ID: "c1", Name: "read"}},
-					Usage:      &llmwire.MessageUsage{PromptTokens: 10, CompletionTokens: 5},
-				}, nil
+				return firstResponse, nil
 			}
 
-			return &llmwire.Response{Text: validSummary, FinishType: llmwire.FinishStop}, nil
+			return &llmwire.Response{
+				Text:       validSummary,
+				FinishType: llmwire.FinishStop,
+				Usage:      &llmwire.MessageUsage{PromptTokens: 20, CompletionTokens: 7},
+				CostUSD:    0.02,
+			}, nil
 		},
 	}
 	s := newCompactionTestSvc(llm)
@@ -648,15 +657,42 @@ func TestSummarizerToolCallGetsOneNudgeAndRetries(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, 2, llm.callCount, "one nudge, one retry, no more")
 
-	// The nudge is an in-request role-tool reply to the attempted call.
-	lastCall := llm.lastMessages
-	toolReply := lastCall[len(lastCall)-1]
-	assert.Equal(t, llmwire.RoleTool, toolReply.Role)
-	assert.Equal(t, "c1", toolReply.ToolCallID)
-	assert.Contains(t, toolReply.Content, "TOOLS ARE UNAVAILABLE")
+	messages := s.ms.getMessages()
+	for _, message := range messages {
+		assert.NotContains(t, []string{"sum-1", "sum-2"}, message.ToolCallID)
+		if message.Role == llmwire.RoleAssistant {
+			for _, call := range message.ToolCalls {
+				assert.NotContains(t, []string{"sum-1", "sum-2"}, call.ID)
+			}
+		}
+		assert.NotContains(t, message.Content, "TOOLS ARE UNAVAILABLE")
+	}
 
-	summary := findSummaryRow(t, s.ms.getMessages())
+	summary := findSummaryRow(t, messages)
 	assert.Contains(t, summary.Content, validSummary)
+	require.NotNil(t, summary.Usage)
+	assert.Equal(t, 30, summary.Usage.PromptTokens)
+	assert.Equal(t, 12, summary.Usage.CompletionTokens)
+	assert.InDelta(t, 0.03, summary.CostUSD, 1e-9)
+
+	lastCall := llm.lastMessages
+	n := len(lastCall)
+	require.NoError(t, llmtest.ValidateToolPairing(lastCall))
+	require.GreaterOrEqual(t, n, 4)
+	assert.Equal(t, compactionInstructionMessage(""), lastCall[n-4])
+	assistant := lastCall[n-3]
+	assert.Equal(t, llmwire.RoleAssistant, assistant.Role)
+	assert.Equal(t, firstResponse.Text, assistant.Content)
+	assert.Equal(t, firstResponse.ReasoningContent, assistant.ReasoningContent)
+	assert.Equal(t, firstResponse.ReasoningRaw, assistant.ReasoningRaw)
+	assert.Equal(t, firstResponse.ToolCalls, assistant.ToolCalls)
+	for i, call := range firstResponse.ToolCalls {
+		reply := lastCall[n-2+i]
+		assert.Equal(t, llmwire.RoleTool, reply.Role)
+		assert.Equal(t, call.ID, reply.ToolCallID)
+		assert.Equal(t, call.Name, reply.ToolName)
+		assert.Contains(t, reply.Content, "TOOLS ARE UNAVAILABLE")
+	}
 }
 
 // No tail survives a cut through an open group, so an unanswered tool_use inside

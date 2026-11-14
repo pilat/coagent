@@ -83,7 +83,7 @@ lines internal/registry 468
 lines internal/safefile 926
 lines internal/sandboxpolicy 785
 lines internal/schedule 1347
-lines internal/session 5200
+lines internal/session 5205
 lines internal/sessionbuild 789
 lines internal/sessionbus 171
 lines internal/sessionevent 263

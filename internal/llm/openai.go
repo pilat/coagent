@@ -190,7 +190,7 @@ func (c *openAICompatibleClient) Chat(
 
 		// OpenRouter executes the server-side search inside the same request
 		// (its interception loop, capped by max_tool_calls). Tool-less requests
-		// — e.g. the compaction summarizer — carry no injection: they must
+		// — e.g. a forced text-only turn — carry no injection: they must
 		// neither pay for nor fail on server-side searches. The injected entry
 		// has no parameters in v1 (defaults; engine auto).
 		if c.nativeSearch {
