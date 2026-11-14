@@ -55,6 +55,11 @@ binary clear despite obsolete extra fields, while a newer marker remains safe.
 - Budget mutations retain their transaction with the keyed receipt. The session
   spends authority once the mutation executes, so a failed result commit never
   posts an unchanged notice for a change that happened.
+- Known limitation: if the result commit of `set_budget` fails without a
+  crash, the next run in the same process re-runs that call without a grant,
+  so the model gets a "requires /budget" refusal while the budget is armed and
+  the user holds the receipt. A follow-up settles such calls as interrupted
+  instead of re-running them.
 - A crash between configuration write and tool-result commit leaves a live
   configuration and an interrupted call. Boot settles it as interrupted and
   never re-executes it.
