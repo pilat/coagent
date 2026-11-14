@@ -83,31 +83,6 @@ func acceptInput(ctx context.Context, s *Store, inputID int64, content string) (
 	return nil, fmt.Errorf("accepted message missing")
 }
 
-func acceptActivation(ctx context.Context, s *Store,
-	inputID int64,
-	content string,
-	draft ActivationDraft,
-) (*transcript.Message, *ToolActivation, error) {
-	in, err := inputFixture(ctx, s, inputID)
-	if err != nil {
-		return nil, nil, err
-	}
-	result, err := s.Commit(
-		ctx,
-		Commit{
-			SessionID: in.SessionID,
-			Accept: []Accept{
-				{InputID: inputID, State: InputStateAccepted, Content: content, LinkRef: -1, ModelBound: true},
-			},
-			Activation: &ActivationChange{InputID: inputID, ToolID: draft.ToolID, Command: draft.Command},
-		},
-	)
-	if err != nil {
-		return nil, nil, err
-	}
-	return &transcript.Message{ID: result.MessageIDs[0]}, result.Activation, nil
-}
-
 func resolveHandled(ctx context.Context, s *Store, inputID int64, reason string) error {
 	in, err := inputFixture(ctx, s, inputID)
 	if err != nil {

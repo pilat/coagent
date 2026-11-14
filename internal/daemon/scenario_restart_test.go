@@ -18,7 +18,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/pilat/coagent/internal/backgroundprocess"
-	"github.com/pilat/coagent/internal/coagenthome"
 	"github.com/pilat/coagent/internal/configapply"
 	"github.com/pilat/coagent/internal/configops"
 	"github.com/pilat/coagent/internal/controllerapi"
@@ -469,37 +468,6 @@ func TestHarnessModel_PendingExternalCallOwnershipAgreesAfterRestart(t *testing.
 		assert.Zero(t, countToolResultsFor(first.messages(sessionID), tool.IDTask),
 			"a call whose child survived must stay pending")
 		first.shutdown()
-	})
-	t.Run("a config apply keeps its marker", func(t *testing.T) {
-		dbPath := filepath.Join(t.TempDir(), "apply.db")
-		configDir := newApplyConfigDir(t)
-		sessionID := stageApplyAndStop(t, dbPath, configDir)
-		second := newApplyDaemon(t, dbPath, configDir)
-		require.NoError(t, second.mgr.Start(second.ctx))
-		assertAgrees(t, second, sessionID)
-		assert.Zero(t, countToolResultsFor(second.messages(sessionID), tool.IDConfigEdit),
-			"the marker still owes this call its verdict")
-		_, err := second.bootVerdict(t)
-		require.NoError(t, err, "the verdict must still reach the call the sweep left alone")
-	})
-	t.Run("a config apply whose marker did not survive", func(t *testing.T) {
-		dbPath := filepath.Join(t.TempDir(), "apply-nomarker.db")
-		configDir := newApplyConfigDir(t)
-		sessionID := stageApplyAndStop(t, dbPath, configDir)
-		require.NoError(t, os.Remove(filepath.Join(configDir, coagenthome.PendingApplyFileName)))
-		second := newApplyDaemon(t, dbPath, configDir)
-		require.NoError(t, second.mgr.Start(second.ctx))
-		second.waitUntil("orphaned config result consumed", func() bool {
-			return countToolResultsFor(second.messages(sessionID), tool.IDConfigEdit) == 1
-		})
-		assertAgrees(t, second, sessionID)
-		msgs := second.messages(sessionID)
-		require.NoError(t, llmtest.ValidateToolPairing(msgs))
-		assert.Equal(t, 1, countToolResultsFor(msgs, tool.IDConfigEdit),
-			"a verdict nobody can produce must be closed, not left dangling")
-
-		// Apply claims cannot survive a process image; only claims stranded within that image are dangerous.
-		assert.True(t, second.mgr.applier.ClaimApply(), "a new image starts with a free apply slot")
 	})
 }
 
@@ -1235,7 +1203,7 @@ func newExternalCallDaemon(
 	t.Helper()
 	h := newHarness(t, harnessOptions{dbPath: dbPath, respond: respond})
 	ops := configops.New(filepath.Join(configDir, "config.yaml"), filepath.Join(configDir, "secrets"))
-	h.mgr.applier = configapply.New(ops, h.store)
+	h.mgr.applier = configapply.New(ops)
 	return &applyDaemon{harness: h, ops: ops, restarts: h.mgr.applier.Restart()}
 }
 

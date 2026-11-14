@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"encoding/json"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -18,6 +19,57 @@ import (
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/tool"
 )
+
+func TestHarnessScenario_BudgetGrantDoesNotOutliveItsProcess(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "budget.db")
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var enterOnce sync.Once
+	first := newHarness(
+		t,
+		harnessOptions{dbPath: dbPath, respond: func(_ string, _ []llmwire.Message) *llmwire.Response {
+			enterOnce.Do(func() { close(entered) })
+			<-release
+			return textReply("discarded before restart")
+		}},
+	)
+	first.startInboxWake()
+	root, err := first.mgr.Send(
+		first.ctx,
+		first.projectID,
+		"/budget stop after one minute",
+		"fake-model",
+		managerAttrs("telegram:main"),
+	)
+	require.NoError(t, err)
+	waitForScenarioSignal(t, entered, "budget model call before restart")
+	second := newHarness(
+		t,
+		harnessOptions{dbPath: dbPath, respond: func(_ string, messages []llmwire.Message) *llmwire.Response {
+			if hasToolResultFor(messages, "set_budget") {
+				return textReply("budget refused")
+			}
+			return callReply("budget-after-crash", "set_budget", `{"action":"set","duration":"1m"}`)
+		}},
+	)
+	defer func() {
+		second.shutdown()
+		first.shutdown()
+		close(release)
+	}()
+	second.startInboxWake()
+	second.mgr.resumeAfterRestart(second.ctx)
+	second.waitUntil("budget result after restart", func() bool {
+		return hasToolResultFor(second.messages(root), "set_budget") && !second.mgr.HasActiveLoop(root)
+	})
+	assert.Contains(t, lastToolResultContent(second.messages(root), "set_budget"),
+		"This change requires a current user message beginning with /budget.")
+	_, err = second.store.Get(second.ctx, root)
+	require.ErrorIs(t, err, budget.ErrNotFound)
+	for _, row := range second.outbox(root) {
+		assert.NotContains(t, row.Content, "Budget armed")
+	}
+}
 
 func TestHarnessScenario_BudgetMutationRequiresAndConsumesUserGrant(t *testing.T) {
 	release := make(chan struct{})
@@ -47,9 +99,6 @@ func TestHarnessScenario_BudgetMutationRequiresAndConsumesUserGrant(t *testing.T
 	assert.Equal(t, budget.Armed, budgetRecord.State)
 	require.NotNil(t, budgetRecord.DurationSeconds)
 	assert.Equal(t, int64(60), *budgetRecord.DurationSeconds)
-	activation, err := h.store.PendingActivation(h.ctx, sessionID)
-	require.ErrorIs(t, err, sessionstore.ErrActivationNotFound)
-	assert.Nil(t, activation)
 	var receipts int
 	for _, row := range h.outbox(sessionID) {
 		if strings.HasPrefix(strings.ToLower(row.Content), "budget armed:") {
@@ -57,6 +106,120 @@ func TestHarnessScenario_BudgetMutationRequiresAndConsumesUserGrant(t *testing.T
 		}
 	}
 	assert.Equal(t, 1, receipts)
+}
+
+func TestHarnessScenario_UnusedBudgetGrantSaysNothingChanged(t *testing.T) {
+	h := newHarness(t, harnessOptions{respond: func(string, []llmwire.Message) *llmwire.Response {
+		return textReply("no budget change")
+	}})
+	h.startInboxWake()
+	root, err := h.mgr.Send(
+		h.ctx,
+		h.projectID,
+		"/budget stop after one minute",
+		"fake-model",
+		managerAttrs("telegram:main"),
+	)
+	require.NoError(t, err)
+	h.waitUntil("unused grant released", func() bool {
+		return len(h.outbox(root)) > 0 && !h.mgr.HasActiveLoop(root)
+	})
+	var notices int
+	for _, row := range h.outbox(root) {
+		if row.Content == "/budget was not changed" {
+			notices++
+		}
+	}
+	assert.Equal(t, 1, notices)
+	_, err = h.store.Get(h.ctx, root)
+	require.ErrorIs(t, err, budget.ErrNotFound)
+	pending, err := h.store.ListPending(h.ctx, root)
+	require.NoError(t, err)
+	assert.Empty(t, pending)
+}
+
+func TestHarnessScenario_InputWaitsWhileAGrantIsOpen(t *testing.T) {
+	entered, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	h := newHarness(t, harnessOptions{respond: func(_ string, messages []llmwire.Message) *llmwire.Response {
+		once.Do(func() {
+			close(entered)
+			<-release
+		})
+		if hasUserContaining(messages, "hello") {
+			return textReply("hi back")
+		}
+		return textReply("no budget change")
+	}})
+	defer func() {
+		closeOnce(release)
+		h.shutdown()
+	}()
+	h.startInboxWake()
+	root, err := h.mgr.Send(
+		h.ctx,
+		h.projectID,
+		"/budget stop after one minute",
+		"fake-model",
+		managerAttrs("telegram:main"),
+	)
+	require.NoError(t, err)
+	waitForScenarioSignal(t, entered, "command model call")
+	require.NoError(t, h.mgr.sendToSession(h.ctx, root, "hello"))
+	closeOnce(release)
+	h.waitUntil("followup answered", func() bool {
+		for _, row := range h.outbox(root) {
+			if row.Content == "hi back" {
+				return !h.mgr.HasActiveLoop(root)
+			}
+		}
+		return false
+	})
+	ids := make(map[string]int64)
+	for _, row := range h.outbox(root) {
+		ids[row.Content] = row.ID
+	}
+	require.Positive(t, ids["no budget change"])
+	assert.Less(t, ids["no budget change"], ids["/budget was not changed"])
+	assert.Less(t, ids["/budget was not changed"], ids["hi back"])
+}
+
+func TestHarnessScenario_BudgetGrantIsSpentByTheFirstReceipt(t *testing.T) {
+	h := newHarness(t, harnessOptions{respond: func(_ string, messages []llmwire.Message) *llmwire.Response {
+		switch countToolResultsFor(messages, "set_budget") {
+		case 0:
+			return callReply("budget-1", "set_budget", `{"action":"set","duration":"1m"}`)
+		case 1:
+			return callReply("budget-2", "set_budget", `{"action":"set","duration":"2m"}`)
+		default:
+			return textReply("budget configured")
+		}
+	}})
+	h.startInboxWake()
+	root, err := h.mgr.Send(
+		h.ctx,
+		h.projectID,
+		"/budget stop after one minute",
+		"fake-model",
+		managerAttrs("telegram:main"),
+	)
+	require.NoError(t, err)
+	h.waitUntil("two budget calls answered", func() bool {
+		return countToolResultsFor(h.messages(root), "set_budget") == 2 && !h.mgr.HasActiveLoop(root)
+	})
+	assert.Contains(t, lastToolResultContent(h.messages(root), "set_budget"),
+		"This change requires a current user message beginning with /budget.")
+	var receipts int
+	for _, row := range h.outbox(root) {
+		if strings.HasPrefix(row.Content, "Budget armed") {
+			receipts++
+		}
+	}
+	assert.Equal(t, 1, receipts)
+	record, err := h.store.Get(h.ctx, root)
+	require.NoError(t, err)
+	require.NotNil(t, record.DurationSeconds)
+	assert.Equal(t, int64(60), *record.DurationSeconds)
 }
 
 func TestHarnessScenario_BackgroundChildRetainsBudgetUntilCompletion(t *testing.T) {
@@ -106,23 +269,6 @@ func TestHarnessScenario_BackgroundChildRetainsBudgetUntilCompletion(t *testing.
 	record, err = h.store.Get(h.ctx, sessionID)
 	require.NoError(t, err)
 	assert.Equal(t, generation, record.Generation)
-}
-
-func TestHarnessScenario_AgentInputCannotActivateBudget(t *testing.T) {
-	h := newHarness(t, harnessOptions{respond: trivialRespond})
-	record := h.createRoot(managerAttrs("telegram:main"))
-	input, err := h.store.Enqueue(
-		h.ctx, sessionstore.Input{SessionID: record, Source: sessionstore.InputSourceAgent, Content: "/budget 1m"},
-	)
-	require.NoError(t, err)
-	_, err = h.store.Commit(h.ctx, sessionstore.Commit{
-		SessionID: record,
-		Accept: []sessionstore.Accept{
-			{InputID: input.Input.ID, State: sessionstore.InputStateAccepted, Content: "/budget 1m", LinkRef: -1},
-		},
-		Activation: &sessionstore.ActivationChange{InputID: input.Input.ID, ToolID: "set_budget", Command: "/budget"},
-	})
-	require.ErrorIs(t, err, sessionstore.ErrActivationConflict)
 }
 
 func TestHarnessScenario_FinalOmitsTodoAndBudget(t *testing.T) {
@@ -244,27 +390,9 @@ func TestSendToSessionDuringBudgetDrainExplainsParking(t *testing.T) {
 	projectID := testProject(t, store, "/tmp/park-race")
 	root, err := sessions.CreateSession(ctx, projectID, "priced", "", managerAttrs("manager-park"))
 	require.NoError(t, err)
-	input, err := sessions.Enqueue(
-		ctx, sessionstore.Input{SessionID: root.ID, Source: sessionstore.InputSourceUser, Content: "/budget"},
-	)
-	require.NoError(t, err)
-	_, err = sessions.Commit(ctx, sessionstore.Commit{
-		SessionID: root.ID,
-		Accept: []sessionstore.Accept{
-			{
-				InputID: input.Input.ID,
-				State:   sessionstore.InputStateAccepted,
-				Content: "/budget\n\nactivate",
-				LinkRef: -1,
-			},
-		},
-		Activation: &sessionstore.ActivationChange{InputID: input.Input.ID, ToolID: "set_budget", Command: "/budget"},
-	})
-	require.NoError(t, err)
 	limit := 1.0
 	_, err = sessions.Arm(ctx, budget.Mutation{
-		RootSessionID: root.ID, InputID: input.Input.ID, ToolID: "set_budget", Command: "/budget",
-		ToolCallID: "arm", CostLimitUSD: &limit, Receipt: "Budget armed",
+		RootSessionID: root.ID, ToolCallID: "arm", CostLimitUSD: &limit, Receipt: "Budget armed",
 	})
 	require.NoError(t, err)
 	fired, _, err := sessions.FireBudget(ctx, root.ID, 1, "cost", 1.5, "Budget checkpoint reached (cost).")

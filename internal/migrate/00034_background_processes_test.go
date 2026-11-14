@@ -420,7 +420,7 @@ func TestMigrate_36_AsyncCompletionInboxPreservesExistingRows(t *testing.T) {
 	_, err = db.ExecContext(ctx, `DELETE FROM session_inbox WHERE id = 99`)
 	require.NoError(t, err)
 
-	_, err = provider.Up(ctx)
+	_, err = provider.UpTo(ctx, 50)
 	require.NoError(t, err)
 
 	rows, err := db.QueryContext(ctx, `SELECT id, source, raw_content, attributes, state,

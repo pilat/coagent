@@ -205,7 +205,7 @@ deps:
     mayDependOn: [coagenthome, config, logger]
 
   configapply:
-    mayDependOn: [coagenthome, config, configops, logger, sessionstore, tool, transcript]
+    mayDependOn: [coagenthome, configops, tool]
 
   # Local control plane: pure transport plus the daemon-state ops it answers from.
   ctl:

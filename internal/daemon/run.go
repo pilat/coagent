@@ -71,6 +71,7 @@ func (s *Service) runOnce(ctx context.Context, rs *runner) runOutcome {
 		s.reportSessionUnstarted(ctx, id, err)
 		return runOutcome{errored: true, publishIdle: idle}
 	}
+	defer s.applier.RestartIfApplied(id)
 	defer cleanup()
 	defer sess.Close()
 	defer func() { rs.SetService(nil); s.updateLive(context.WithoutCancel(ctx), id) }()
@@ -98,18 +99,10 @@ func (s *Service) runOnce(ctx context.Context, rs *runner) runOutcome {
 	runErr = s.settleRunBudget(ctx, rec, result, runErr)
 	s.closeRunner(ctx, rs, result, sess, cleanup)
 
-	if runErr == nil && result.Suspended {
-		runErr = s.applySuspendedConfig(ctx, id)
-	}
-
 	return s.concludeRun(ctx, rs, result, runErr, runOutcome{hadInput: pending}, idle)
 }
 
 func (s *Service) openRunner(ctx context.Context, rs *runner) (*session.Session, func(), error) {
-	if err := s.applier.SettleStagedResults(ctx, rs.sessionID); err != nil {
-		return nil, nil, fmt.Errorf("settle runner configuration results: %w", err)
-	}
-
 	unlock, err := s.lockSessionTree(ctx, rs.sessionID)
 	if err != nil {
 		return nil, nil, err
@@ -186,9 +179,6 @@ func (s *Service) finishRunner(ctx context.Context, rs *runner, out runOutcome, 
 	}
 
 	cleanup := context.WithoutCancel(ctx)
-	if !closing {
-		s.applier.Abandon(cleanup, id)
-	}
 
 	released := ctx.Err() != nil || closing
 	if released {
@@ -253,10 +243,6 @@ func (s *Service) finishRunnerState(ctx context.Context, rs *runner, released bo
 func (s *Service) finishRunnerDelivery(ctx context.Context, rs *runner, out runOutcome, errored bool) func() {
 	cleanup := context.WithoutCancel(ctx)
 	id := rs.sessionID
-
-	if err := s.applier.SettleStagedResults(cleanup, id); err != nil {
-		logger.Ctx(cleanup).Named("daemon.apply").Error("abandon_delivery_failed", zap.Error(err))
-	}
 
 	deliver := s.finalizeChildLocked(cleanup, id, errored)
 
@@ -406,16 +392,4 @@ func (s *Service) preserveRunnerStopped(cleanup context.Context, sessionID int64
 
 func settledActivation(rec *sessionstore.SessionRecord, hasRun bool) bool {
 	return hasRun || rec.CompletionCheckConfirmedAnswerID == nil
-}
-
-func (s *Service) applySuspendedConfig(ctx context.Context, id int64) error {
-	unlock, err := s.lockSessionTree(ctx, id)
-	if err != nil {
-		return err
-	}
-
-	s.applier.RunStagedApply(ctx, id)
-	unlock()
-
-	return nil
 }

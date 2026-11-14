@@ -130,7 +130,6 @@ func newDelayedTelegramHarnessWithClient(
 		mcpstore.NewStore(db),
 		configapply.New(
 			configops.New(filepath.Join(home, "config.yaml"), filepath.Join(home, "secrets.yaml")),
-			sessions,
 		),
 	)
 

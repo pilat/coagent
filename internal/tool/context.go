@@ -8,14 +8,12 @@ type callIDKey struct{}
 
 type activationKey struct{}
 
-// ActivationGrant identifies the one durable user-command authority available
-// to the current assistant turn.
+// ActivationGrant is the one-turn authority the running session holds in memory.
 type ActivationGrant struct {
-	SessionID  int64
-	InputID    int64
-	ToolID     string
-	Command    string
-	ToolCallID string
+	SessionID int64
+	InputID   int64
+	ToolID    string
+	Command   string
 }
 
 // WithCallID returns a context carrying the given tool_call id.

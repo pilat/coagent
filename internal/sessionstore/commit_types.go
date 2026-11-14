@@ -27,7 +27,6 @@ type Commit struct {
 	Messages          []*transcript.Message
 	ToolResults       []*transcript.Message
 	Replace           *Replace
-	Activation        *ActivationChange
 	ObserveBudget     bool
 	Unfired           Parts
 	State             StatePatch
@@ -52,11 +51,6 @@ type Parts struct {
 type Replace struct {
 	HeadIDs []int64
 	Entries []CompactionEntry
-}
-type ActivationChange struct {
-	InputID                     int64
-	State                       ActivationState
-	ToolID, Command, ToolCallID string
 }
 type CandidateChange struct {
 	Expected, Next int64
@@ -92,7 +86,6 @@ type Output struct {
 type CommitResult struct {
 	MessageIDs  []int64
 	Outputs     []*OutputCommit
-	Activation  *ToolActivation
 	Budget      *budget.Record
 	BudgetFired bool
 }

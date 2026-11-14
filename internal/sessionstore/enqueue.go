@@ -283,11 +283,7 @@ func prepareManagerModelInputTx(ctx context.Context, tx *sql.Tx, id int64, now t
 		return fmt.Errorf("release budget for input: %w", err)
 	}
 
-	if err := requireActivationChanged(result); err != nil {
-		return budget.ErrConflict
-	}
-
-	return nil
+	return requireBudgetRowChanged(result)
 }
 
 func insertEnqueuedInputTx(

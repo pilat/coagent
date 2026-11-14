@@ -2,6 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-08-26
+- **Amended by:** [ADR-0093](0093-one-turn-grants-and-config-apply-live-in-the-process.md)
 
 ## Context
 

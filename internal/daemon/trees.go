@@ -480,28 +480,15 @@ func (s *Service) commitStoppedSession(ctx context.Context, sessionID int64) err
 		return fmt.Errorf("settle stopped transcript: %w", err)
 	}
 
-	return s.settleCalls(ctx, sessionID, calls, "Stopped by user.", true)
+	return s.settleCalls(ctx, sessionID, calls, "Stopped by user.")
 }
 
 func (s *Service) settleCalls(ctx context.Context, sessionID int64, calls []session.PendingToolCall,
-	notice string, expireActivation bool,
+	notice string,
 ) error {
 	commit := sessionstore.Commit{
 		SessionID: sessionID, Mode: sessionstore.CommitLifecycle,
 		ToolResults: session.SettleResults(calls, notice),
-	}
-	if expireActivation {
-		activation, err := s.store.PendingActivation(ctx, sessionID)
-		if err != nil && !errors.Is(err, sessionstore.ErrActivationNotFound) {
-			return fmt.Errorf("settle activation: %w", err)
-		}
-
-		if activation != nil {
-			commit.Activation = &sessionstore.ActivationChange{
-				InputID: activation.InputID,
-				State:   sessionstore.ActivationExpired,
-			}
-		}
 	}
 
 	if _, err := s.store.Commit(ctx, commit); err != nil {

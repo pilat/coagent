@@ -119,7 +119,6 @@ type modelSwitch struct {
 type Store interface {
 	Commit(context.Context, sessionstore.Commit) (*sessionstore.CommitResult, error)
 	ListPending(context.Context, int64) ([]*sessionstore.InboxInput, error)
-	PendingActivation(context.Context, int64) (*sessionstore.ToolActivation, error)
 
 	HasBackgroundWakeSource(context.Context, int64) (bool, error)
 	ListLiveProcesses(context.Context, int64) ([]sessionstore.LiveProcess, error)

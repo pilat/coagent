@@ -440,7 +440,7 @@ func runDaemon(
 	a.onStop("managers", mgrRuntime.Stop)
 	ctlSrv.MarkReady()
 
-	deliverApplyVerdict(ctx, core.sessionStore, core.applier, ops, outcome)
+	noticeConfigRollback(ctx, core.sessionStore, ops, outcome)
 
 	select {
 	case <-ctx.Done():
@@ -453,15 +453,9 @@ func runDaemon(
 	}
 }
 
-// deliverApplyVerdict answers the tool call that survived the restart, then
-// clears the marker. A delivery that failed keeps it: the marker is the only
-// record of a session suspended on a config call, and the next boot re-delivers
-// against a transcript where a second result is a no-op. A marker with no
-// session came from an unattended apply, which already had its answer.
-func deliverApplyVerdict(
+func noticeConfigRollback(
 	ctx context.Context,
-	sender *sessionstore.Store,
-	applier *configapply.Service,
+	store *sessionstore.Store,
 	ops configops.Service,
 	outcome *configops.Outcome,
 ) {
@@ -469,63 +463,26 @@ func deliverApplyVerdict(
 		return
 	}
 
-	log := logger.Named("main.apply")
-
-	if outcome.Pending.SessionID != 0 {
-		// An applied verdict confirms the commit, so spend the /config grant the
-		// apply's own process may have died before spending. A failed verdict is
-		// left to the loop's terminal settlement — nothing was kept, so its
-		// "was not changed" receipt is true.
-		if !outcome.Verdict.Failed() {
-			applier.ConsumeConfigEditActivation(
-				ctx, outcome.Pending.SessionID, outcome.Pending.ToolCallID,
-			)
-		}
-
-		message := "Config applied: " + outcome.Pending.Summary
-		if outcome.Verdict.Failed() {
-			message = "Config change rejected — " + outcome.Verdict.Reason() + "\n" + configapply.RefusalReminder
-		}
-
-		_, err := sender.Enqueue(ctx, sessionstore.Input{
-			SessionID: outcome.Pending.SessionID, Source: sessionstore.InputSourceCallResult, Content: message,
-			Attributes:  map[string]any{"call_id": outcome.Pending.ToolCallID, "tool_id": outcome.Pending.ToolName},
-			DeliveryKey: "config_apply:" + outcome.Pending.ToolCallID,
+	log := logger.Ctx(ctx).Named("main.apply")
+	if outcome.RolledBack && outcome.Pending.SessionID != 0 {
+		_, err := store.EnqueueOutput(ctx, sessionstore.OutputDraft{
+			SessionID: outcome.Pending.SessionID,
+			Type:      sessionstore.OutputMessage,
+			Content:   "⚠️ Config change not applied — " + logger.Redact(outcome.Verdict.Reason()),
+			SourceKey: "config_rollback:" + outcome.Pending.BakPath,
 		})
-
-		if err != nil && !verdictUndeliverable(ctx, sender, outcome.Pending.SessionID) {
-			log.Error("verdict_delivery_failed",
-				zap.Int64("session_id", outcome.Pending.SessionID), zap.Error(err))
-
-			return
-		}
-
 		if err != nil {
-			log.Error("verdict_undeliverable",
+			log.Error(
+				"config_rollback_notice_failed",
 				zap.Int64("session_id", outcome.Pending.SessionID),
-				zap.String("summary", outcome.Pending.Summary),
-				zap.Bool("rolled_back", outcome.RolledBack),
-				zap.Error(err))
+				zap.Error(err),
+			)
 		}
 	}
 
 	if err := ops.ClearPending(outcome.Pending); err != nil {
 		log.Error("clear_pending_apply_marker", zap.Error(err))
 	}
-}
-
-// verdictUndeliverable reports whether the owed session can never take the
-// verdict — a marker no boot can consume arms every later one to roll back.
-func verdictUndeliverable(ctx context.Context, sender *sessionstore.Store, sessionID int64) bool {
-	rec, err := sender.GetSession(ctx, sessionID)
-	if err != nil || rec == nil {
-		return true
-	}
-
-	return rec.KilledAt != nil ||
-		rec.Status == sessionstore.SessionStatusKilled ||
-		rec.Status == sessionstore.SessionStatusStopping ||
-		rec.Status == sessionstore.SessionStatusStopped
 }
 
 func startCore(
@@ -555,7 +512,7 @@ func startCore(
 	scheduleStore := schedule.NewStore(db, sessionStore)
 	curatedStore := memory.NewCuratedStore(db)
 	linkStore := subagent.NewStore(db, sessionStore)
-	applier := configapply.New(ops, sessionStore)
+	applier := configapply.New(ops)
 
 	budgetSvc := budget.New(budget.PolicyStore(sessionStore))
 	mcpRegistry := mcpstore.NewStore(db)

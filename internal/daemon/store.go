@@ -15,7 +15,6 @@ type Store interface { //nolint:interfacebloat // Lifecycle commands share atomi
 	WithTx(context.Context, func(*sql.Tx) error) error
 	Commit(context.Context, sessionstore.Commit) (*sessionstore.CommitResult, error)
 	ListPending(context.Context, int64) ([]*sessionstore.InboxInput, error)
-	PendingActivation(context.Context, int64) (*sessionstore.ToolActivation, error)
 	ObserveBudget(context.Context, int64, time.Time, string) (*budget.Record, bool, error)
 	LoadActiveMessages(context.Context, int64) ([]*transcript.Message, error)
 	CreateSession(

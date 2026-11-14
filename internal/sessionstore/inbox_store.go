@@ -199,35 +199,3 @@ func readOnlyCommandReceipt(content string) bool {
 		return false
 	}
 }
-
-func insertActivation(
-	ctx context.Context,
-	tx *sql.Tx,
-	input *InboxInput,
-	draft ActivationDraft,
-	now time.Time,
-) (*ToolActivation, error) {
-	owner, _ := input.Attributes[managerIDAttribute].(string)
-	if input.Source != InputSourceUser || owner == "" {
-		return nil, ErrActivationConflict
-	}
-
-	result, err := tx.ExecContext(ctx, `INSERT INTO session_tool_activations
-		(input_id, session_id, tool_id, command, state, created_at)
-		SELECT ?, sessions.id, ?, ?, 'pending', ? FROM sessions
-		WHERE sessions.id = ? AND sessions.parent_id = 0
-			AND json_extract(sessions.attributes, '$.manager_id') = ?`,
-		input.ID, draft.ToolID, draft.Command, now, input.SessionID, owner)
-	if err != nil {
-		return nil, fmt.Errorf("insert tool activation: %w", err)
-	}
-
-	if err := requireActivationChanged(result); err != nil {
-		return nil, err
-	}
-
-	return &ToolActivation{
-		InputID: input.ID, SessionID: input.SessionID, ToolID: draft.ToolID,
-		Command: draft.Command, State: ActivationPending, CreatedAt: now,
-	}, nil
-}

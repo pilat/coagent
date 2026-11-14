@@ -161,8 +161,7 @@ func (t *budgetTool) mutation(ctx context.Context) (Mutation, error) {
 	}
 
 	return Mutation{
-		RootSessionID: t.rootID, GrantSessionID: grant.RootID, InputID: grant.InputID, ToolID: grant.ToolID,
-		Command: grant.Command, ToolCallID: grant.ToolCallID,
+		RootSessionID: t.rootID, GrantSessionID: grant.RootID, ToolCallID: grant.ToolCallID,
 	}, nil
 }
 
@@ -170,15 +169,14 @@ func currentGrant(ctx context.Context, rootID int64) (Grant, error) {
 	value, ok := tool.ActivationGrantFromContext(ctx)
 
 	callID := tool.CallIDFromContext(ctx)
-	if !ok || value.SessionID != rootID || value.ToolID != ToolID || value.Command != budgetCommand ||
-		(value.ToolCallID != "" && value.ToolCallID != callID) {
+
+	if !ok || value.SessionID != rootID || value.ToolID != ToolID || value.Command != budgetCommand {
 		//nolint:staticcheck // Exact user-facing contract includes punctuation.
 		return Grant{}, errors.New(noActivationMessage)
 	}
 
 	return Grant{
-		RootID: rootID, InputID: value.InputID, ToolID: value.ToolID,
-		Command: value.Command, ToolCallID: callID,
+		RootID: rootID, ToolCallID: callID,
 	}, nil
 }
 

@@ -117,7 +117,7 @@ func (s *Session) prepareRun(ctx context.Context) error {
 
 	s.activationIndex = index
 
-	return s.loadPendingActivation(ctx)
+	return nil
 }
 
 func (s *Session) runIterations(ctx context.Context, r *runState) error {
@@ -314,52 +314,13 @@ func (s *Session) observeBudget(ctx context.Context) (bool, error) {
 	return result.BudgetFired, nil
 }
 
-func (s *Session) loadPendingActivation(ctx context.Context) error {
-	activation, err := s.store.PendingActivation(ctx, s.id)
-	if errors.Is(err, sessionstore.ErrActivationNotFound) {
-		return nil
-	}
-
-	if err != nil {
-		return fmt.Errorf("load pending activation: %w", err)
-	}
-
-	if activation == nil {
-		return nil
-	}
-
-	s.currentActivation = &tool.ActivationGrant{
-		SessionID:  activation.SessionID,
-		InputID:    activation.InputID,
-		ToolID:     activation.ToolID,
-		Command:    activation.Command,
-		ToolCallID: activation.ToolCallID,
-	}
-
-	return nil
-}
-
-func (s *Session) expireActivation(ctx context.Context, suspended bool) error {
+func (s *Session) expireActivation(ctx context.Context) error {
 	grant := s.currentActivation
-	if grant == nil || grant.ToolCallID != "" {
+	if grant == nil {
 		return nil
-	}
-
-	if suspended {
-		for _, call := range s.PendingExternalCalls() {
-			if call.Name == grant.ToolID {
-				return nil
-			}
-		}
 	}
 
 	c := s.newCommit()
-	c.Activation = &sessionstore.ActivationChange{
-		InputID: grant.InputID,
-		State:   sessionstore.ActivationExpired,
-		ToolID:  grant.ToolID,
-		Command: grant.Command,
-	}
 
 	c.Outputs = []sessionstore.Output{
 		{
@@ -525,10 +486,10 @@ func (s *Session) finishRun(ctx context.Context, r *runState, runErr error) (Run
 
 	r.result.BudgetFired = r.result.BudgetFired || s.budgetFired
 	if ctx.Err() != nil {
-		return r.result, s.cancelRunActivation(ctx, runErr)
+		return r.result, runErr
 	}
 
-	if err := s.expireActivation(ctx, r.result.Suspended); err != nil {
+	if err := s.expireActivation(ctx); err != nil {
 		runErr = errors.Join(runErr, err)
 	}
 
@@ -537,26 +498,6 @@ func (s *Session) finishRun(ctx context.Context, r *runState, runErr error) (Run
 	}
 
 	return r.result, runErr
-}
-
-func (s *Session) cancelRunActivation(ctx context.Context, runErr error) error {
-	grant := s.currentActivation
-	if grant == nil || grant.ToolCallID != "" {
-		return runErr
-	}
-
-	c := s.newCommit()
-	c.Activation = &sessionstore.ActivationChange{
-		InputID: grant.InputID, State: sessionstore.ActivationExpired,
-		ToolID: grant.ToolID, Command: grant.Command,
-	}
-
-	_, err := s.store.Commit(context.WithoutCancel(ctx), c)
-	if err != nil && !errors.Is(err, sessionstore.ErrSessionStopping) {
-		return errors.Join(runErr, err)
-	}
-
-	return runErr
 }
 
 func (s *Session) commitRunState(ctx context.Context, r *runState, runErr error) error {

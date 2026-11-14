@@ -138,21 +138,7 @@ func (s *Service) callOwners(ctx context.Context, sessionID int64) (map[string]s
 		actual[call.ID] = call.Name
 	}
 
-	calls := s.applier.Calls(sessionID)
-
-	if calls == nil {
-		calls = make(map[string]string)
-	}
-
-	owed, err := s.applier.PendingCall(sessionID)
-
-	switch {
-	case err != nil:
-		logger.Ctx(ctx).Named("daemon.runner").
-			Warn("read_pending_apply_marker", zap.Int64("session_id", sessionID), zap.Error(err))
-	case owed.ToolCallID != "":
-		calls[owed.ToolCallID] = owed.ToolName
-	}
+	calls := make(map[string]string)
 
 	sleeps, err := s.schedules.PendingSleeps(ctx, sessionID)
 	if err != nil {

@@ -31,6 +31,6 @@ func TestBudgetTool_KeepsSchemaAndOwnRoot(t *testing.T) {
 
 func budgetGrantContext(ctx context.Context, grant budget.Grant) context.Context {
 	return tool.WithActivationGrant(tool.WithCallID(ctx, grant.ToolCallID), tool.ActivationGrant{
-		SessionID: grant.RootID, InputID: grant.InputID, ToolID: grant.ToolID, Command: grant.Command,
+		SessionID: grant.RootID, ToolID: budget.ToolID, Command: "/budget",
 	})
 }

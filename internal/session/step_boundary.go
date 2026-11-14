@@ -41,6 +41,7 @@ type PendingInput struct {
 
 type boundaryBatch struct {
 	commit   sessionstore.Commit
+	grant    *tool.ActivationGrant
 	pending  map[string]string
 	fresh    bool
 	accepted bool
@@ -234,7 +235,7 @@ func (s *Session) commitBoundaryBatch(
 		return batch.accepted, nil
 	}
 
-	result, err := s.commit(ctx, *c)
+	_, err := s.commit(ctx, *c)
 	if err != nil {
 		return false, err
 	}
@@ -245,14 +246,8 @@ func (s *Session) commitBoundaryBatch(
 		s.loopDetector.resetWindow()
 	}
 
-	if result.Activation != nil {
-		grant := result.Activation
-		s.currentActivation = &tool.ActivationGrant{
-			SessionID: grant.SessionID,
-			InputID:   grant.InputID,
-			ToolID:    grant.ToolID,
-			Command:   grant.Command,
-		}
+	if batch.grant != nil {
+		s.currentActivation = batch.grant
 	}
 
 	return batch.accepted, nil
@@ -538,13 +533,14 @@ func (s *Session) acceptBoundaryText(
 		accept.Receipt = loader.SkillReceipt(prepared.SkillName)
 	}
 
-	if toolID := s.activationIndex[command]; toolID != "" && input.Source == sessionstore.InputSourceUser {
+	if toolID := s.activationIndex[command]; toolID != "" && input.Source == sessionstore.InputSourceUser &&
+		owner != "" {
 		accept.Content += activationInstruction(toolID, command)
-		c.Activation = &sessionstore.ActivationChange{
-			InputID: input.ID,
-			State:   sessionstore.ActivationPending,
-			ToolID:  toolID,
-			Command: command,
+		batch.grant = &tool.ActivationGrant{
+			SessionID: s.id,
+			InputID:   input.ID,
+			ToolID:    toolID,
+			Command:   command,
 		}
 	}
 
@@ -560,7 +556,7 @@ func (s *Session) acceptBoundaryText(
 
 	s.loopDetector.resetWindow()
 
-	if command != "" || c.Activation != nil {
+	if command != "" || batch.grant != nil {
 		return boundaryStop, nil
 	}
 

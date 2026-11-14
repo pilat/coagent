@@ -29,15 +29,9 @@ func TestOperatorProtocolModel_ParallelCrossingReleaseAndReplay(t *testing.T) {
 				map[string]any{"manager_id": "telegram-test"},
 			)
 			require.NoError(t, err)
-			input, err := enqueueInput(ctx, store, root.ID, InputSourceUser, "/budget")
-			require.NoError(t, err)
-			_, _, err = acceptActivation(ctx, store, input.ID, "/budget\n\nactivate",
-				ActivationDraft{ToolID: "set_budget", Command: "/budget"})
-			require.NoError(t, err)
 			limit := 1.0
 			_, err = store.Arm(ctx, budget.Mutation{
-				RootSessionID: root.ID, InputID: input.ID, ToolID: "set_budget", Command: "/budget",
-				ToolCallID: "arm", CostLimitUSD: &limit, Receipt: "Budget armed",
+				RootSessionID: root.ID, ToolCallID: "arm", CostLimitUSD: &limit, Receipt: "Budget armed",
 			})
 			require.NoError(t, err)
 

@@ -15,10 +15,8 @@ const ConfigEditCommand = "/config"
 
 const noConfigActivationMessage = "This change requires a current user message beginning with /config."
 
-// restartNotice tells the model the call does not answer immediately, or it
-// treats the pause as a hang and retries.
-const restartNotice = "Applying this restarts the daemon; you receive the verdict when it comes back. " +
-	"A change that would break the daemon is refused instead, and the refusal comes back straight away."
+const restartNotice = "A valid change is written at once and restarts the daemon when your reply ends; " +
+	"if the daemon cannot start on the new configuration, the change is rolled back and the user is told."
 
 const (
 	secretsDisplayPath = "~/" + coagenthome.DirName + "/" + coagenthome.SecretsFileName
@@ -113,11 +111,6 @@ func (t *configEditTool) Execute(ctx context.Context, params json.RawMessage) (*
 		return nil, errors.New(noConfigActivationMessage)
 	}
 
-	callID := tool.CallIDFromContext(ctx)
-	if callID == "" {
-		return nil, errors.New("no tool_call id to answer against")
-	}
-
 	if t.service == nil {
 		return nil, errors.New("this daemon cannot change its own configuration")
 	}
@@ -131,19 +124,14 @@ func (t *configEditTool) Execute(ctx context.Context, params json.RawMessage) (*
 		return nil, errors.New(v.Reason() + "\n" + RefusalReminder)
 	}
 
-	if !t.service.stageApply(t.sessionID, callID, staged) {
-		return nil, errors.New("another config change is already being applied — make one change at a time")
-	}
-
-	return nil, tool.ErrSuspend
+	return t.service.apply(ctx, t.sessionID, staged)
 }
 
 func requireActivation(ctx context.Context) error {
 	grant, ok := tool.ActivationGrantFromContext(ctx)
 
-	callID := tool.CallIDFromContext(ctx)
 	if !ok || grant.ToolID != tool.IDConfigEdit || grant.Command != ConfigEditCommand ||
-		grant.SessionID <= 0 || (grant.ToolCallID != "" && grant.ToolCallID != callID) {
+		grant.SessionID <= 0 {
 		//nolint:staticcheck // Exact activation refusal is the model-facing authority contract.
 		return errors.New(noConfigActivationMessage)
 	}

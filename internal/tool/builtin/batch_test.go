@@ -58,7 +58,7 @@ func (s *scriptedTool) Execute(_ context.Context, _ json.RawMessage) (*tool.Resu
 func TestBatchToolValidatesCalls(t *testing.T) {
 	registry := tool.NewRegistry()
 	registry.Register(&scriptedTool{id: "ok", result: &tool.Result{Output: "done"}})
-	registry.Register(&scriptedTool{id: tool.IDConfigEdit, result: &tool.Result{Output: "never runs"}})
+	registry.Register(&scriptedTool{id: tool.IDSleep, result: &tool.Result{Output: "never runs"}})
 	registry.Register(&activatedStubTool{scriptedTool: &scriptedTool{id: "gated"}})
 	registry.Register(NewBatchTool(registry))
 
@@ -82,8 +82,8 @@ func TestBatchToolValidatesCalls(t *testing.T) {
 			// A suspending tool answers after the loop stops. Batching one would
 			// report a result for work still in flight and strand the real call.
 			name:    "suspending tool",
-			raw:     batchCalls("ok", tool.IDConfigEdit),
-			wantErr: "call 2: config_edit suspends the session",
+			raw:     batchCalls("ok", tool.IDSleep),
+			wantErr: "call 2: sleep suspends the session",
 		},
 		{name: "over the size cap", raw: batchCalls(repeatTool("ok", 26)...), wantErr: "maximum 25 calls allowed"},
 	}

@@ -32,12 +32,16 @@ func (f *fakeDocumentStager) StageDocument(candidate []byte) (*configops.Staged,
 	return f.staged, f.verdict
 }
 
+func (f *fakeDocumentStager) Commit(_ *configops.Staged, _ configops.Pending) configops.Verdict {
+	return configops.OK()
+}
+
 func newConfigEditFixture() (*configEditTool, *fakeDocumentStager, *bool) {
 	stager := &fakeDocumentStager{
 		staged:  &configops.Staged{Data: []byte("providers: {}"), Hash: "abc", Summary: "replace"},
 		verdict: configops.OK(),
 	}
-	service := &Service{ops: stager, calls: make(map[int64]map[string]stagedCall)}
+	service := New(stager)
 	return &configEditTool{service: service, sessionID: 7}, stager, &service.claimed
 }
 
@@ -76,8 +80,10 @@ func TestConfigEditTool_RequiresCurrentConfigGrant(t *testing.T) {
 	}
 
 	result, err := tl.Execute(authoredCtx(), params)
-	require.Nil(t, result)
-	require.ErrorIs(t, err, tool.ErrSuspend)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Contains(t, result.Output, "Config applied")
+	assert.Equal(t, []string{"Config applied — the daemon restarts to load it."}, result.DirectMessages)
 	assert.True(t, stager.called)
 	assert.True(t, *applied)
 }
@@ -92,7 +98,7 @@ func TestConfigEditTool_RejectsForeignGrants(t *testing.T) {
 	refused := []tool.ActivationGrant{
 		{SessionID: 7, InputID: 3, ToolID: "set_budget", Command: "/budget"},
 		{SessionID: 7, InputID: 3, ToolID: tool.IDConfigEdit, Command: "/configx"},
-		{SessionID: 7, InputID: 3, ToolID: tool.IDConfigEdit, Command: "/config", ToolCallID: "other-call"},
+		{SessionID: 8, InputID: 3, ToolID: tool.IDConfigEdit, Command: "/config"},
 	}
 
 	for _, grant := range refused {
