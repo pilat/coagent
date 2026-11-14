@@ -20,7 +20,8 @@ type TaskParams struct {
 	SkillArgs    string `json:"skill_args,omitempty"`
 	Description  string `json:"description"`
 	SubagentType string `json:"subagent_type"`
-	Model        string `json:"model,omitempty"`      // model for the subagent
+	Model        string `json:"model,omitempty"` // model for the subagent
+	Effort       string `json:"effort,omitempty"`
 	Background   bool   `json:"background,omitempty"` // true: spawn and return immediately
 }
 
@@ -94,7 +95,7 @@ func (t *taskTool) Description() string {
 	if t.browserAvailable {
 		browserGuidance = "\nFor browser, provide a self-contained assignment with the goal, constraints, starting URL or site if known, and what to return. Start a browser subagent only when the user's request needs it, never on your own initiative. Run at most one browser subagent at a time because the browser profile cannot serve concurrent clients. For related browser follow-ups, launch a new browser task and include the previous result's findings (names, addresses, URLs, verdicts) along with the goal and constraints. Use send_to_subagent with the same browser child only to continue an unfinished multi-step flow that needs its action history.\n"
 		if t.browser.Model != "" {
-			browserGuidance += "Browser runs on a fixed model; a model parameter for it is ignored.\n"
+			browserGuidance += "Browser runs on a fixed model; model and effort parameters for it are ignored.\n"
 		}
 
 		contextOmission = "built-in explore and browser skip them"
@@ -116,6 +117,7 @@ When NOT to use task:
 - A task another subagent is already covering
 
 Launch independent tasks together in one response when useful. Keep dependent work sequential.
+Set effort only when the user explicitly names a reasoning level; otherwise omit it to inherit.
 
 Provide exactly one opening input:
 - prompt: a free-form assignment written for the subagent
@@ -167,6 +169,10 @@ func (t *taskTool) Parameters() json.RawMessage {
 			"model": {
 				"type": "string",
 				"description": "Optional tagged model ID from the available candidates. If omitted, inherits current session model."
+			},
+			"effort": {
+				"type": "string",
+				"description": "Optional reasoning effort for the subagent. Set only when the user explicitly names a level; omit to inherit. If the model rejects it, the error lists accepted levels."
 			},
 			"background": {
 				"type": "boolean",
@@ -329,16 +335,16 @@ func (t *taskTool) isCandidateModel(id string) bool {
 	return false
 }
 
-// spawnRequest carries the agent type's model and effort; the daemon resolves the
-// rest. A pinned type drops the task's model so its own wins.
+// A pinned type keeps its configured model and effort despite per-call overrides.
 func (t *taskTool) spawnRequest(p TaskParams, blocking bool, callID string) SpawnRequest {
 	req := SpawnRequest{
-		ParentID:   t.parentID,
-		AgentType:  p.SubagentType,
-		Prompt:     p.Prompt,
-		Model:      p.Model,
-		Blocking:   blocking,
-		TaskCallID: callID,
+		ParentID:       t.parentID,
+		AgentType:      p.SubagentType,
+		Prompt:         p.Prompt,
+		Model:          p.Model,
+		Blocking:       blocking,
+		TaskCallID:     callID,
+		ReasoningLevel: p.Effort,
 	}
 
 	cfg, ok := t.agentSet().Get(registry.AgentType(p.SubagentType))
@@ -349,6 +355,8 @@ func (t *taskTool) spawnRequest(p TaskParams, blocking bool, callID string) Spaw
 	req.AgentModel, req.ReasoningLevel = cfg.Model, cfg.ReasoningLevel
 	if cfg.PinnedModel {
 		req.Model = ""
+	} else if p.Effort != "" {
+		req.ReasoningLevel = p.Effort
 	}
 
 	return req
