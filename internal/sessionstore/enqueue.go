@@ -9,8 +9,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/pilat/coagent/internal/budget"
 )
 
 var enqueueTransactions sync.Map
@@ -252,10 +250,10 @@ func prepareManagerModelInputTx(ctx context.Context, tx *sql.Tx, id int64, now t
   AND (episode_started_at IS NULL OR status NOT IN ('active','suspended'))`, now, id); err != nil {
 		return fmt.Errorf("start autonomous episode: %w", err)
 	}
-	var state, phase string
+	var state string
 
-	err := tx.QueryRowContext(ctx, `SELECT state,park_phase FROM session_budgets WHERE root_session_id = ?`, id).
-		Scan(&state, &phase)
+	err := tx.QueryRowContext(ctx, `SELECT state FROM session_budgets WHERE root_session_id = ?`, id).
+		Scan(&state)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil
 	}
@@ -268,14 +266,10 @@ func prepareManagerModelInputTx(ctx context.Context, tx *sql.Tx, id int64, now t
 		return nil
 	}
 
-	if phase == "draining" {
-		return budget.ErrConflict
-	}
-
-	result, err := tx.ExecContext(
+	_, err = tx.ExecContext(
 		ctx,
-		`UPDATE session_budgets SET state = 'released',released_at = ?,released_reason = 'resumed',park_owner = ''
-  WHERE root_session_id = ? AND state = 'fired' AND park_phase IN ('requested','parked')`,
+		`UPDATE session_budgets SET state = 'released',released_at = ?,released_reason = 'resumed'
+  WHERE root_session_id = ? AND state = 'fired'`,
 		now,
 		id,
 	)
@@ -283,7 +277,7 @@ func prepareManagerModelInputTx(ctx context.Context, tx *sql.Tx, id int64, now t
 		return fmt.Errorf("release budget for input: %w", err)
 	}
 
-	return requireBudgetRowChanged(result)
+	return nil
 }
 
 func insertEnqueuedInputTx(

@@ -52,17 +52,7 @@ func appendCommitMessages(
 			return errors.New("nil commit message")
 		}
 
-		stored := *message
-		if stored.RetryOfRef != nil {
-			ref := *stored.RetryOfRef
-			if ref < 0 || ref >= len(result.MessageIDs) {
-				return errors.New("retry message reference out of range")
-			}
-
-			stored.RetryOfMessageID = result.MessageIDs[ref]
-		}
-
-		id, err := insertMessageWith(ctx, tx, sessionID, &stored)
+		id, err := insertMessageWith(ctx, tx, sessionID, message)
 		if err != nil {
 			return err
 		}

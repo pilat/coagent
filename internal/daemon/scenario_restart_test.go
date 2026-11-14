@@ -1304,7 +1304,7 @@ func interruptFirstRecovery(t *testing.T, dbPath string) int64 {
 	waitForScenarioSignal(t, secondCall, "recovery call before restart")
 	var recoveryRows int
 	require.NoError(t, first.db.QueryRowContext(first.ctx, `SELECT COUNT(*) FROM messages
-		WHERE session_id = ? AND retry_of_message_id IS NOT NULL`, rootID).Scan(&recoveryRows))
+		WHERE session_id = ? AND role = 'user' AND content = ?`, rootID, sessionstore.OutputLengthRecoveryPrompt).Scan(&recoveryRows))
 	require.Equal(t, 1, recoveryRows)
 	first.shutdown()
 	close(release)

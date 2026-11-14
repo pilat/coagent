@@ -76,12 +76,6 @@ func commitAcceptTx(
 		}
 	}
 
-	if accept.InvalidateCompletion && !accept.ModelBound {
-		if err := invalidateCompletionCheckTx(ctx, tx, c.SessionID); err != nil {
-			return err
-		}
-	}
-
 	if accept.Receipt != "" {
 		return commitAcceptReceiptTx(ctx, tx, c, input, accept.Receipt, result)
 	}

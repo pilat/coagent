@@ -25,8 +25,6 @@ type Message struct {
 	FinishType           string
 	ProviderFinishReason string
 	RejectedReason       string
-	RetryOfMessageID     int64
-	RetryOfRef           *int
 	CompactedAt          *time.Time
 	CreatedAt            time.Time
 }

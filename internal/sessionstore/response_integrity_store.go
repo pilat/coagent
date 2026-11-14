@@ -17,6 +17,11 @@ const (
 
 const integrityErrorPrefix = "❌ LLM error: "
 
+const lengthRecoveryRow = `recovery.role = 'user' AND (
+	SELECT previous.rejected_reason FROM messages previous
+	WHERE previous.session_id = recovery.session_id AND previous.id < recovery.id
+	ORDER BY previous.id DESC LIMIT 1) = 'output_length'`
+
 func IntegrityErrorNotice(errorText string) string {
 	return integrityErrorPrefix + errorText
 }
@@ -27,7 +32,7 @@ func (s *Store) LoadCurrentTerminalRejection(
 ) (*transcript.Message, error) {
 	row := s.db.QueryRowContext(ctx, `SELECT id, session_id, role, content, tool_call_id, tool_name,
 		tool_error, tool_calls, reasoning_content, reasoning_raw, attachments, cost_usd, usage,
-		finish_type, provider_finish_reason, rejected_reason, retry_of_message_id, compacted_at, created_at
+		finish_type, provider_finish_reason, rejected_reason, compacted_at, created_at
 		FROM messages rejected WHERE session_id = ? AND role = 'assistant' AND rejected_reason IS NOT NULL
 			AND EXISTS (SELECT 1 FROM sessions WHERE sessions.id = rejected.session_id
 				AND sessions.status = 'error')
@@ -37,7 +42,7 @@ func (s *Store) LoadCurrentTerminalRejection(
 			AND (rejected_reason = 'unknown_finish' OR EXISTS (
 				SELECT 1 FROM messages recovery
 				WHERE recovery.session_id = rejected.session_id
-					AND recovery.retry_of_message_id IS NOT NULL AND recovery.id < rejected.id
+					AND `+lengthRecoveryRow+` AND recovery.id < rejected.id
 					AND recovery.id > COALESCE((SELECT MAX(input.accepted_message_id)
 						FROM session_inbox input WHERE input.session_id = rejected.session_id
 							AND input.state = 'accepted' AND input.accepted_message_id IS NOT NULL), 0)
@@ -61,7 +66,7 @@ func hasOutstandingRecovery(ctx context.Context, q queryer, sessionID int64) (bo
 
 	err := q.QueryRowContext(ctx, `SELECT EXISTS (
 		SELECT 1 FROM messages recovery
-		WHERE recovery.session_id = ? AND recovery.retry_of_message_id IS NOT NULL
+		WHERE recovery.session_id = ? AND `+lengthRecoveryRow+`
 			AND recovery.id > COALESCE((SELECT MAX(input.accepted_message_id) FROM session_inbox input
 				WHERE input.session_id = ? AND input.state = 'accepted'
 					AND input.accepted_message_id IS NOT NULL), 0)

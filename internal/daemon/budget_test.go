@@ -110,15 +110,12 @@ func TestReleaseArmedBudgetHonorsStateAndErrors(t *testing.T) {
 	})
 }
 
-var errBudgetParkProbe = errors.New("budget park probe")
-
 type budgetServiceProbe struct {
 	budget.Service
 	record       *budget.Record
 	getErr       error
 	releaseErr   error
 	releaseCalls int
-	beginCalls   chan struct{}
 }
 
 func (s *budgetServiceProbe) Get(context.Context, int64) (*budget.Record, error) {
@@ -135,12 +132,16 @@ func (s *budgetServiceProbe) Release(
 	return s.record, s.releaseErr
 }
 
-func (s *budgetServiceProbe) BeginDrain(
-	context.Context,
-	int64,
-	int64,
-	string,
-) (*budget.Record, error) {
-	s.beginCalls <- struct{}{}
-	return nil, errBudgetParkProbe
+func TestParkRefusesOnlyModelBoundInputToAParkingRoot(t *testing.T) {
+	t.Parallel()
+	s := &Service{}
+	require.True(t, s.parks.begin(1))
+	assert.False(t, s.parks.begin(1))
+	assert.True(t, s.parkRefuses(1, "resume"))
+	for _, prompt := range []string{"/status", "/help", "/schedules", "/compact", "/compact notes", "/stop", "/clear", "/kill"} {
+		assert.False(t, s.parkRefuses(1, prompt), prompt)
+	}
+	assert.False(t, s.parkRefuses(2, "resume"))
+	s.parks.end(1, nil)
+	assert.False(t, s.parkRefuses(1, "resume"))
 }

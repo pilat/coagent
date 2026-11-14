@@ -68,15 +68,6 @@ func (s *Service) Start(ctx context.Context) error {
 		return err
 	}
 
-	pending, err := s.budgets.ListPendingParks(ctx)
-	if err != nil {
-		return fmt.Errorf("list pending budget parks: %w", err)
-	}
-
-	for _, record := range pending {
-		s.parkBudgetTree(ctx, record)
-	}
-
 	if err := s.settleUnresolvedCalls(ctx); err != nil {
 		return err
 	}

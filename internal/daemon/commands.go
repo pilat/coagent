@@ -10,7 +10,6 @@ import (
 
 	"go.uber.org/zap"
 
-	"github.com/pilat/coagent/internal/budget"
 	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/logger"
 	"github.com/pilat/coagent/internal/sessionbuild"
@@ -18,23 +17,25 @@ import (
 	"github.com/pilat/coagent/internal/sessionstore"
 )
 
+const budgetParkingNotice = "session %d is parking after a budget checkpoint — send the message again once it stops"
+
 func (s *Service) sendToSession(ctx context.Context, sessionID int64, prompt string) error {
+	if s.parkRefuses(sessionID, prompt) {
+		return fmt.Errorf(budgetParkingNotice, sessionID)
+	}
+
 	input, err := s.enqueueUserSessionInput(ctx, sessionID, prompt)
+	if errors.Is(err, sessionstore.ErrSessionNotAcceptingInput) {
+		if record, getErr := s.store.GetSession(ctx, sessionID); getErr == nil && record.KilledAt != nil {
+			return fmt.Errorf("session %d is killed", sessionID)
+		}
+
+		if s.parkRefuses(sessionID, prompt) {
+			return fmt.Errorf(budgetParkingNotice, sessionID)
+		}
+	}
+
 	if err != nil {
-		if errors.Is(err, sessionstore.ErrSessionNotAcceptingInput) {
-			if record, getErr := s.store.GetSession(ctx, sessionID); getErr == nil && record.KilledAt != nil {
-				return fmt.Errorf("session %d is killed", sessionID)
-			}
-		}
-
-		// A park-drain winner requires a new user input after parking completes.
-		if errors.Is(err, budget.ErrConflict) {
-			return fmt.Errorf(
-				"session %d is parking after a budget checkpoint — send the message again once it stops",
-				sessionID,
-			)
-		}
-
 		return fmt.Errorf("persist session input: %w", err)
 	}
 
@@ -52,8 +53,7 @@ func (s *Service) sendToSession(ctx context.Context, sessionID int64, prompt str
 }
 
 func (s *Service) sendToSessionLocked(ctx context.Context, sessionID int64, prompt string) error {
-	_, ok := s.runners.load(sessionID)
-	if ok {
+	if _, ok := s.runners.load(sessionID); ok {
 		return nil
 	}
 
@@ -71,12 +71,8 @@ func (s *Service) sendToSessionLocked(ctx context.Context, sessionID int64, prom
 	}
 
 	parked, err := s.prepareStoppedSessionInput(ctx, rec, prompt)
-	if err != nil {
+	if err != nil || parked {
 		return err
-	}
-
-	if parked {
-		return nil
 	}
 
 	return s.startLocked(ctx, sessionID)

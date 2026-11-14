@@ -28,11 +28,7 @@ func TestEnqueueCompactWithFocusKeepsParkedBudget(t *testing.T) {
 				RootSessionID: root.ID, ToolCallID: "arm", CostLimitUSD: &limit, Receipt: "Budget armed",
 			})
 			require.NoError(t, err)
-			fired, _, err := store.FireBudget(ctx, root.ID, 1, "cost", 1.5, "Budget checkpoint reached (cost).")
-			require.NoError(t, err)
-			_, err = store.BeginBudgetDrain(ctx, root.ID, fired.Generation, fired.ParkOwner)
-			require.NoError(t, err)
-			_, err = store.MarkBudgetParked(ctx, root.ID, fired.Generation, fired.ParkOwner)
+			_, _, err = store.FireBudget(ctx, root.ID, 1, "cost", 1.5, "Budget checkpoint reached (cost).")
 			require.NoError(t, err)
 			require.NoError(t, store.UpdateSessionStatus(ctx, root.ID, SessionStatusStopped))
 			var before time.Time
@@ -46,18 +42,15 @@ func TestEnqueueCompactWithFocusKeepsParkedBudget(t *testing.T) {
 			if content == "keep going" {
 				assert.Equal(t, budget.Released, record.State)
 				assert.Equal(t, "resumed", record.ReleasedReason)
-				assert.Equal(t, "parked", record.ParkPhase)
 				rearm := targetedBudgetMutation(t, store, root.ID, root.ID, "rearm")
 				rearmed, armErr := store.Arm(ctx, rearm)
 				require.NoError(t, armErr)
 				assert.Equal(t, budget.Armed, rearmed.State)
 				assert.Equal(t, record.Generation+1, rearmed.Generation)
-				assert.Empty(t, rearmed.ParkPhase)
 				return
 			}
 
 			assert.Equal(t, budget.Fired, record.State)
-			assert.Equal(t, "parked", record.ParkPhase)
 			var after time.Time
 			require.NoError(t, db.QueryRowContext(ctx, `SELECT episode_started_at FROM sessions WHERE id = ?`,
 				root.ID).Scan(&after))

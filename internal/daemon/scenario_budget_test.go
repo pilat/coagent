@@ -1,7 +1,6 @@
 package daemon
 
 import (
-	"context"
 	"encoding/json"
 	"path/filepath"
 	"strings"
@@ -15,6 +14,7 @@ import (
 
 	"github.com/pilat/coagent/internal/budget"
 	"github.com/pilat/coagent/internal/controllerapi"
+	"github.com/pilat/coagent/internal/llm/llmtest"
 	"github.com/pilat/coagent/internal/llmwire"
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/tool"
@@ -377,35 +377,135 @@ func TestHarnessScenario_CompletionCheckBudgetCrossingOnCandidateHidesText(t *te
 	record, err := h.store.Get(h.ctx, root)
 	require.NoError(t, err)
 	assert.Equal(t, budget.Fired, record.State)
-	assert.Equal(t, "parked", record.ParkPhase)
+	assert.Equal(t, sessionstore.SessionStatusStopped, h.session(root).Status)
 }
 
-// A user turn racing the park drain must be rejected with an actionable
-// explanation, not the raw store conflict — and leave nothing in the inbox.
 func TestSendToSessionDuringBudgetDrainExplainsParking(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	h := newHarness(t, harnessOptions{respond: trivialRespond})
-	sessions, store := h.store, h.store
-	projectID := testProject(t, store, "/tmp/park-race")
-	root, err := sessions.CreateSession(ctx, projectID, "priced", "", managerAttrs("manager-park"))
+	entered, release := make(chan struct{}), make(chan struct{})
+	var calls atomic.Int64
+	h := newHarness(t, harnessOptions{respond: func(string, []llmwire.Message) *llmwire.Response {
+		if calls.Add(1) == 1 {
+			close(entered)
+			<-release
+			return &llmwire.Response{Text: "over budget", CostUSD: 0.5}
+		}
+		return textReply("continued")
+	}})
+	t.Cleanup(func() { closeOnce(release); h.shutdown() })
+	h.startInboxWake()
+	root, err := h.mgr.Send(h.ctx, h.projectID, "work under a budget", "fake-model", managerAttrs(scenarioManagerID))
 	require.NoError(t, err)
-	limit := 1.0
-	_, err = sessions.Arm(ctx, budget.Mutation{
-		RootSessionID: root.ID, ToolCallID: "arm", CostLimitUSD: &limit, Receipt: "Budget armed",
-	})
+	waitForScenarioSignal(t, entered, "budgeted model call")
+	_, err = h.db.ExecContext(h.ctx, `INSERT INTO session_budgets
+		(root_session_id, state, generation, armed_at, baseline_cost_usd, cost_limit_usd)
+		VALUES (?, 'armed', 1, ?, 0, 0.1)`, root, time.Now().UTC())
 	require.NoError(t, err)
-	fired, _, err := sessions.FireBudget(ctx, root.ID, 1, "cost", 1.5, "Budget checkpoint reached (cost).")
+	unlockTree, err := h.mgr.lockSessionTree(h.ctx, root)
+	var unlockOnce sync.Once
+	unlock := func() { unlockOnce.Do(unlockTree) }
+	t.Cleanup(unlock)
 	require.NoError(t, err)
-	_, err = sessions.BeginBudgetDrain(ctx, root.ID, fired.Generation, fired.ParkOwner)
-	require.NoError(t, err)
-	mgr := h.mgr
-	err = mgr.sendToSession(ctx, root.ID, "resume the work")
+	close(release)
+	h.waitUntil("park in progress", func() bool { return h.mgr.parks.active(root) })
+	err = h.mgr.sendToSession(h.ctx, root, "resume the work")
 	require.Error(t, err)
 	assert.NotContains(t, err.Error(), "budget conflict", "the raw store conflict must not reach the user")
 	assert.Contains(t, err.Error(), "park", "the error must explain the parking state, got: %s", err.Error())
-	_, pendingErr := sessions.PeekPending(ctx, root.ID)
+	_, pendingErr := h.store.PeekPending(h.ctx, root)
 	require.ErrorIs(t, pendingErr, sessionstore.ErrNoPendingInput)
+	record, err := h.store.Get(h.ctx, root)
+	require.NoError(t, err)
+	assert.Equal(t, budget.Fired, record.State)
+	unlock()
+	h.waitUntil("park stopped", func() bool {
+		return !h.mgr.parks.active(root) && h.session(root).Status == sessionstore.SessionStatusStopped
+	})
+	require.NoError(t, h.mgr.sendToSession(h.ctx, root, "resume the work"))
+	record, err = h.store.Get(h.ctx, root)
+	require.NoError(t, err)
+	assert.Equal(t, budget.Released, record.State)
+	assert.Equal(t, "resumed", record.ReleasedReason)
+	h.waitUntil("continued answer", func() bool {
+		for _, row := range h.outbox(root) {
+			if row.Content == "continued" {
+				return !h.mgr.HasActiveLoop(root)
+			}
+		}
+		return false
+	})
+	require.NoError(t, llmtest.ValidateToolPairing(h.messages(root)))
+}
+
+func TestHarnessScenario_BudgetChangeDuringParkRearmsAndSkipsThePark(t *testing.T) {
+	entered, release := make(chan struct{}), make(chan struct{})
+	var calls atomic.Int64
+	h := newHarness(t, harnessOptions{respond: func(string, []llmwire.Message) *llmwire.Response {
+		if calls.Add(1) == 1 {
+			close(entered)
+			<-release
+			return &llmwire.Response{Text: "over budget", CostUSD: 0.5}
+		}
+		return textReply("continued")
+	}})
+	t.Cleanup(func() { closeOnce(release); h.shutdown() })
+	h.startInboxWake()
+	root, err := h.mgr.Send(h.ctx, h.projectID, "work under a budget", "fake-model", managerAttrs(scenarioManagerID))
+	require.NoError(t, err)
+	waitForScenarioSignal(t, entered, "budgeted model call")
+	_, err = h.db.ExecContext(h.ctx, `INSERT INTO session_budgets
+		(root_session_id, state, generation, armed_at, baseline_cost_usd, cost_limit_usd)
+		VALUES (?, 'armed', 1, ?, 0, 0.1)`, root, time.Now().UTC())
+	require.NoError(t, err)
+	unlockTree, err := h.mgr.lockSessionTree(h.ctx, root)
+	var unlockOnce sync.Once
+	unlock := func() { unlockOnce.Do(unlockTree) }
+	t.Cleanup(unlock)
+	require.NoError(t, err)
+	close(release)
+	h.waitUntil("budget fired", func() bool {
+		record, loadErr := h.store.Get(h.ctx, root)
+		return loadErr == nil && record.State == budget.Fired
+	})
+	h.waitUntil("park in progress", func() bool { return h.mgr.parks.active(root) })
+	ten := 10.0
+	rearmed, err := h.store.Arm(h.ctx, budget.Mutation{
+		RootSessionID: root, ToolCallID: "rearm-during-park", CostLimitUSD: &ten, Receipt: "Budget armed during park",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), rearmed.Generation)
+	assert.Equal(t, budget.Armed, rearmed.State)
+	unlock()
+	h.waitUntil("run idle", func() bool { return !h.mgr.HasActiveLoop(root) })
+	assert.Never(t,
+		func() bool { return h.session(root).Status == sessionstore.SessionStatusStopped },
+		500*time.Millisecond, 25*time.Millisecond,
+	)
+	record, err := h.store.Get(h.ctx, root)
+	require.NoError(t, err)
+	assert.Equal(t, budget.Armed, record.State)
+	assert.Equal(t, int64(2), record.Generation)
+	var receipts int
+	for _, row := range h.outbox(root) {
+		if row.Content == "Budget armed during park" {
+			receipts++
+		}
+	}
+	assert.Equal(t, 1, receipts)
+	h.waitUntil("continue accepted", func() bool { return h.mgr.sendToSession(h.ctx, root, "continue") == nil })
+	h.waitUntil("continued answer", func() bool {
+		for _, row := range h.outbox(root) {
+			if row.Content == "continued" {
+				return !h.mgr.HasActiveLoop(root)
+			}
+		}
+		return false
+	})
+	record, err = h.store.Get(h.ctx, root)
+	require.NoError(t, err)
+	assert.Equal(t, budget.Released, record.State)
+	assert.Equal(t, "completed", record.ReleasedReason)
+	assert.Equal(t, int64(2), record.Generation)
+	require.NoError(t, llmtest.ValidateToolPairing(h.messages(root)))
 }
 
 func TestResponseIntegrity_BudgetCrossingSuppressesRecoveryAndCallStubs(t *testing.T) {
@@ -439,17 +539,38 @@ func TestResponseIntegrity_BudgetCrossingSuppressesRecoveryAndCallStubs(t *testi
 	close(release)
 	h.waitUntil("budget park completes", func() bool {
 		record, loadErr := h.store.Get(h.ctx, sessionID)
-		return loadErr == nil && record.State == budget.Fired && record.ParkPhase == "parked"
+		return loadErr == nil && record.State == budget.Fired &&
+			h.session(sessionID).Status == sessionstore.SessionStatusStopped
 	})
 	var recoveryRows, toolRows, rejectedRows int
 	require.NoError(t, h.db.QueryRowContext(h.ctx, `SELECT
-		COUNT(*) FILTER (WHERE retry_of_message_id IS NOT NULL),
+		COUNT(*) FILTER (WHERE role = 'user' AND content = ?),
 		COUNT(*) FILTER (WHERE role = 'tool'),
 		COUNT(*) FILTER (WHERE rejected_reason = 'output_length')
-		FROM messages WHERE session_id = ?`, sessionID).Scan(
+		FROM messages WHERE session_id = ?`, sessionstore.OutputLengthRecoveryPrompt, sessionID).Scan(
 		&recoveryRows, &toolRows, &rejectedRows,
 	))
 	assert.Zero(t, recoveryRows)
 	assert.Zero(t, toolRows)
 	assert.Equal(t, 1, rejectedRows)
+}
+
+func TestBudgetParkStopsACompletedRoot(t *testing.T) {
+	h := newHarness(t, harnessOptions{respond: trivialRespond})
+	root := h.createRoot(managerAttrs(scenarioManagerID))
+	require.NoError(t, h.store.UpdateSessionStatus(h.ctx, root, sessionstore.SessionStatusCompleted))
+	limit := 1.0
+	armed, err := h.store.Arm(h.ctx, budget.Mutation{
+		RootSessionID: root, ToolCallID: "arm", CostLimitUSD: &limit, Receipt: "Budget armed",
+	})
+	require.NoError(t, err)
+	_, _, err = h.store.FireBudget(h.ctx, root, armed.Generation, "cost", 1.5, "checkpoint")
+	require.NoError(t, err)
+	h.mgr.startPark(root)
+	h.waitUntil("completed root stopped", func() bool {
+		return h.session(root).Status == sessionstore.SessionStatusStopped && !h.mgr.parks.active(root)
+	})
+	record, err := h.store.Get(h.ctx, root)
+	require.NoError(t, err)
+	assert.Equal(t, budget.Fired, record.State)
 }

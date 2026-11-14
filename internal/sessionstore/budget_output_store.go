@@ -14,7 +14,31 @@ import (
 
 const budgetSelect = `SELECT root_session_id, state, generation, armed_at, baseline_cost_usd,
 	cost_limit_usd, duration_seconds, fired_at, released_at, fired_reason, released_reason,
-	observed_cost_usd, park_phase, park_owner FROM session_budgets`
+	observed_cost_usd FROM session_budgets`
+
+func (s *Store) ListArmedBudgets(ctx context.Context) ([]*budget.Record, error) {
+	return s.listBudgets(ctx, ` WHERE state = 'armed' ORDER BY root_session_id`)
+}
+
+// StopFiredBudgetRoot closes root input admission only while its budget is fired.
+// A prior release or another stop owner leaves the root untouched.
+func (s *Store) StopFiredBudgetRoot(ctx context.Context, rootID int64) (bool, error) {
+	result, err := s.db.ExecContext(ctx, `UPDATE sessions SET status = 'stopping', updated_at = ?
+		WHERE id = ? AND parent_id = 0 AND killed_at IS NULL
+			AND status NOT IN ('stopping', 'terminating', 'killed')
+			AND EXISTS (SELECT 1 FROM session_budgets b WHERE b.root_session_id = sessions.id
+				AND b.state = 'fired')`, time.Now().UTC(), rootID)
+	if err != nil {
+		return false, fmt.Errorf("stop fired budget root: %w", err)
+	}
+
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("stop fired budget root rows affected: %w", err)
+	}
+
+	return affected == 1, nil
+}
 
 func (s *Store) FireBudget(
 	ctx context.Context,
@@ -135,8 +159,8 @@ func (s *Store) ReleaseBudget(
 	}
 
 	result, err := s.db.ExecContext(ctx, `UPDATE session_budgets SET state = 'released', released_at = ?,
-		released_reason = ?, park_owner = '' WHERE root_session_id = ? AND generation = ?
-			AND state IN ('armed', 'fired') AND park_phase <> 'draining'`,
+		released_reason = ? WHERE root_session_id = ? AND generation = ?
+			AND state IN ('armed', 'fired')`,
 		time.Now().UTC(), reason, rootID, generation)
 	if err != nil {
 		return nil, fmt.Errorf("release budget: %w", err)
@@ -168,12 +192,11 @@ func fireBudgetTx(
 	content string,
 ) (*budget.Record, *OutputCommit, error) {
 	now := time.Now().UTC()
-	parkOwner := fmt.Sprintf("budget:%d:%d", rootID, generation)
 
 	result, err := tx.ExecContext(ctx, `UPDATE session_budgets SET state = 'fired', fired_at = ?,
-		fired_reason = ?, observed_cost_usd = ?, park_phase = 'requested', park_owner = ?
+		fired_reason = ?, observed_cost_usd = ?
 		WHERE root_session_id = ? AND generation = ? AND state = 'armed'`,
-		now, reason, observedCost, parkOwner, rootID, generation)
+		now, reason, observedCost, rootID, generation)
 	if err != nil {
 		return nil, nil, fmt.Errorf("fire budget: %w", err)
 	}
@@ -216,7 +239,7 @@ func scanBudget(row interface{ Scan(...any) error }) (*budget.Record, error) {
 
 	err := row.Scan(&record.RootSessionID, &record.State, &record.Generation, &record.ArmedAt,
 		&record.BaselineCostUSD, &cost, &duration, &firedAt, &releasedAt, &record.FiredReason,
-		&record.ReleasedReason, &observed, &record.ParkPhase, &record.ParkOwner)
+		&record.ReleasedReason, &observed)
 	if err != nil {
 		return nil, err
 	}
@@ -264,6 +287,27 @@ func budgetOutputByKey(
 	}
 
 	return &OutputCommit{OutputID: id, OwnerID: owner, Existing: true}, nil
+}
+
+func (s *Store) listBudgets(ctx context.Context, suffix string) ([]*budget.Record, error) {
+	rows, err := s.db.QueryContext(ctx, budgetSelect+suffix)
+	if err != nil {
+		return nil, fmt.Errorf("list budgets: %w", err)
+	}
+	defer rows.Close()
+
+	var records []*budget.Record
+
+	for rows.Next() {
+		record, scanErr := scanBudget(rows)
+		if scanErr != nil {
+			return nil, fmt.Errorf("scan budget: %w", scanErr)
+		}
+
+		records = append(records, record)
+	}
+
+	return records, rows.Err()
 }
 
 func validBudgetReleaseReason(reason string) bool {

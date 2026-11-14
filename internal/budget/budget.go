@@ -18,10 +18,7 @@ type Service interface {
 		assistantText string,
 	) (*Record, bool, error)
 	Admit(ctx context.Context, rootID int64, now time.Time) error
-	BeginDrain(ctx context.Context, rootID, generation int64, owner string) (*Record, error)
-	MarkParked(ctx context.Context, rootID, generation int64, owner string) (*Record, error)
 	Release(ctx context.Context, rootID, generation int64, reason string) (*Record, error)
-	ListPendingParks(ctx context.Context) ([]*Record, error)
 	ListArmed(ctx context.Context) ([]*Record, error)
 }
 
@@ -40,42 +37,12 @@ func New(store PolicyStore) Service {
 	return &svc{store: store}
 }
 
-func (s *svc) BeginDrain(
-	ctx context.Context,
-	rootID, generation int64,
-	owner string,
-) (*Record, error) {
-	record, err := s.store.BeginBudgetDrain(ctx, rootID, generation, owner)
-	if err != nil {
-		return nil, fmt.Errorf("begin budget drain: %w", err)
-	}
-
-	return record, nil
-}
-
-func (s *svc) MarkParked(
-	ctx context.Context,
-	rootID, generation int64,
-	owner string,
-) (*Record, error) {
-	record, err := s.store.MarkBudgetParked(ctx, rootID, generation, owner)
-	if err != nil {
-		return nil, fmt.Errorf("mark budget parked: %w", err)
-	}
-
-	return record, nil
-}
-
 func (s *svc) Release(
 	ctx context.Context,
 	rootID, generation int64,
 	reason string,
 ) (*Record, error) {
 	return s.store.ReleaseBudget(ctx, rootID, generation, reason)
-}
-
-func (s *svc) ListPendingParks(ctx context.Context) ([]*Record, error) {
-	return s.store.ListPendingBudgetParks(ctx)
 }
 
 func (s *svc) ListArmed(ctx context.Context) ([]*Record, error) {

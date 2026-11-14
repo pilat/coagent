@@ -32,8 +32,6 @@ type Record struct {
 	FiredReason     string
 	ReleasedReason  string
 	ObservedCostUSD *float64
-	ParkPhase       string
-	ParkOwner       string
 }
 
 type Mutation struct {

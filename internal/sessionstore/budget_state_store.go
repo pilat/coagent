@@ -62,7 +62,7 @@ func (s *Store) Arm(
 			armed_at = excluded.armed_at, baseline_cost_usd = excluded.baseline_cost_usd,
 			cost_limit_usd = excluded.cost_limit_usd, duration_seconds = excluded.duration_seconds,
 			fired_at = NULL, released_at = NULL, fired_reason = '', released_reason = '',
-			observed_cost_usd = NULL, park_phase = '', park_owner = ''`,
+			observed_cost_usd = NULL`,
 		mutation.RootSessionID, generation, now, baseline,
 		nullFloat(mutation.CostLimitUSD), nullInt64(mutation.DurationSeconds))
 	if err != nil {
@@ -112,23 +112,13 @@ func (s *Store) Clear(
 	now := time.Now().UTC()
 
 	result, err := tx.ExecContext(ctx, `UPDATE session_budgets SET state = 'released', released_at = ?,
-		released_reason = 'cleared', park_owner = '' WHERE root_session_id = ?
-			AND park_phase <> 'draining'`, now, mutation.RootSessionID)
+		released_reason = 'cleared' WHERE root_session_id = ?`, now, mutation.RootSessionID)
 	if err != nil {
 		return nil, fmt.Errorf("clear budget: %w", err)
 	}
 
 	affected, _ := result.RowsAffected()
 	if affected == 0 {
-		var phase string
-		loadErr := tx.QueryRowContext(ctx, `SELECT park_phase FROM session_budgets
-			WHERE root_session_id = ?`, mutation.RootSessionID).Scan(&phase)
-
-		if loadErr == nil {
-			// The row exists but the drain owns it: no external release wins the window.
-			return nil, budget.ErrConflict
-		}
-
 		_, err = tx.ExecContext(ctx, `INSERT INTO session_budgets
 			(root_session_id, state, generation, armed_at, baseline_cost_usd, released_at, released_reason)
 			VALUES (?, 'released', 1, ?, ?, ?, 'cleared')`, mutation.RootSessionID, now, baseline, now)
@@ -179,20 +169,15 @@ func validateBudgetMutation(mutation budget.Mutation, arm bool) error {
 
 func nextBudgetGenerationTx(ctx context.Context, tx *sql.Tx, rootID int64) (int64, error) {
 	var previous int64
-	var state, phase string
 
-	err := tx.QueryRowContext(ctx, `SELECT generation,state,park_phase FROM session_budgets WHERE root_session_id = ?`,
-		rootID).Scan(&previous, &state, &phase)
+	err := tx.QueryRowContext(ctx, `SELECT generation FROM session_budgets WHERE root_session_id = ?`,
+		rootID).Scan(&previous)
 	if errors.Is(err, sql.ErrNoRows) {
 		return 1, nil
 	}
 
 	if err != nil {
 		return 0, fmt.Errorf("load budget generation: %w", err)
-	}
-
-	if state == "fired" && (phase == "requested" || phase == "draining") {
-		return 0, fmt.Errorf("session #%d is parking after a budget checkpoint; try again once it stops", rootID)
 	}
 
 	return previous + 1, nil
