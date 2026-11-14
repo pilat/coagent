@@ -847,6 +847,10 @@ remain authoritative rather than becoming implicit coagent policy.
 Model IDs are globally unique. Optional user-defined tags are preserved as YAML
 policy: `/model` exposes every configured model to people, while `task` exposes
 inheritance and only tagged models for autonomous explicit selection.
+Optional `task.effort`, set only on explicit user request, overrides the type's
+effort and is validated against the child model before spawn (rejected outright
+when that model has no selector); a pinned type ignores both task model and effort
+([ADR-0092](docs/adr/0092-task-effort-by-prompt-discipline.md)).
 An operator can pin a catalog section where a protocol driver alone cannot
 identify the vendor. Without that pin, the OpenAI-compatible driver searches
 catalog sections in deterministic sorted order. When a configured model ID is

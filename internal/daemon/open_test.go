@@ -63,7 +63,12 @@ func TestResolveChildEffort(t *testing.T) {
 		{
 			name:    "an asked-for level the model rejects fails the spawn",
 			entries: entries, model: "child-model", requested: "high",
-			wantErr: "does not accept reasoning level",
+			wantErr: `does not accept reasoning level "high" (accepts: low, medium)`,
+		},
+		{
+			name:    "an explicit level on a model with no effort selector fails the spawn",
+			entries: entries, model: "plain-model", requested: "high",
+			wantErr: "accepts no reasoning level; omit effort",
 		},
 		{
 			name:    "a model with no effort selector carries no level",

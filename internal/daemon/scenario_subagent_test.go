@@ -1534,6 +1534,28 @@ func TestSpawnSettlesTheChildEffortOnTheChildModel(t *testing.T) {
 		"the child must ask the provider for the level its own model defaults to")
 }
 
+func TestSpawnExplicitEffortReachesChildProvider(t *testing.T) {
+	provider := newSpawnEffortProvider(t)
+	h := newHarness(t, harnessOptions{
+		configure: withSpawnEffortModels(provider.url),
+		clientFor: configuredClient(withSpawnEffortModels(provider.url)),
+	})
+	parent, err := h.store.CreateSession(h.ctx, h.projectID, "parent-model", "high", nil)
+	require.NoError(t, err)
+	h.startInboxWake()
+	child, err := h.mgr.Spawn(h.ctx, subagent.SpawnRequest{
+		ParentID: parent.ID, AgentType: "general", Model: "child-model",
+		Prompt: "child work", ReasoningLevel: "medium",
+	})
+	require.NoError(t, err)
+	h.waitUntil("child delivery", func() bool {
+		link := h.link(child.ChildID)
+		return link != nil && link.DeliveredAt != 0
+	})
+	assert.Equal(t, "medium", h.session(child.ChildID).ReasoningLevel)
+	assert.Equal(t, "medium", provider.effortFor("child-model"))
+}
+
 func TestStopRejectsSpawnQueuedBehindDurableBoundary(t *testing.T) {
 	h := newHarness(t, harnessOptions{respond: trivialRespond})
 	root := h.createRoot(nil)

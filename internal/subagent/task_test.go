@@ -254,7 +254,7 @@ func TestSubagentToolDescriptionsTeachExecutionContract(t *testing.T) {
 	assert.Equal(t, []any{"description", "subagent_type"}, schema["required"])
 	properties, ok := schema["properties"].(map[string]any)
 	require.True(t, ok)
-	for _, name := range []string{"prompt", "skill", "skill_args", "description", "subagent_type", "model", "background"} {
+	for _, name := range []string{"prompt", "skill", "skill_args", "description", "subagent_type", "model", "effort", "background"} {
 		assert.Contains(t, properties, name)
 	}
 
@@ -263,6 +263,7 @@ func TestSubagentToolDescriptionsTeachExecutionContract(t *testing.T) {
 	}
 
 	for _, want := range []string{
+		"Set effort only when the user explicitly names a reasoning level; otherwise omit it to inherit",
 		"Bounded research whose raw searches and file reads would add noise to the parent context",
 		"Keep dependent work sequential",
 		"does not receive the parent conversation",
@@ -568,7 +569,7 @@ func TestTaskToolPinnedBrowserIgnoresModelParameter(t *testing.T) {
 			task.SetFramesAvailable(true)
 			params, err := json.Marshal(TaskParams{
 				Prompt: "browse", Description: "browse", SubagentType: "browser",
-				Model: "not-a-candidate", Background: background,
+				Model: "not-a-candidate", Effort: "max", Background: background,
 			})
 			require.NoError(t, err)
 
@@ -586,8 +587,50 @@ func TestTaskToolPinnedBrowserIgnoresModelParameter(t *testing.T) {
 			description := task.Description()
 			assert.Contains(t, description, "Also has built-in tools: read, write.")
 			assert.Contains(t, description, "Browser runs on a fixed model")
+			assert.Contains(t, description, "model and effort parameters for it are ignored")
 		})
 	}
+}
+
+func TestTaskToolEffort(t *testing.T) {
+	t.Parallel()
+
+	for _, background := range []bool{false, true} {
+		for _, effort := range []string{"", "high", "ultra"} {
+			t.Run(fmt.Sprintf("background_%t/effort_%s", background, effort), func(t *testing.T) {
+				t.Parallel()
+				sp := &mockSpawner{}
+				task := taskToolWith(sp)
+				params, err := json.Marshal(TaskParams{
+					Prompt: "inspect", Description: "inspect", SubagentType: "general",
+					Effort: effort, Background: background,
+				})
+				require.NoError(t, err)
+				_, err = task.Execute(tool.WithCallID(context.Background(), "effort-call"), params)
+				if background {
+					require.NoError(t, err)
+				} else {
+					require.ErrorIs(t, err, tool.ErrSuspend)
+				}
+				assert.Equal(t, effort, sp.lastReq.ReasoningLevel)
+			})
+		}
+	}
+
+	t.Run("pinned browser without configured effort", func(t *testing.T) {
+		t.Parallel()
+		sp := &mockSpawner{}
+		task := NewTaskTool(sp, 7, nil, nil, registry.BrowserSettings{Model: "cheap"}).(*taskTool)
+		task.SetFramesAvailable(true)
+		params, err := json.Marshal(TaskParams{
+			Prompt: "browse", Description: "browse", SubagentType: "browser", Effort: "high", Background: true,
+		})
+		require.NoError(t, err)
+		_, err = task.Execute(tool.WithCallID(context.Background(), "effort-call"), params)
+		require.NoError(t, err)
+		assert.Empty(t, sp.lastReq.ReasoningLevel)
+		assert.Empty(t, sp.lastReq.Model)
+	})
 }
 
 func TestTaskToolUnpinnedBrowserKeepsModelPrecedence(t *testing.T) {

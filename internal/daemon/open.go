@@ -321,6 +321,16 @@ func (m models) effort(model, requested, inherited string) (string, error) {
 	}
 
 	if requested != "" {
+		for _, entry := range m.entries {
+			if entry.ID == model && len(entry.EffortLevels) == 0 {
+				return "", fmt.Errorf(
+					"spawn subagent on model %s: model %s accepts no reasoning level; omit effort",
+					model,
+					model,
+				)
+			}
+		}
+
 		level, err := sessionbuild.ResolveReasoningLevel(m.entries, model, requested)
 		if err != nil {
 			return "", fmt.Errorf("spawn subagent on model %s: %w", model, err)
