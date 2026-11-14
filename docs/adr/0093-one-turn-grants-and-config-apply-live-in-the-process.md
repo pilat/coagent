@@ -58,8 +58,8 @@ binary clear despite obsolete extra fields, while a newer marker remains safe.
 - Known limitation: if the result commit of `set_budget` fails without a
   crash, the next run in the same process re-runs that call without a grant,
   so the model gets a "requires /budget" refusal while the budget is armed and
-  the user holds the receipt. A follow-up settles such calls as interrupted
-  instead of re-running them.
+  the user holds the receipt. It needs a storage error at one exact step and
+  is accepted as is; no follow-up is planned.
 - A crash between configuration write and tool-result commit leaves a live
   configuration and an interrupted call. Boot settles it as interrupted and
   never re-executes it.
