@@ -3,17 +3,20 @@ package daemon
 import (
 	"context"
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/pilat/coagent/internal/backgroundprocess"
@@ -23,24 +26,21 @@ import (
 	"github.com/pilat/coagent/internal/configops"
 	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/llm"
+	"github.com/pilat/coagent/internal/llm/llmtest"
 	"github.com/pilat/coagent/internal/llmwire"
-	"github.com/pilat/coagent/internal/loader"
 	"github.com/pilat/coagent/internal/managercontrol"
 	"github.com/pilat/coagent/internal/managerdiscovery"
 	"github.com/pilat/coagent/internal/mcpstore"
 	"github.com/pilat/coagent/internal/migrate"
+	"github.com/pilat/coagent/internal/progressruntime"
 	"github.com/pilat/coagent/internal/schedule"
+	"github.com/pilat/coagent/internal/sessionbus"
 	"github.com/pilat/coagent/internal/sessionevent"
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/subagent"
 	"github.com/pilat/coagent/internal/tool"
 	"github.com/pilat/coagent/internal/transcript"
 )
-
-// isCompactionPrompt recognises the summarization call: the replayed prefix plus one final checkpoint instruction.
-func isCompactionPrompt(msgs []llmwire.Message) bool {
-	return isCompactionInstruction(msgs)
-}
 
 func (h *harness) waitUntil(label string, cond func() bool) {
 	h.t.Helper()
@@ -106,6 +106,19 @@ func blockingCompactRespond(release <-chan struct{}) func(string, []llmwire.Mess
 	}
 }
 
+func providerSystemText(request providerRequest) string {
+	for _, message := range request.Messages {
+		if message.Role == llmwire.RoleSystem {
+			var system string
+			if err := json.Unmarshal(message.Content, &system); err != nil {
+				panic(err)
+			}
+			return system
+		}
+	}
+	return ""
+}
+
 func hasSummaryRow(msgs []llmwire.Message) bool {
 	for _, m := range msgs {
 		if strings.HasPrefix(m.Content, contextSummaryPrefix) {
@@ -155,24 +168,11 @@ func newApplyDaemonWith(
 	return &applyDaemon{harness: h, ops: ops, restarts: h.mgr.applier.Restart()}
 }
 
-const applyCallID = "cfg-call-1"
-
 // Separate daemon images share durable state and config so restart-apply scenarios retain their real boundary.
 type applyDaemon struct {
 	*harness
 	ops      configops.Service
 	restarts <-chan struct{}
-}
-
-// A second config_edit after its verdict would reveal re-execution of the suspended call.
-func configApplyRespond(_ string, msgs []llmwire.Message) *llmwire.Response {
-	if hasToolResultFor(msgs, tool.IDConfigEdit) {
-		return textReply("configuration replaced")
-	}
-	if hasConfigInput(msgs) {
-		return callReply(applyCallID, tool.IDConfigEdit, `{"document":`+mustQuoteJSON(configEditCandidate)+`}`)
-	}
-	return textReply("ready to reconfigure")
 }
 
 func newApplyConfigDir(t *testing.T) string {
@@ -186,11 +186,6 @@ func newApplyConfigDirWith(t *testing.T, configYAML string) string {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(configYAML), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "secrets"), []byte(toolSecrets), 0o600))
 	return dir
-}
-
-func newApplyDaemon(t *testing.T, dbPath, configDir string) *applyDaemon {
-	t.Helper()
-	return newApplyDaemonWith(t, dbPath, configDir, configApplyRespond)
 }
 
 func (d *applyDaemon) restartCount() int { return len(d.restarts) }
@@ -229,18 +224,14 @@ models:
 //nolint:gosec // fake credentials
 const toolSecrets = "WORK_API_KEY=sk-ant-work-0000000000\n"
 
-func newTestController(
-	svc *Service,
-	cfg *config.Config,
-	cache *loader.MarketplaceCache,
-	_ schedule.Service,
-) controllerapi.ManagerControllerFactory {
+func newTestController(svc *Service) controllerapi.ManagerControllerFactory {
+	cfg := &config.Config{}
 	var outputs *sessionstore.Store
 	if svc != nil {
 		outputs, _ = svc.store.(*sessionstore.Store)
 	}
 	return managercontrol.New(
-		svc, outputs, managerdiscovery.New(outputs, cfg, cache), svc.bus, cfg, cache,
+		svc, outputs, managerdiscovery.New(outputs, cfg, nil), svc.bus, cfg, nil,
 	)
 }
 
@@ -453,7 +444,7 @@ const taskCallID = "task-call-1"
 
 // The child settles a tool round so compaction has an older raw group beyond its mandatory verbatim tail.
 func subagentRespond(_ string, msgs []llmwire.Message) *llmwire.Response {
-	if isCompactionPrompt(msgs) {
+	if isCompactionInstruction(msgs) {
 		return textReply("child checkpoint: ran ls, finished 42")
 	}
 	if hasUserContaining(msgs, "CHILD_TASK") {
@@ -471,6 +462,16 @@ func subagentRespond(_ string, msgs []llmwire.Message) *llmwire.Response {
 	)
 }
 
+type scriptCall struct{ id, name, params string }
+
+type scriptTurn struct {
+	marker string
+	calls  []scriptCall
+	answer string
+}
+
+type scriptTurns []scriptTurn
+
 type harnessOptions struct {
 	dbPath         string
 	respond        func(string, []llmwire.Message) *llmwire.Response
@@ -478,7 +479,6 @@ type harnessOptions struct {
 	configure      func(*config.Config)
 	links          func(subagent.Store) subagent.Store
 	schedules      func(schedule.Store) schedule.Store
-	mcp            mcpstore.Store
 	observeRequest func(providerRequest)
 }
 
@@ -525,19 +525,17 @@ func newHarness(t *testing.T, o harnessOptions) *harness {
 			return client, nil
 		}
 	}
-	if o.mcp == nil {
-		o.mcp = mcpstore.NewStore(db)
-	}
-	factory := scriptedBuildInput(t, cfg, store, o.mcp, clientFor, o.observeRequest)
-	h.mgr, _ = newScenarioDaemon(
-		ctx,
-		factory,
-		store,
-		links,
-		budget.New(store),
-		schedule.NewService(schedules, store),
-		func() string { return cfg.Model },
-		db,
+	registry := mcpstore.NewStore(db)
+	in := scriptedBuildInput(t, cfg, store, registry, clientFor, o.observeRequest)
+	budgets := budget.New(store)
+	scheduler := schedule.NewService(schedules, store)
+	bus := sessionbus.New()
+	applier := configapply.New(
+		configops.New(filepath.Join(cfg.WorkDir, "config.yaml"), filepath.Join(cfg.WorkDir, "secrets")),
+	)
+	h.mgr = New(
+		ctx, in, store, links, budgets, backgroundprocess.NewStore(db, store),
+		progressruntime.New(store), bus, scheduler, cfg, registry, applier,
 	)
 	t.Cleanup(h.shutdown)
 	return h
@@ -727,10 +725,9 @@ type mockSession struct {
 }
 
 type mockFactory struct {
-	mu            sync.Mutex
-	sessions      []*mockSession
-	nextSess      *mockSession
-	createErrOnce error
+	mu       sync.Mutex
+	sessions []*mockSession
+	nextSess *mockSession
 }
 
 func (m *mockSession) Chat(
@@ -762,11 +759,6 @@ func (m *mockSession) Chat(
 func (f *mockFactory) client(*config.Config) (llm.Client, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if f.createErrOnce != nil {
-		err := f.createErrOnce
-		f.createErrOnce = nil
-		return nil, err
-	}
 	client := f.nextSess
 	f.nextSess = nil
 	if client == nil {
@@ -802,8 +794,13 @@ const fakeMCPScript = `#!/bin/sh
 LOG="$1"
 PONG="$2"
 RELEASE="$3"
+(
+  parent=$$
+  while kill -0 "$parent" 2>/dev/null; do sleep 0.01; done
+  echo exit >> "$LOG"
+) &
 echo spawn >> "$LOG"
-trap 'echo exit >> "$LOG"' EXIT
+echo $$ > "$LOG.pid"
 while IFS= read -r line; do
   id=$(printf '%s' "$line" | sed -n 's/.*"id":\([0-9]*\).*/\1/p')
   [ -n "$id" ] || continue
@@ -812,14 +809,22 @@ while IFS= read -r line; do
       printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":"2024-11-05","capabilities":{"tools":{}},"serverInfo":{"name":"fakemcp","version":"0.0.1"}}}\n' "$id"
       ;;
     *'"method":"tools/list"'*)
-      printf '{"jsonrpc":"2.0","id":%s,"result":{"tools":[{"name":"ping","description":"Answers pong.","inputSchema":{"type":"object","properties":{}}}]}}\n' "$id"
+      if [ -e "$LOG.extra" ]; then
+        tools='[{"name":"ping","description":"Answers pong.","inputSchema":{"type":"object","properties":{}}},{"name":"ping2","description":"Newly available tool.","inputSchema":{"type":"object","properties":{}}}]'
+      else
+        tools='[{"name":"ping","description":"Answers pong.","inputSchema":{"type":"object","properties":{}}}]'
+      fi
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"tools":%s}}\n' "$id" "$tools"
       ;;
     *'"method":"tools/call"'*)
-      echo call >> "$LOG"
-      if [ -n "$RELEASE" ]; then
-        while [ ! -f "$RELEASE" ]; do sleep 0.05; done
+      if [ -p "$RELEASE" ]; then
+        exec 3<> "$RELEASE"
+        echo call >> "$LOG"
+        read -r released <&3 || exit 1
+      else
+        echo call >> "$LOG"
       fi
-      printf '{"jsonrpc":"2.0","id":%s,"result":{"content":[{"type":"text","text":"%s"}]}}\n' "$id" "$PONG"
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"content":[{"type":"text","text":"%s pid=%s"}]}}\n' "$id" "$PONG" "$$"
       ;;
     *)
       printf '{"jsonrpc":"2.0","id":%s,"error":{"code":-32601,"message":"Method not found"}}\n' "$id"
@@ -830,10 +835,6 @@ done
 
 func mcpPingCall(id string) *llmwire.Response {
 	return callReply(id, "mcp__fake__ping", `{}`)
-}
-
-func mcpToolCall(id, name, params string) *llmwire.Response {
-	return callReply(id, name, params)
 }
 
 func toolResultForCallID(msgs []llmwire.Message, callID string) *llmwire.Message {
@@ -902,15 +903,6 @@ func hasStateEvent(events []controllerapi.SessionNotification, sessionID int64, 
 		}
 	}
 	return false
-}
-
-func requireSignal(t *testing.T, ch <-chan struct{}) {
-	t.Helper()
-	select {
-	case <-ch:
-	case <-time.After(3 * time.Second):
-		t.Fatal("timed out waiting for synchronization point")
-	}
 }
 
 func collectEvents(t *testing.T, ch <-chan controllerapi.SessionNotification) *eventCollector {
@@ -1080,28 +1072,6 @@ func runnerChildCount(runners *runnerSet) int {
 	return runners.children
 }
 
-func transcriptOf(h *harness, sessionID int64) []llmwire.Message {
-	messages, err := h.store.LoadActiveMessages(h.ctx, sessionID)
-	if err != nil {
-		h.t.Fatalf("load transcript for session %d: %v", sessionID, err)
-	}
-	return toDTO(messages)
-}
-
-func requireManagerNotification(
-	t *testing.T,
-	ch <-chan controllerapi.SessionNotification,
-) controllerapi.SessionNotification {
-	t.Helper()
-	select {
-	case notification := <-ch:
-		return notification
-	case <-time.After(time.Second):
-		t.Fatal("manager notification timeout")
-	}
-	return controllerapi.SessionNotification{}
-}
-
 func requireNoManagerNotification(t *testing.T, ch <-chan controllerapi.SessionNotification) {
 	t.Helper()
 	select {
@@ -1143,7 +1113,11 @@ func knownModelClient(
 	}
 }
 
-// Records the provider's actual prompt and transcript instead of inferring them from durable messages.
+type skillHarness struct {
+	*harness
+	recorder *skillRecorder
+}
+
 type skillRecorder struct {
 	mu    sync.Mutex
 	calls []skillCall
@@ -1417,4 +1391,249 @@ func (h *scheduleRestartHarness) close() error {
 		h.closeErr = h.db.Close()
 	})
 	return h.closeErr
+}
+
+func (s scriptTurns) respond(_ string, msgs []llmwire.Message) *llmwire.Response {
+	last := lastUserText(msgs)
+	for _, turn := range s {
+		if !strings.Contains(last, turn.marker) {
+			continue
+		}
+		for _, call := range turn.calls {
+			if toolResultForCallID(msgs, call.id) == nil {
+				return callReply(call.id, call.name, call.params)
+			}
+		}
+		return textReply(turn.answer)
+	}
+	return textReply("unscripted")
+}
+
+func newBrowserMCPServer(t *testing.T) (string, string) {
+	t.Helper()
+	encoded := base64.StdEncoding.EncodeToString(browserScenarioPNG(t))
+	dir := t.TempDir()
+	server := filepath.Join(dir, "browser.sh")
+	log := filepath.Join(dir, "calls.log")
+	require.NoError(
+		t,
+		os.WriteFile(server, []byte(strings.ReplaceAll(browserScenarioScript, "IMAGE_DATA", encoded)), 0o700),
+	)
+	require.NoError(t, os.WriteFile(log, nil, 0o600))
+	return server, log
+}
+
+func browserFrameRespond(capture func([]llmwire.Message)) func(string, []llmwire.Message) *llmwire.Response {
+	return func(_ string, msgs []llmwire.Message) *llmwire.Response {
+		if hasUserContaining(msgs, "GENERAL_CHILD") {
+			return textReply("general complete")
+		}
+		if hasUserContaining(msgs, "BROWSER_CHILD") {
+			if capture != nil {
+				capture(msgs)
+			}
+			for _, step := range []struct{ id, args string }{
+				{"frame-1", `{"task_state":"open page"}`},
+				{"missing", `{}`},
+				{"frame-2", `{"task_state":"first frame showed one item; inspect next"}`},
+				{"server-error", `{"task_state":"second frame showed two items; retry after server failure","fail":true}`},
+				{"frame-3", `{"task_state":"second frame showed two items; finish"}`},
+			} {
+				if toolResultForCallID(msgs, step.id) == nil {
+					return callReply(step.id, "mcp__remote__"+"view", step.args)
+				}
+			}
+			return textReply("browser complete")
+		}
+		if toolResultForCallID(msgs, "general-task") != nil {
+			return textReply("root complete")
+		}
+		if toolResultForCallID(msgs, "browser-task") != nil {
+			return callReply(
+				"general-task",
+				tool.IDTask,
+				`{"prompt":"GENERAL_CHILD inspect tools","description":"inspect tools","subagent_type":"general"}`,
+			)
+		}
+		return callReply(
+			"browser-task",
+			tool.IDTask,
+			`{"prompt":"BROWSER_CHILD inspect example.test and report facts","description":"inspect site","subagent_type":"browser"}`,
+		)
+	}
+}
+
+func parkOnBlockingChild(t *testing.T, h *harness) (int64, subagent.Link) {
+	t.Helper()
+	parentID := h.send("do work then spawn", nil)
+	link := h.waitLink(parentID, taskCallID)
+	require.True(t, link.Blocking)
+	h.waitUntil("parent suspended", func() bool { return !h.mgr.HasActiveLoop(parentID) })
+	return parentID, link
+}
+
+func browserFrameOptions(dbPath, workDir string,
+	respond func(string, []llmwire.Message) *llmwire.Response,
+	observe func(providerRequest),
+) harnessOptions {
+	return harnessOptions{dbPath: dbPath, respond: respond, configure: func(cfg *config.Config) {
+		cfg.WorkDir = workDir
+		cfg.UnifiedConfig = &config.UnifiedConfig{
+			Browser: &config.BrowserConfig{MCPName: "remote"},
+			Models: []config.ModelEntry{
+				{ID: "fake-model", ContextWindow: 200000, InputModalities: []string{"text", "image"}},
+			},
+		}
+	}, observeRequest: observe}
+}
+
+func childRequestAfter(requests []providerRequest, childID int64, after int) (providerRequest, bool) {
+	for _, request := range requests[after:] {
+		if strings.HasSuffix(request.SessionID, ":"+strconv.FormatInt(childID, 10)) {
+			return request, true
+		}
+	}
+	return providerRequest{}, false
+}
+
+func lastToolResultContent(msgs []llmwire.Message, toolName string) string {
+	for _, v := range slices.Backward(msgs) {
+		if v.Role == llmwire.RoleTool && v.ToolName == toolName {
+			return v.Content
+		}
+	}
+	return ""
+}
+
+func backgroundProcessID(messages []llmwire.Message) string {
+	for _, message := range slices.Backward(messages) {
+		if message.Role != llmwire.RoleTool || message.ToolName != "bash" {
+			continue
+		}
+		_, after, found := strings.Cut(message.Content, backgroundProcessPrefix)
+		if !found {
+			return ""
+		}
+		id, _, _ := strings.Cut(after, "\n")
+		return id
+	}
+	return ""
+}
+
+func countSubagentCompletions(messages []llmwire.Message, childID int64) int {
+	needle := "child_id: " + strconv.FormatInt(childID, 10)
+	count := 0
+	for _, message := range messages {
+		if message.Role == llmwire.RoleUser && strings.Contains(message.Content, "<subagent_completion>") &&
+			strings.Contains(message.Content, needle) {
+			count++
+		}
+	}
+	return count
+}
+
+func countMessageContentContaining(messages []llmwire.Message, fragment string) int {
+	count := 0
+	for _, message := range messages {
+		if strings.Contains(message.Content, fragment) {
+			count++
+		}
+	}
+	return count
+}
+
+func countUserCompletions(messages []llmwire.Message, marker string) int {
+	count := 0
+	for _, message := range messages {
+		if message.Role == llmwire.RoleUser && strings.Contains(message.Content, marker) {
+			count++
+		}
+	}
+	return count
+}
+
+func (h *harness) waitParentAnswer(parentID int64) {
+	h.t.Helper()
+	h.waitUntil("parent answer", func() bool {
+		return lastAssistantTextDTO(h.messages(parentID)) == "parent final" && !h.mgr.HasActiveLoop(parentID)
+	})
+}
+
+func (h *harness) processInputs(processID string) int {
+	h.t.Helper()
+	var count int
+	require.NoError(h.t, h.db.QueryRowContext(h.ctx, `SELECT COUNT(*) FROM session_inbox
+		WHERE source = 'process' AND json_extract(attributes, '$.process_id') = ?`, processID).Scan(&count))
+	return count
+}
+
+func newSkillHarness(
+	t *testing.T,
+	skills map[string]string,
+	respond func(string, []llmwire.Message) *llmwire.Response,
+) *skillHarness {
+	t.Helper()
+	rec := &skillRecorder{}
+	h := newHarness(t, harnessOptions{respond: rec.wrap(respond)})
+	for name, body := range skills {
+		dir := filepath.Join(h.workDir(), ".claude", "skills", name)
+		require.NoError(t, os.MkdirAll(dir, 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(body), 0o600))
+	}
+	return &skillHarness{harness: h, recorder: rec}
+}
+
+func skillDoc(name, description, body string, extraFrontmatter ...string) string {
+	var b strings.Builder
+	b.WriteString("---\nname: " + name + "\ndescription: " + description + "\n")
+	for _, line := range extraFrontmatter {
+		b.WriteString(line + "\n")
+	}
+	b.WriteString("---\n" + body + "\n")
+	return b.String()
+}
+
+func readHarnessTraceFile(t *testing.T, path string) harnessTraceFile {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	require.NoError(t, err, "missing recorded trace; regenerate with -update-traces")
+	decoder := json.NewDecoder(strings.NewReader(string(data)))
+	decoder.DisallowUnknownFields()
+	var file harnessTraceFile
+	require.NoError(t, decoder.Decode(&file))
+	require.NotEmpty(t, file.Trace)
+	return file
+}
+
+func lastUserText(msgs []llmwire.Message) string {
+	const nudgePrefix = "You ended your previous response without calling a tool."
+	text := ""
+	for _, m := range msgs {
+		// Confirmation must answer the task again; its host nudge is not a new user registration turn.
+		if m.Role == llmwire.RoleUser && !strings.HasPrefix(m.Content, nudgePrefix) {
+			text = m.Content
+		}
+	}
+	return text
+}
+
+func sleepThenAnswer(answer string) func(string, []llmwire.Message) *llmwire.Response {
+	return func(_ string, messages []llmwire.Message) *llmwire.Response {
+		if hasToolResultFor(messages, tool.IDSleep) {
+			return textReply(answer)
+		}
+		return callReply("scenario-sleep", tool.IDSleep, `{"duration":"1h","reason":"scenario"}`)
+	}
+}
+
+func (r *skillRecorder) assertAllPaired(t *testing.T) {
+	t.Helper()
+	for i, req := range r.snapshot() {
+		assert.NoErrorf(
+			t,
+			llmtest.ValidateToolPairing(req.msgs),
+			"request %d reached the provider with a dangling tool_use",
+			i,
+		)
+	}
 }

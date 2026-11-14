@@ -10,7 +10,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/pilat/coagent/internal/config"
 	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/llmwire"
 	"github.com/pilat/coagent/internal/session"
@@ -28,7 +27,7 @@ func TestManagerBoundControllerRejectsEveryForeignSessionOperation(t *testing.T)
 	require.NoError(t, err)
 	betaRecord, err := mgr.store.CreateSession(ctx, projectID, "model", "", managerAttrs("beta"))
 	require.NoError(t, err)
-	controller := newTestController(mgr, &config.Config{}, nil, nil).ForManager("alpha")
+	controller := newTestController(mgr).ForManager("alpha")
 	sessions, err := controller.ListSessions(ctx)
 	require.NoError(t, err)
 	require.Len(t, sessions, 1)
@@ -67,7 +66,7 @@ func TestCreateSession_PersistsOnlyTheBoundManagerOwner(t *testing.T) {
 	ctx := context.Background()
 	h := newHarness(t, harnessOptions{configure: withTestModels, clientFor: (&mockFactory{}).client})
 	mgr := h.mgr
-	ctrl := newTestController(mgr, &config.Config{}, nil, nil).ForManager("alpha")
+	ctrl := newTestController(mgr).ForManager("alpha")
 	workDir := t.TempDir()
 	ownedID, err := ctrl.CreateSession(ctx, controllerapi.SessionCreateData{
 		WorkDir:    workDir,
@@ -120,9 +119,6 @@ func TestManager_SendToSession_PersistsWhileRunning(t *testing.T) {
 	ch.waitState(id, controllerapi.StateRunning)
 	h.waitUntil("pending input", func() bool {
 		_, err := mgr.store.(*sessionstore.Store).PeekPending(context.Background(), id)
-		if false {
-			return err == nil
-		}
 		return errors.Is(err, sessionstore.ErrNoPendingInput)
 	})
 	h.waitUntil(
@@ -184,27 +180,6 @@ func TestManager_InputReceivedPubSub(t *testing.T) {
 	mgr.Shutdown(t.Context(), 3*time.Second)
 }
 
-func TestManager_SendCreatesNewSessionAfterCompletion(t *testing.T) {
-	h, factory, ch := newMockHarness(t)
-	mgr, s := h.mgr, h.store
-
-	// First session completes quickly
-	factory.nextSess = &mockSession{completeAfter: 50 * time.Millisecond}
-	ctx := context.Background()
-	pid := testProject(t, s, t.TempDir())
-	id1, err := mgr.Send(ctx, pid, "init", "", nil)
-	require.NoError(t, err)
-	ch.waitState(id1, controllerapi.StateIdle)
-
-	// Second Send creates a new session — no resume
-	factory.nextSess = &mockSession{completeAfter: 50 * time.Millisecond}
-	id2, err := mgr.Send(ctx, pid, "wake up message", "", nil)
-	require.NoError(t, err)
-	assert.NotEqual(t, id1, id2, "Send should create new session, not resume")
-	ch.waitState(id2, controllerapi.StateRunning)
-	mgr.Shutdown(t.Context(), 3*time.Second)
-}
-
 func TestManager_SendToSession_AlreadyRunningUsesDurableInbox(t *testing.T) {
 	h := newHarness(t, harnessOptions{configure: withTestModels, clientFor: (&mockFactory{}).client})
 	mgr, s := h.mgr, h.store
@@ -217,9 +192,6 @@ func TestManager_SendToSession_AlreadyRunningUsesDurableInbox(t *testing.T) {
 	ch.waitState(id, controllerapi.StateRunning)
 	h.waitUntil("pending input", func() bool {
 		_, err := mgr.store.(*sessionstore.Store).PeekPending(context.Background(), id)
-		if false {
-			return err == nil
-		}
 		return errors.Is(err, sessionstore.ErrNoPendingInput)
 	})
 
@@ -411,7 +383,7 @@ func TestSendSessionMessageFollowsOwnedReplacement(t *testing.T) {
 	require.NoError(t, err)
 	newID, err := mgr.clear(ctx, lifecycleInput(ctx, t, mgr, old.ID, "/clear"))
 	require.NoError(t, err)
-	controller := newTestController(mgr, &config.Config{}, nil, nil).ForManager("cli")
+	controller := newTestController(mgr).ForManager("cli")
 	err = controller.SendSessionMessage(ctx, controllerapi.SessionMessageData{
 		SessionID: old.ID, Message: "racing clear",
 	})
@@ -424,9 +396,7 @@ func TestSendSessionMessageFollowsOwnedReplacement(t *testing.T) {
 
 // A model that cannot build a client must be reported and leave the existing session resumable.
 func TestSetModelUnknownModelNeverReachesTheRecord(t *testing.T) {
-	respond := func(_ string, _ []llmwire.Message) *llmwire.Response {
-		return textReply("done")
-	}
+	respond := trivialRespond
 	h := newHarness(
 		t, harnessOptions{
 			configure: withKnownModels([]string{"fake-model"}),

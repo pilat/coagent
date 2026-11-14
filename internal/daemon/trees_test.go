@@ -11,7 +11,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/pilat/coagent/internal/backgroundprocess"
-	"github.com/pilat/coagent/internal/config"
 	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/schedule"
 	"github.com/pilat/coagent/internal/sessionevent"
@@ -257,7 +256,7 @@ func TestManager_ClearRejectsAConcurrentLateOwnerClaim(t *testing.T) {
 			err error
 		}{id: id, err: clearErr}
 	}()
-	requireSignal(t, blocking.entered)
+	waitForScenarioSignal(t, blocking.entered, "scenario signal")
 	if mgr.routes.claim.TryLock() {
 		mgr.routes.claim.Unlock()
 		t.Fatal("clear did not hold the manager ownership boundary while creating its replacement")
@@ -268,7 +267,7 @@ func TestManager_ClearRejectsAConcurrentLateOwnerClaim(t *testing.T) {
 		close(claimStarted)
 		claimResult <- mgr.SetAttributes(ctx, rec.ID, managerAttrs("alpha"))
 	}()
-	requireSignal(t, claimStarted)
+	waitForScenarioSignal(t, claimStarted, "scenario signal")
 	close(blocking.release)
 	cleared := <-clearResult
 	require.NoError(t, cleared.err)
@@ -334,14 +333,14 @@ func TestStopOnStoreReadFailureStillPublishesCommittedIdle(t *testing.T) {
 	failing.skip = 2
 	mgr := h.mgr
 	mgr.store = failing
-	controllers := newTestController(mgr, &config.Config{}, nil, nil)
+	controllers := newTestController(mgr)
 	notifications := controllers.ForManager("manager-stop").Subscribe()
 	require.NoError(t, mgr.sendToSession(ctx, record.ID, "/stop"),
 		"the stop itself must succeed: the cleanup ran on the real store")
 
-	stopping := requireManagerNotification(t, notifications)
+	stopping := requireNotification(t, notifications)
 	require.Equal(t, sessionevent.NotifyMessage, stopping.Notification.Type)
-	idle := requireManagerNotification(t, notifications)
+	idle := requireNotification(t, notifications)
 	assert.Equal(t, record.ID, idle.SessionID)
 	assert.Equal(t, sessionevent.NotifyStateChanged, idle.Notification.Type)
 	assert.Equal(t, controllerapi.StateIdle, idle.Notification.Status)

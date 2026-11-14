@@ -151,11 +151,9 @@ func TestTerminalChildDeliversPreviousOutcomeBeforeRearm(t *testing.T) {
 type childStateSessionStore struct {
 	Store
 	record *sessionstore.SessionRecord
-	reads  int
 }
 
 func (s *childStateSessionStore) GetSession(context.Context, int64) (*sessionstore.SessionRecord, error) {
-	s.reads++
 	return s.record, nil
 }
 

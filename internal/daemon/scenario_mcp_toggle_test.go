@@ -6,7 +6,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -57,14 +56,6 @@ const (
 )
 
 var identityPID = regexp.MustCompile(`pid=(\d+)`)
-
-type toggleCall struct{ id, name, params string }
-
-type toggleTurn struct {
-	marker string
-	calls  []toggleCall
-	answer string
-}
 
 type toggleFixture struct {
 	*harness
@@ -174,62 +165,41 @@ func newToggleFixture(t *testing.T, held, gated bool) *toggleFixture {
 
 func (f *toggleFixture) release() { f.released.Do(func() { close(f.proceed) }) }
 
-func newIdentityMCPServer(t *testing.T, pong string, held bool) *fakeMCPServer {
-	t.Helper()
-	fake := newFakeMCPServer(t, pong, held)
-	require.NoError(t, os.WriteFile(fake.path, []byte(identityMCPScript), 0o700))
-	if held {
-		require.NoError(t, syscall.Mkfifo(fake.release, 0o600))
-	}
-	return fake
-}
-
-func (f *toggleFixture) turns() []toggleTurn {
-	return []toggleTurn{
-		{"REGISTER", []toggleCall{
+func (f *toggleFixture) turns() scriptTurns {
+	return scriptTurns{
+		{"REGISTER", []scriptCall{
 			{"add-toggled", tool.IDMCPAdd, f.toggled.addParams("toggled", "project")},
 			{"add-neighbour", tool.IDMCPAdd, f.neighbour.addParams("neighbour", "project")},
 		}, "registered"},
-		{"USE_NEIGHBOUR", []toggleCall{{"before-neighbour", neighbourPing, `{}`}}, "used neighbour"},
-		{"USE_BEFORE", []toggleCall{
+		{"USE_NEIGHBOUR", []scriptCall{{"before-neighbour", neighbourPing, `{}`}}, "used neighbour"},
+		{"USE_BEFORE", []scriptCall{
 			{"before-toggled", toggledPing, `{}`},
 			{"before-neighbour", neighbourPing, `{}`},
 		}, "used before"},
-		{"HOLD_IT", []toggleCall{{"before-toggled", toggledPing, `{}`}}, "held run done"},
-		{"DISABLE_IT", []toggleCall{{"disable-1", tool.IDMCPDisable, toggledParams}}, "disabled"},
-		{"ENABLE_IT", []toggleCall{{"enable-1", tool.IDMCPEnable, toggledParams}}, "enabled"},
-		{"BOUNCE_IT", []toggleCall{
+		{"HOLD_IT", []scriptCall{{"before-toggled", toggledPing, `{}`}}, "held run done"},
+		{"DISABLE_IT", []scriptCall{{"disable-1", tool.IDMCPDisable, toggledParams}}, "disabled"},
+		{"ENABLE_IT", []scriptCall{{"enable-1", tool.IDMCPEnable, toggledParams}}, "enabled"},
+		{"BOUNCE_IT", []scriptCall{
 			{"bounce-off", tool.IDMCPDisable, toggledParams},
 			{"bounce-on", tool.IDMCPEnable, toggledParams},
 		}, "bounced"},
-		{"USE_AFTER", []toggleCall{
+		{"USE_AFTER", []scriptCall{
 			{"after-toggled", toggledPing, `{}`},
 			{"after-neighbour", neighbourPing, `{}`},
 		}, "used after"},
 	}
 }
 
-func (f *toggleFixture) respond(_ string, msgs []llmwire.Message) *llmwire.Response {
-	last := lastUserText(msgs)
-	for _, turn := range f.turns() {
-		if !strings.Contains(last, turn.marker) {
-			continue
+func (f *toggleFixture) respond(system string, msgs []llmwire.Message) *llmwire.Response {
+	response := f.turns().respond(system, msgs)
+	// New input enqueued here precedes the next boundary, so this run must accept it.
+	if strings.Contains(lastUserText(msgs), "HOLD_IT") && len(response.ToolCalls) == 0 && f.gated {
+		f.gate.Do(func() { close(f.answering) })
+		if !closedInTime(f.proceed) {
+			return textReply("held answer gate timed out")
 		}
-		for _, call := range turn.calls {
-			if toolResultForCallID(msgs, call.id) == nil {
-				return callReply(call.id, call.name, call.params)
-			}
-		}
-		// New input enqueued here precedes the next boundary, so this run must accept it.
-		if turn.marker == "HOLD_IT" && f.gated {
-			f.gate.Do(func() { close(f.answering) })
-			if !closedInTime(f.proceed) {
-				return textReply("held answer gate timed out")
-			}
-		}
-		return textReply(turn.answer)
 	}
-	return textReply("unscripted")
+	return response
 }
 
 func (f *toggleFixture) pidOf(t *testing.T, id int64, callID string) int {
@@ -249,10 +219,12 @@ func (f *toggleFixture) holdThroughDisable(t *testing.T, holder int64) {
 	f.waitUntil("the held call reaches the server", func() bool { return f.toggled.count(t, "call") == 1 })
 	f.ask("DISABLE_IT now", "disabled")
 	assert.True(t, f.mgr.HasActiveLoop(holder), "a registry change must not tear down the active call")
-	release, err := os.OpenFile(f.toggled.release, os.O_RDWR, 0o600)
-	require.NoError(t, err)
-	_, err = release.WriteString("release\n")
-	require.NoError(t, err)
-	require.NoError(t, release.Close())
-	require.NoError(t, os.Remove(f.toggled.release))
+	f.toggled.unblock(t)
+}
+
+func newIdentityMCPServer(t *testing.T, pong string, held bool) *fakeMCPServer {
+	t.Helper()
+	fake := newFakeMCPServer(t, pong, held)
+	require.NoError(t, os.WriteFile(fake.path, []byte(identityMCPScript), 0o700))
+	return fake
 }

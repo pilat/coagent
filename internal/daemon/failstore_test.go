@@ -45,10 +45,6 @@ type flakyLinkStore struct {
 	getLinkFailFor  int64
 	getLinkCalls    map[int64]int
 
-	// getLinkFailOnly fails exactly the Nth call, modelling an intermittent read.
-	getLinkFailOnly int
-
-	listPendingFail bool
 	listRunningFail bool
 }
 
@@ -60,23 +56,13 @@ func (f *flakyLinkStore) GetLink(ctx context.Context, childID int64) (*subagent.
 	f.mu.Lock()
 	f.getLinkCalls[childID]++
 	n := f.getLinkCalls[childID]
-	from, forID, onlyNth := f.getLinkFailFrom, f.getLinkFailFor, f.getLinkFailOnly
+	from, forID := f.getLinkFailFrom, f.getLinkFailFor
 	f.mu.Unlock()
 	scoped := forID == 0 || forID == childID
 	if from > 0 && n >= from && scoped {
 		return nil, errLinkRead
 	}
-	if onlyNth > 0 && n == onlyNth && scoped {
-		return nil, errLinkRead
-	}
 	return f.Store.GetLink(ctx, childID)
-}
-
-func (f *flakyLinkStore) ListPendingChildLinks(ctx context.Context, parentID int64) ([]subagent.Link, error) {
-	if f.listPendingFail {
-		return nil, errLinkRead
-	}
-	return f.Store.ListPendingChildLinks(ctx, parentID)
 }
 
 func (f *flakyLinkStore) ListRunningChildLinks(ctx context.Context) ([]subagent.Link, error) {

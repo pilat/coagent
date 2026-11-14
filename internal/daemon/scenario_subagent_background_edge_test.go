@@ -14,35 +14,17 @@ import (
 	"github.com/pilat/coagent/internal/tool"
 )
 
-func (h *harness) waitParentAnswer(parentID int64) {
-	h.t.Helper()
-	h.waitUntil("parent answer", func() bool {
-		return lastAssistantTextDTO(h.messages(parentID)) == "parent final" && !h.mgr.HasActiveLoop(parentID)
-	})
-}
-
 func hasAssistantText(messages []llmwire.Message, text string) bool {
 	return slices.ContainsFunc(messages, func(message llmwire.Message) bool {
 		return message.Role == llmwire.RoleAssistant && message.Content == text
 	})
 }
 
-func (h *harness) processInputs(processID string) int {
-	h.t.Helper()
-	var count int
-	require.NoError(h.t, h.db.QueryRowContext(h.ctx, `SELECT COUNT(*) FROM session_inbox
-		WHERE source = 'process' AND json_extract(attributes, '$.process_id') = ?`, processID).Scan(&count))
-	return count
-}
-
 // Foreground children are never queued, so a resumed one that finds no capacity
 // fails at once and its parent's task call returns instead of hanging.
 func TestHarnessScenario_ForegroundYieldFailsWhenCapacityIsFull(t *testing.T) {
 	script := newBackgroundChildScript(t)
-	h := newHarness(t, harnessOptions{respond: script.respond})
-	installScenarioProcessService(t, h)
-	parentID, err := h.mgr.Send(h.ctx, h.projectID, "research", "fake-model", managerAttrs(scenarioManagerID))
-	require.NoError(t, err)
+	h, parentID := script.start(t)
 	link := h.waitChildYield(parentID)
 
 	held := 0
@@ -66,7 +48,7 @@ func TestHarnessScenario_ForegroundYieldFailsWhenCapacityIsFull(t *testing.T) {
 	assert.Contains(t, failed.Result, "session capacity is full")
 	assert.Contains(t, failed.Result, "waiting for the search", "the child's last answer is kept")
 	assert.Equal(t, 1, h.parentDeliveries(parentID, link.ChildID))
-	assert.Contains(t, subagentLastToolResultContent(h.messages(parentID), tool.IDTask), "could not resume")
+	assert.Contains(t, lastToolResultContent(h.messages(parentID), tool.IDTask), "could not resume")
 	assert.Equal(t, sessionstore.SessionStatusError, h.session(link.ChildID).Status)
 }
 
@@ -74,12 +56,8 @@ func TestHarnessScenario_ForegroundYieldFailsWhenCapacityIsFull(t *testing.T) {
 // runner-exit restart, not the wake, resumes the same activation.
 func TestHarnessScenario_ProcessExitDuringYieldResumesAfterRunnerExit(t *testing.T) {
 	script := newBackgroundChildScript(t)
-	var h *harness
-	script.beforeNudgeReply = func() { script.releaseAndAwaitExit(t, &h) }
-	h = newHarness(t, harnessOptions{respond: script.respond})
-	installScenarioProcessService(t, h)
-	parentID, err := h.mgr.Send(h.ctx, h.projectID, "research", "fake-model", managerAttrs(scenarioManagerID))
-	require.NoError(t, err)
+	script.beforeNudgeReply = func() { script.releaseAndAwaitExit(t) }
+	h, parentID := script.start(t)
 
 	h.waitParentAnswer(parentID)
 	link := h.linkByCall(parentID, taskCallID)
@@ -93,12 +71,8 @@ func TestHarnessScenario_ProcessExitDuringYieldResumesAfterRunnerExit(t *testing
 func TestHarnessScenario_CancelAfterNaturalExitDeliversOneResult(t *testing.T) {
 	script := newBackgroundChildScript(t)
 	script.cancel = true
-	var h *harness
-	script.beforeNudgeReply = func() { script.releaseAndAwaitExit(t, &h) }
-	h = newHarness(t, harnessOptions{respond: script.respond})
-	installScenarioProcessService(t, h)
-	parentID, err := h.mgr.Send(h.ctx, h.projectID, "research", "fake-model", managerAttrs(scenarioManagerID))
-	require.NoError(t, err)
+	script.beforeNudgeReply = func() { script.releaseAndAwaitExit(t) }
+	h, parentID := script.start(t)
 
 	h.waitParentAnswer(parentID)
 	link := h.linkByCall(parentID, taskCallID)
@@ -113,10 +87,7 @@ func TestHarnessScenario_CancelAfterNaturalExitDeliversOneResult(t *testing.T) {
 
 func TestHarnessScenario_StopOverYieldedChildSettlesTheTree(t *testing.T) {
 	script := newBackgroundChildScript(t)
-	h := newHarness(t, harnessOptions{respond: script.respond})
-	installScenarioProcessService(t, h)
-	parentID, err := h.mgr.Send(h.ctx, h.projectID, "research", "fake-model", managerAttrs(scenarioManagerID))
-	require.NoError(t, err)
+	h, parentID := script.start(t)
 	link := h.waitChildYield(parentID)
 
 	require.NoError(t, h.mgr.sendToSession(h.ctx, parentID, "/stop"))
@@ -137,10 +108,7 @@ func TestHarnessScenario_StopOverYieldedChildSettlesTheTree(t *testing.T) {
 
 func TestHarnessScenario_BudgetParkOverYieldedChildKeepsItsProcess(t *testing.T) {
 	script := newBackgroundChildScript(t)
-	h := newHarness(t, harnessOptions{respond: script.respond})
-	installScenarioProcessService(t, h)
-	parentID, err := h.mgr.Send(h.ctx, h.projectID, "research", "fake-model", managerAttrs(scenarioManagerID))
-	require.NoError(t, err)
+	h, parentID := script.start(t)
 	link := h.waitChildYield(parentID)
 
 	unlock, err := h.mgr.lockSessionTree(h.ctx, parentID)

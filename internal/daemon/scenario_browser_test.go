@@ -8,7 +8,6 @@ import (
 	"image/png"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -24,74 +23,23 @@ import (
 )
 
 func TestScenario_BrowserFramesStayStoredAndProjectToLatest(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("POSIX fake MCP server")
-	}
-	imageBytes := browserScenarioPNG(t)
-	encoded := base64.StdEncoding.EncodeToString(imageBytes)
-	dir := t.TempDir()
-	server := filepath.Join(dir, "browser.sh")
-	log := filepath.Join(dir, "calls.log")
-	dbPath := filepath.Join(dir, "session.db")
+	encoded := base64.StdEncoding.EncodeToString(browserScenarioPNG(t))
+	server, log := newBrowserMCPServer(t)
+	dbPath := filepath.Join(filepath.Dir(server), "session.db")
 	workDir := t.TempDir()
-	require.NoError(
-		t,
-		os.WriteFile(server, []byte(strings.ReplaceAll(browserScenarioScript, "IMAGE_DATA", encoded)), 0o700),
-	)
-	require.NoError(t, os.WriteFile(log, nil, 0o600))
 	var mu sync.Mutex
 	var childRequests [][]llmwire.Message
 	var wireRequests []providerRequest
-	respond := func(_ string, msgs []llmwire.Message) *llmwire.Response {
-		if hasUserContaining(msgs, "GENERAL_CHILD") {
-			return textReply("general complete")
-		}
-		if hasUserContaining(msgs, "BROWSER_CHILD") {
-			mu.Lock()
-			childRequests = append(childRequests, append([]llmwire.Message(nil), msgs...))
-			mu.Unlock()
-			for _, step := range []struct{ id, args string }{
-				{"frame-1", `{"task_state":"open page"}`},
-				{"missing", `{}`},
-				{"frame-2", `{"task_state":"first frame showed one item; inspect next"}`},
-				{"server-error", `{"task_state":"second frame showed two items; retry after server failure","fail":true}`},
-				{"frame-3", `{"task_state":"second frame showed two items; finish"}`},
-			} {
-				if toolResultForCallID(msgs, step.id) == nil {
-					return mcpToolCall(step.id, "mcp__remote__"+"view", step.args)
-				}
-			}
-			return textReply("browser complete")
-		}
-		if toolResultForCallID(msgs, "general-task") != nil {
-			return textReply("root complete")
-		}
-		if toolResultForCallID(msgs, "browser-task") != nil {
-			return callReply(
-				"general-task",
-				tool.IDTask,
-				`{"prompt":"GENERAL_CHILD inspect tools","description":"inspect tools","subagent_type":"general"}`,
-			)
-		}
-		return callReply(
-			"browser-task",
-			tool.IDTask,
-			`{"prompt":"BROWSER_CHILD inspect example.test and report facts","description":"inspect site","subagent_type":"browser"}`,
-		)
-	}
-	options := harnessOptions{dbPath: dbPath, respond: respond, configure: func(cfg *config.Config) {
-		cfg.WorkDir = workDir
-		cfg.UnifiedConfig = &config.UnifiedConfig{
-			Browser: &config.BrowserConfig{MCPName: "remote"},
-			Models: []config.ModelEntry{
-				{ID: "fake-model", ContextWindow: 200000, InputModalities: []string{"text", "image"}},
-			},
-		}
-	}, observeRequest: func(request providerRequest) {
+	respond := browserFrameRespond(func(msgs []llmwire.Message) {
+		mu.Lock()
+		childRequests = append(childRequests, append([]llmwire.Message(nil), msgs...))
+		mu.Unlock()
+	})
+	options := browserFrameOptions(dbPath, workDir, respond, func(request providerRequest) {
 		mu.Lock()
 		wireRequests = append(wireRequests, request)
 		mu.Unlock()
-	}}
+	})
 	h := newHarness(t, options)
 	require.NoError(t, h.mgr.mcpStore.Add(h.ctx, &h.projectID, mcpstore.ServerDef{
 		Name: "remote", Command: server, Args: []string{log}, Enabled: true,
@@ -181,91 +129,28 @@ func TestScenario_BrowserFramesStayStoredAndProjectToLatest(t *testing.T) {
 	second.waitUntil("browser follow-up after restart", func() bool {
 		mu.Lock()
 		defer mu.Unlock()
-		for _, request := range wireRequests[len(wires):] {
-			if strings.HasSuffix(request.SessionID, ":"+strconv.FormatInt(childID, 10)) {
-				return true
-			}
-		}
-		return false
+		_, found := childRequestAfter(wireRequests, childID, len(wires))
+		return found
 	})
 	mu.Lock()
-	var restarted providerRequest
-	for _, request := range wireRequests[len(wires):] {
-		if strings.HasSuffix(request.SessionID, ":"+strconv.FormatInt(childID, 10)) {
-			restarted = request
-			break
-		}
-	}
+	restarted, _ := childRequestAfter(wireRequests, childID, len(wires))
 	mu.Unlock()
 	assert.Equal(t, 1, wireImageCount(restarted))
 	assert.Equal(t, 4, wirePlaceholderCount(restarted))
 }
 
 func TestScenario_BrowserFramesProjectAfterBoundServerIsDisabled(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("POSIX fake MCP server")
-	}
-	imageBytes := browserScenarioPNG(t)
-	encoded := base64.StdEncoding.EncodeToString(imageBytes)
-	dir := t.TempDir()
-	server := filepath.Join(dir, "browser.sh")
-	log := filepath.Join(dir, "calls.log")
-	dbPath := filepath.Join(dir, "session.db")
+	server, log := newBrowserMCPServer(t)
+	dbPath := filepath.Join(filepath.Dir(server), "session.db")
 	workDir := t.TempDir()
-	require.NoError(
-		t,
-		os.WriteFile(server, []byte(strings.ReplaceAll(browserScenarioScript, "IMAGE_DATA", encoded)), 0o700),
-	)
-	require.NoError(t, os.WriteFile(log, nil, 0o600))
 	var mu sync.Mutex
 	var wireRequests []providerRequest
-	respond := func(_ string, msgs []llmwire.Message) *llmwire.Response {
-		if hasUserContaining(msgs, "GENERAL_CHILD") {
-			return textReply("general complete")
-		}
-		if hasUserContaining(msgs, "BROWSER_CHILD") {
-			for _, step := range []struct{ id, args string }{
-				{"frame-1", `{"task_state":"open page"}`},
-				{"missing", `{}`},
-				{"frame-2", `{"task_state":"first frame showed one item; inspect next"}`},
-				{"server-error", `{"task_state":"second frame showed two items; retry after server failure","fail":true}`},
-				{"frame-3", `{"task_state":"second frame showed two items; finish"}`},
-			} {
-				if toolResultForCallID(msgs, step.id) == nil {
-					return mcpToolCall(step.id, "mcp__remote__"+"view", step.args)
-				}
-			}
-			return textReply("browser complete")
-		}
-		if toolResultForCallID(msgs, "general-task") != nil {
-			return textReply("root complete")
-		}
-		if toolResultForCallID(msgs, "browser-task") != nil {
-			return callReply(
-				"general-task",
-				tool.IDTask,
-				`{"prompt":"GENERAL_CHILD inspect tools","description":"inspect tools","subagent_type":"general"}`,
-			)
-		}
-		return callReply(
-			"browser-task",
-			tool.IDTask,
-			`{"prompt":"BROWSER_CHILD inspect example.test and report facts","description":"inspect site","subagent_type":"browser"}`,
-		)
-	}
-	options := harnessOptions{dbPath: dbPath, respond: respond, configure: func(cfg *config.Config) {
-		cfg.WorkDir = workDir
-		cfg.UnifiedConfig = &config.UnifiedConfig{
-			Browser: &config.BrowserConfig{MCPName: "remote"},
-			Models: []config.ModelEntry{
-				{ID: "fake-model", ContextWindow: 200000, InputModalities: []string{"text", "image"}},
-			},
-		}
-	}, observeRequest: func(request providerRequest) {
+	respond := browserFrameRespond(nil)
+	options := browserFrameOptions(dbPath, workDir, respond, func(request providerRequest) {
 		mu.Lock()
 		wireRequests = append(wireRequests, request)
 		mu.Unlock()
-	}}
+	})
 	h := newHarness(t, options)
 	require.NoError(t, h.mgr.mcpStore.Add(h.ctx, &h.projectID, mcpstore.ServerDef{
 		Name: "remote", Command: server, Args: []string{log}, Enabled: true,
@@ -290,21 +175,11 @@ func TestScenario_BrowserFramesProjectAfterBoundServerIsDisabled(t *testing.T) {
 	second.waitUntil("browser follow-up after restart", func() bool {
 		mu.Lock()
 		defer mu.Unlock()
-		for _, request := range wireRequests[len(wires):] {
-			if strings.HasSuffix(request.SessionID, ":"+strconv.FormatInt(childID, 10)) {
-				return true
-			}
-		}
-		return false
+		_, found := childRequestAfter(wireRequests, childID, len(wires))
+		return found
 	})
 	mu.Lock()
-	var restarted providerRequest
-	for _, request := range wireRequests[len(wires):] {
-		if strings.HasSuffix(request.SessionID, ":"+strconv.FormatInt(childID, 10)) {
-			restarted = request
-			break
-		}
-	}
+	restarted, _ := childRequestAfter(wireRequests, childID, len(wires))
 	mu.Unlock()
 	assert.Equal(t, 1, wireImageCount(restarted))
 	assert.Equal(t, 4, wirePlaceholderCount(restarted))
@@ -314,18 +189,7 @@ func TestScenario_BrowserFramesProjectAfterBoundServerIsDisabled(t *testing.T) {
 }
 
 func TestScenario_BrowserRunsOnlyFirstActionInMessage(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("POSIX fake MCP server")
-	}
-	dir := t.TempDir()
-	server := filepath.Join(dir, "browser.sh")
-	log := filepath.Join(dir, "calls.log")
-	encoded := base64.StdEncoding.EncodeToString(browserScenarioPNG(t))
-	require.NoError(
-		t,
-		os.WriteFile(server, []byte(strings.ReplaceAll(browserScenarioScript, "IMAGE_DATA", encoded)), 0o700),
-	)
-	require.NoError(t, os.WriteFile(log, nil, 0o600))
+	server, log := newBrowserMCPServer(t)
 	respond := func(_ string, msgs []llmwire.Message) *llmwire.Response {
 		if hasUserContaining(msgs, "BROWSER_DOUBLE") {
 			if toolResultForCallID(msgs, "first-navigation") != nil {
@@ -351,7 +215,6 @@ func TestScenario_BrowserRunsOnlyFirstActionInMessage(t *testing.T) {
 			`{"prompt":"BROWSER_DOUBLE inspect example.test","description":"inspect site","subagent_type":"browser"}`)
 	}
 	h := newHarness(t, harnessOptions{respond: respond, configure: func(cfg *config.Config) {
-		cfg.WorkDir = t.TempDir()
 		cfg.UnifiedConfig = &config.UnifiedConfig{Browser: &config.BrowserConfig{MCPName: "remote"}}
 	}})
 	require.NoError(t, h.mgr.mcpStore.Add(h.ctx, &h.projectID, mcpstore.ServerDef{
@@ -381,7 +244,7 @@ func TestScenario_BrowserUnavailableWithoutBoundServer(t *testing.T) {
 		configure: func(cfg *config.Config) {
 			cfg.UnifiedConfig = &config.UnifiedConfig{Browser: &config.BrowserConfig{MCPName: "remote"}}
 		},
-		respond:        func(_ string, _ []llmwire.Message) *llmwire.Response { return textReply("done") },
+		respond:        trivialRespond,
 		observeRequest: func(request providerRequest) { mu.Lock(); requests = append(requests, request); mu.Unlock() },
 	})
 	id := h.send("hello", nil)
@@ -399,14 +262,7 @@ func TestScenario_BrowserUnavailableWithoutBoundServer(t *testing.T) {
 }
 
 func TestScenario_PlaywrightWithoutBrowserBindingIsOrdinary(t *testing.T) {
-	dir := t.TempDir()
-	server, log := filepath.Join(dir, "browser.sh"), filepath.Join(dir, "calls.log")
-	encoded := base64.StdEncoding.EncodeToString(browserScenarioPNG(t))
-	require.NoError(
-		t,
-		os.WriteFile(server, []byte(strings.ReplaceAll(browserScenarioScript, "IMAGE_DATA", encoded)), 0o700),
-	)
-	require.NoError(t, os.WriteFile(log, nil, 0o600))
+	server, log := newBrowserMCPServer(t)
 	var mu sync.Mutex
 	var requests []providerRequest
 	h := newHarness(t, harnessOptions{
@@ -497,14 +353,7 @@ func browserScenarioPNG(t *testing.T) []byte {
 // The task tool ownerTools builds must pin a browser child to browser.model/effort,
 // whatever model the root asks for and whatever level the root runs at.
 func TestScenario_BrowserChildRunsOnConfiguredModelAndEffort(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("POSIX fake MCP server")
-	}
-	dir := t.TempDir()
-	server := filepath.Join(dir, "browser.sh")
-	log := filepath.Join(dir, "calls.log")
-	require.NoError(t, os.WriteFile(server, []byte(browserScenarioScript), 0o700))
-	require.NoError(t, os.WriteFile(log, nil, 0o600))
+	server, log := newBrowserMCPServer(t)
 	respond := func(_ string, msgs []llmwire.Message) *llmwire.Response {
 		if hasUserContaining(msgs, "BROWSER_CHILD") {
 			return textReply("browser complete")
@@ -521,18 +370,22 @@ func TestScenario_BrowserChildRunsOnConfiguredModelAndEffort(t *testing.T) {
 	efforts := &config.ReasoningSpec{Supported: true, NativeEffort: true, Efforts: []string{"low", "medium", "high"}}
 	h := newHarness(
 		t,
-		harnessOptions{dbPath: filepath.Join(dir, "session.db"), respond: respond, configure: func(cfg *config.Config) {
-			cfg.UnifiedConfig = &config.UnifiedConfig{
-				Browser: &config.BrowserConfig{MCPName: "remote", Model: "cheap", Effort: "low"},
-				Models: []config.ModelEntry{
-					{
-						ID: "fake-model", ContextWindow: 200000, Reasoning: efforts,
-						EffortLevels: []string{"low", "medium", "high"}, DefaultEffort: "high",
+		harnessOptions{
+			dbPath:  filepath.Join(filepath.Dir(server), "session.db"),
+			respond: respond,
+			configure: func(cfg *config.Config) {
+				cfg.UnifiedConfig = &config.UnifiedConfig{
+					Browser: &config.BrowserConfig{MCPName: "remote", Model: "cheap", Effort: "low"},
+					Models: []config.ModelEntry{
+						{
+							ID: "fake-model", ContextWindow: 200000, Reasoning: efforts,
+							EffortLevels: []string{"low", "medium", "high"}, DefaultEffort: "high",
+						},
+						{ID: "cheap", ContextWindow: 200000, Reasoning: efforts, EffortLevels: []string{"low", "high"}},
 					},
-					{ID: "cheap", ContextWindow: 200000, Reasoning: efforts, EffortLevels: []string{"low", "high"}},
-				},
-			}
-		}},
+				}
+			},
+		},
 	)
 	require.NoError(t, h.mgr.mcpStore.Add(h.ctx, &h.projectID, mcpstore.ServerDef{
 		Name: "remote", Command: server, Args: []string{log}, Enabled: true,

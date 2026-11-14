@@ -9,7 +9,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -178,7 +177,7 @@ func TestScenario_ConcurrentAppliesResolveExactlyOnce(t *testing.T) {
 func TestScenario_ConfigApplyRejectionReachesTheSessionInProcess(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "apply.db")
 	configDir := newApplyConfigDir(t)
-	d := newApplyDaemon(t, dbPath, configDir)
+	d := newApplyDaemonWith(t, dbPath, configDir, configEditRespond)
 	d.mgr.applier = configapply.New(failingCommitOps{d.ops})
 	sessionID := startConfigEditSession(t, d, "switch the default model")
 	d.waitUntil("rejection stored", func() bool {
@@ -277,7 +276,7 @@ func TestScenario_ConfigEditBootInvalidCandidateRollsBack(t *testing.T) {
 func TestConfigTool_SuccessWritesAndAnswers(t *testing.T) {
 	h := newConfigHarness(t)
 	result, err := h.tools[tool.IDConfigEdit].Execute(
-		grantedCall(t.Context(), h.sessionID, "c1"), configEditArgs(configHarnessCandidate),
+		grantedCall(t.Context(), h.sessionID, "c1"), configEditArgs(configEditCandidate),
 	)
 	require.NoError(t, err)
 	require.NotNil(t, result)
@@ -302,7 +301,7 @@ func TestConfigTool_GuardViolationsAreImmediateErrors(t *testing.T) {
 	t.Run("missing activation grant", func(t *testing.T) {
 		h.recordCall(t, "c-grant", tool.IDConfigEdit)
 		_, err := h.tools[tool.IDConfigEdit].Execute(
-			tool.WithCallID(context.Background(), "c-grant"), configEditArgs(configHarnessCandidate),
+			tool.WithCallID(context.Background(), "c-grant"), configEditArgs(configEditCandidate),
 		)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "/config")
@@ -322,7 +321,7 @@ func TestConfigTool_GuardViolationsAreImmediateErrors(t *testing.T) {
 
 func TestConfigTool_TwoAppliesInSequence(t *testing.T) {
 	h := newConfigHarness(t)
-	require.NoError(t, h.grantedCall(t, "c1", configHarnessCandidate))
+	require.NoError(t, h.grantedCall(t, "c1", configEditCandidate))
 	h.mgr.applier.RestartIfApplied(h.sessionID)
 	assert.Equal(t, 1, h.restartCount())
 	pending, err := h.mgr.applier.Ops().LoadPending()
@@ -345,7 +344,7 @@ func TestConfigTool_DescriptionsCarryTheContract(t *testing.T) {
 
 func TestConfigTool_RefusesASecondApplyInTheSameTurn(t *testing.T) {
 	h := newConfigHarness(t)
-	require.NoError(t, h.grantedCall(t, "c1", configHarnessCandidate))
+	require.NoError(t, h.grantedCall(t, "c1", configEditCandidate))
 	err := h.grantedCall(t, "c2", toolConfig)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "another config change is already being applied")
@@ -434,32 +433,10 @@ func twoSessionApplyRespond(_ string, msgs []llmwire.Message) *llmwire.Response 
 		return textReply("ready to reconfigure")
 	}
 	if hasUserContaining(msgs, "APPLY_B") {
-		return callReply(applyCallB, tool.IDConfigEdit, `{"document":`+mustQuoteJSON(configEditCandidateB)+`}`)
+		return callReply(applyCallB, tool.IDConfigEdit, `{"document":`+mustQuoteJSON(toolConfig)+`}`)
 	}
-	return callReply(applyCallA, tool.IDConfigEdit, `{"document":`+mustQuoteJSON(configEditCandidateA)+`}`)
+	return callReply(applyCallA, tool.IDConfigEdit, `{"document":`+mustQuoteJSON(configEditCandidate)+`}`)
 }
-
-const configEditCandidateA = `providers:
-    work:
-        driver: anthropic
-        api_key: ${WORK_API_KEY}
-models:
-    - id: claude-opus-5
-      provider: work
-    - id: claude-sonnet-5
-      provider: work
-`
-
-const configEditCandidateB = `providers:
-    work:
-        driver: anthropic
-        api_key: ${WORK_API_KEY}
-models:
-    - id: claude-sonnet-5
-      provider: work
-    - id: claude-opus-5
-      provider: work
-`
 
 func defaultModelInFile(t *testing.T, configDir string) string {
 	t.Helper()
@@ -566,18 +543,6 @@ func newConfigHarness(t *testing.T) *configHarness {
 	h.tools = map[string]tool.Tool{tool.IDConfigEdit: configapply.NewConfigEdit(h.sessionID, mgr.applier)}
 	return h
 }
-
-// Reordering the models makes document replacement visible on disk.
-const configHarnessCandidate = `providers:
-    work:
-        driver: anthropic
-        api_key: ${WORK_API_KEY}
-models:
-    - id: claude-opus-5
-      provider: work
-    - id: claude-sonnet-5
-      provider: work
-`
 
 func grantedCall(ctx context.Context, sessionID int64, callID string) context.Context {
 	ctx = tool.WithCallID(ctx, callID)
@@ -718,20 +683,11 @@ func testConfigDocumentThroughHTTP(t *testing.T, damaged bool) {
 	if damaged {
 		assert.Equal(t, initial, string(actual))
 		assert.Zero(t, d.restartCount())
-		assert.Contains(t, configLastToolResultContent(d.messages(id), tool.IDConfigEdit), "duplicate model id")
+		assert.Contains(t, lastToolResultContent(d.messages(id), tool.IDConfigEdit), "duplicate model id")
 		return
 	}
 	assert.Equal(t, candidate, string(actual))
 	assert.Equal(t, 1, d.restartCount())
-}
-
-func lastToolResultContent(msgs []llmwire.Message, toolName string) string {
-	for _, v := range slices.Backward(msgs) {
-		if v.Role == llmwire.RoleTool && v.ToolName == toolName {
-			return v.Content
-		}
-	}
-	return ""
 }
 
 func TestScenario_ConfigEditFromRoot(t *testing.T) {
@@ -831,13 +787,4 @@ func (p *effortProvider) snapshot() []effortRequest {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return append([]effortRequest(nil), p.requests...)
-}
-
-func configLastToolResultContent(msgs []llmwire.Message, toolName string) string {
-	for _, v := range slices.Backward(msgs) {
-		if v.Role == llmwire.RoleTool && v.ToolName == toolName {
-			return v.Content
-		}
-	}
-	return ""
 }

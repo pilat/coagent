@@ -2,11 +2,8 @@ package daemon
 
 import (
 	"context"
-	"encoding/json"
 	"os"
 	"path/filepath"
-	"runtime"
-	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -23,31 +20,13 @@ import (
 
 // Catalog refresh follows the same live client across activation boundaries.
 func TestScenario_NextMCPStackReusesProcessAndRefreshesTools(t *testing.T) {
-	fake := newShiftingMCPServer(t, "pong from fake")
-	respond := func(_ string, msgs []llmwire.Message) *llmwire.Response {
-		switch last := lastUserText(msgs); {
-		case strings.Contains(last, "AFTER_CRASH"):
-			if toolResultForCallID(msgs, "after-crash") != nil {
-				return textReply("recovered")
-			}
-			return mcpPingCall("after-crash")
-		case strings.Contains(last, "USE_SECOND"):
-			if toolResultForCallID(msgs, "ping2-new") != nil {
-				return textReply("used second")
-			}
-			return mcpToolCall("ping2-new", "mcp__fake__ping2", "{}")
-		case strings.Contains(last, "USE_FIRST"):
-			if toolResultForCallID(msgs, "ping-first") != nil {
-				return textReply("used first")
-			}
-			return mcpPingCall("ping-first")
-		default:
-			if hasToolResultFor(msgs, tool.IDMCPAdd) {
-				return textReply("registered")
-			}
-			return mcpToolCall("add-1", tool.IDMCPAdd, fake.addParams("fake", "project"))
-		}
-	}
+	fake := newFakeMCPServer(t, "pong from fake", false)
+	respond := scriptTurns{
+		{"AFTER_CRASH", []scriptCall{{"after-crash", "mcp__fake__ping", `{}`}}, "recovered"},
+		{"USE_SECOND", []scriptCall{{"ping2-new", "mcp__fake__ping2", `{}`}}, "used second"},
+		{"USE_FIRST", []scriptCall{{"ping-first", "mcp__fake__ping", `{}`}}, "used first"},
+		{"", []scriptCall{{"add-1", tool.IDMCPAdd, fake.addParams("fake", "project")}}, "registered"},
+	}.respond
 	h := newHarness(t, harnessOptions{respond: respond})
 	sessionID := h.ask("register the fake mcp server", "registered")
 	h.reply(sessionID, "USE_FIRST now", "used first")
@@ -82,40 +61,13 @@ func TestScenario_NextMCPStackReusesProcessAndRefreshesTools(t *testing.T) {
 // Disabling a server changes the next stack without interrupting an active call.
 func TestScenario_MCPDisableDoesNotBreakAnInFlightStack(t *testing.T) {
 	fake := newFakeMCPServer(t, "pong from held run", true)
-	respond := func(_ string, msgs []llmwire.Message) *llmwire.Response {
-		switch last := lastUserText(msgs); {
-		case strings.Contains(last, "DISABLE_IT"):
-			if hasToolResultFor(msgs, tool.IDMCPDisable) {
-				return textReply("disabled")
-			}
-
-			return mcpToolCall("disable-1", tool.IDMCPDisable, `{"name":"fake","scope":"project"}`)
-		case strings.Contains(last, "HOLD_IT"):
-			if toolResultForCallID(msgs, "ping-held") != nil {
-				return textReply("held run done")
-			}
-
-			return mcpPingCall("ping-held")
-		case strings.Contains(last, "ENABLE_IT"):
-			if hasToolResultFor(msgs, tool.IDMCPEnable) {
-				return textReply("enabled")
-			}
-
-			return mcpToolCall("enable-1", tool.IDMCPEnable, `{"name":"fake","scope":"project"}`)
-		case strings.Contains(last, "USE_AGAIN"):
-			if toolResultForCallID(msgs, "ping-again") != nil {
-				return textReply("used again")
-			}
-
-			return mcpPingCall("ping-again")
-		default:
-			if hasToolResultFor(msgs, tool.IDMCPAdd) {
-				return textReply("registered")
-			}
-
-			return mcpToolCall("add-1", tool.IDMCPAdd, fake.addParams("fake", "project"))
-		}
-	}
+	respond := scriptTurns{
+		{"DISABLE_IT", []scriptCall{{"disable-1", tool.IDMCPDisable, `{"name":"fake","scope":"project"}`}}, "disabled"},
+		{"HOLD_IT", []scriptCall{{"ping-held", "mcp__fake__ping", `{}`}}, "held run done"},
+		{"ENABLE_IT", []scriptCall{{"enable-1", tool.IDMCPEnable, `{"name":"fake","scope":"project"}`}}, "enabled"},
+		{"USE_AGAIN", []scriptCall{{"ping-again", "mcp__fake__ping", `{}`}}, "used again"},
+		{"", []scriptCall{{"add-1", tool.IDMCPAdd, fake.addParams("fake", "project")}}, "registered"},
+	}.respond
 	h := newHarness(t, harnessOptions{respond: respond})
 	holder := h.ask("register the fake mcp server", "registered")
 
@@ -148,28 +100,11 @@ func TestScenario_MCPDisableDoesNotBreakAnInFlightStack(t *testing.T) {
 // Disabling a server must change the next run's offered tools as well as its registry row.
 func TestScenario_MCPDisableRemovesTheToolFromTheNextRun(t *testing.T) {
 	fake := newFakeMCPServer(t, "pong from fake", false)
-	respond := func(_ string, msgs []llmwire.Message) *llmwire.Response {
-		switch last := lastUserText(msgs); {
-		case strings.Contains(last, "DISABLE_IT"):
-			if hasToolResultFor(msgs, tool.IDMCPDisable) {
-				return textReply("disabled")
-			}
-
-			return mcpToolCall("disable-1", tool.IDMCPDisable, `{"name":"fake","scope":"project"}`)
-		case strings.Contains(last, "USE_IT"):
-			if toolResultForCallID(msgs, "ping-after-disable") != nil {
-				return textReply("tried it")
-			}
-
-			return mcpPingCall("ping-after-disable")
-		default:
-			if hasToolResultFor(msgs, tool.IDMCPAdd) {
-				return textReply("registered")
-			}
-
-			return mcpToolCall("add-1", tool.IDMCPAdd, fake.addParams("fake", "project"))
-		}
-	}
+	respond := scriptTurns{
+		{"DISABLE_IT", []scriptCall{{"disable-1", tool.IDMCPDisable, `{"name":"fake","scope":"project"}`}}, "disabled"},
+		{"USE_IT", []scriptCall{{"ping-after-disable", "mcp__fake__ping", `{}`}}, "tried it"},
+		{"", []scriptCall{{"add-1", tool.IDMCPAdd, fake.addParams("fake", "project")}}, "registered"},
+	}.respond
 	h := newHarness(t, harnessOptions{respond: respond})
 	sessionID := h.send("register the fake mcp server", nil)
 	h.waitUntil("registration lands", func() bool {
@@ -221,32 +156,22 @@ func TestHarnessModel_MCPRegistryProjectionAndStackProtocol(t *testing.T) {
 // An MCP server registered in one run becomes available only in the next stack, which must spawn and call it.
 func TestScenario_MCPAddReachesTheNextRunOnly(t *testing.T) {
 	fake := newFakeMCPServer(t, "pong from fake", false)
-	respond := func(_ string, msgs []llmwire.Message) *llmwire.Response {
-		if hasUserContaining(msgs, "USE_IT") {
-			if toolResultForCallID(msgs, "ping-next-run") != nil {
-				return textReply("used it")
-			}
-			return mcpPingCall("ping-next-run")
-		}
-		if toolResultForCallID(msgs, "ping-same-run") != nil {
-			return textReply("registered")
-		}
-		if hasToolResultFor(msgs, tool.IDMCPAdd) {
-			return mcpPingCall("ping-same-run")
-		}
-		return mcpToolCall("add-1", tool.IDMCPAdd, fake.addParams("fake", "project"))
-	}
+	respond := scriptTurns{
+		{"USE_IT", []scriptCall{{"ping-next-run", "mcp__fake__ping", `{}`}}, "used it"},
+		{
+			"",
+			[]scriptCall{
+				{"add-1", tool.IDMCPAdd, fake.addParams("fake", "project")},
+				{"ping-same-run", "mcp__fake__ping", `{}`},
+			},
+			"registered",
+		},
+	}.respond
 	h := newHarness(t, harnessOptions{respond: respond})
 	sessionID := h.ask("register the fake mcp server", "registered")
 	msgs := h.messages(sessionID)
 	require.NoError(t, llmtest.ValidateToolPairing(msgs))
-	toolOutput := ""
-	for _, v := range slices.Backward(msgs) {
-		if v.Role == llmwire.RoleTool && v.ToolName == tool.IDMCPAdd {
-			toolOutput = v.Content
-			break
-		}
-	}
+	toolOutput := lastToolResultContent(msgs, tool.IDMCPAdd)
 	assert.Contains(t, toolOutput, "next run")
 	assert.Contains(t, toolResultForCallID(msgs, "ping-same-run").Content, "unknown tool",
 		"the run that registered the server must not gain its tools")
@@ -263,21 +188,17 @@ func TestScenario_MCPAddReachesTheNextRunOnly(t *testing.T) {
 func TestScenario_ProjectMCPServerOverridesTheGlobalOfTheSameName(t *testing.T) {
 	global := newFakeMCPServer(t, "pong from global", false)
 	project := newFakeMCPServer(t, "pong from project", false)
-	respond := func(_ string, msgs []llmwire.Message) *llmwire.Response {
-		if hasUserContaining(msgs, "USE_IT") {
-			if toolResultForCallID(msgs, "ping-override") != nil {
-				return textReply("used it")
-			}
-			return mcpPingCall("ping-override")
-		}
-		if toolResultForCallID(msgs, "add-project") != nil {
-			return textReply("registered both")
-		}
-		if toolResultForCallID(msgs, "add-global") != nil {
-			return mcpToolCall("add-project", tool.IDMCPAdd, project.addParams("fake", "project"))
-		}
-		return mcpToolCall("add-global", tool.IDMCPAdd, global.addParams("fake", "global"))
-	}
+	respond := scriptTurns{
+		{"USE_IT", []scriptCall{{"ping-override", "mcp__fake__ping", `{}`}}, "used it"},
+		{
+			"",
+			[]scriptCall{
+				{"add-global", tool.IDMCPAdd, global.addParams("fake", "global")},
+				{"add-project", tool.IDMCPAdd, project.addParams("fake", "project")},
+			},
+			"registered both",
+		},
+	}.respond
 	h := newHarness(t, harnessOptions{respond: respond})
 	sessionID := h.ask("register both scopes", "registered both")
 	h.reply(sessionID, "USE_IT now", "used it")
@@ -316,7 +237,7 @@ func TestScenario_MCPDisablePersistsAcrossDaemonRestart(t *testing.T) {
 }
 
 func TestScenario_MCPRemoveClosesStackProcessBeforeTheNextRun(t *testing.T) {
-	fake := newExitTrackingMCPServer(t, "pong before removal")
+	fake := newFakeMCPServer(t, "pong before removal", false)
 	dbPath := filepath.Join(t.TempDir(), "mcp-remove.db")
 	workDir := t.TempDir()
 	respond := removeScenarioResponder(t, fake)
@@ -333,55 +254,6 @@ func TestScenario_MCPRemoveClosesStackProcessBeforeTheNextRun(t *testing.T) {
 	assert.Contains(t, toolResultForCallID(messages, "ping-after-remove").Content, "unknown tool",
 		"a removed row must be absent from the next stack")
 	assert.Equal(t, spawnsAfterRemove, fake.count(t, "spawn"), "removal must not restart the deleted server")
-}
-
-// shiftingMCPScript logs process exit and changes tools/list when the fixture allows it.
-const shiftingMCPScript = `#!/bin/sh
-LOG="$1"
-PONG="$2"
-(
-  parent=$$
-  while kill -0 "$parent" 2>/dev/null; do sleep 0.01; done
-  echo exit >> "$LOG"
-) &
-echo spawn >> "$LOG"
-echo $$ > "$LOG.pid"
-while IFS= read -r line; do
-  id=$(printf '%s' "$line" | sed -n 's/.*"id":\([0-9]*\).*/\1/p')
-  [ -n "$id" ] || continue
-  case "$line" in
-    *'"method":"initialize"'*)
-      printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":"2024-11-05","capabilities":{"tools":{}},"serverInfo":{"name":"fakemcp","version":"0.0.1"}}}\n' "$id"
-      ;;
-    *'"method":"tools/list"'*)
-      if [ -e "$LOG.extra" ]; then
-        tools='[{"name":"ping","description":"Answers pong.","inputSchema":{"type":"object","properties":{}}},{"name":"ping2","description":"Newly available tool.","inputSchema":{"type":"object","properties":{}}}]'
-      else
-        tools='[{"name":"ping","description":"Answers pong.","inputSchema":{"type":"object","properties":{}}}]'
-      fi
-      printf '{"jsonrpc":"2.0","id":%s,"result":{"tools":%s}}\n' "$id" "$tools"
-      ;;
-    *'"method":"tools/call"'*)
-      echo call >> "$LOG"
-      printf '{"jsonrpc":"2.0","id":%s,"result":{"content":[{"type":"text","text":"%s"}]}}\n' "$id" "$PONG"
-      ;;
-    *)
-      printf '{"jsonrpc":"2.0","id":%s,"error":{"code":-32601,"message":"Method not found"}}\n' "$id"
-      ;;
-  esac
-done
-`
-
-func lastUserText(msgs []llmwire.Message) string {
-	const nudgePrefix = "You ended your previous response without calling a tool."
-	text := ""
-	for _, m := range msgs {
-		// Confirmation must answer the task again; its host nudge is not a new user registration turn.
-		if m.Role == llmwire.RoleUser && !strings.HasPrefix(m.Content, nudgePrefix) {
-			text = m.Content
-		}
-	}
-	return text
 }
 
 type registryModelCommand string
@@ -406,7 +278,7 @@ type registryModelHarness struct {
 	*harness
 	registry  mcpstore.Store
 	workDir   string
-	fake      *exitTrackingMCPServer
+	fake      *fakeMCPServer
 	service   mcp.Service
 	reference registryReference
 }
@@ -414,7 +286,7 @@ type registryModelHarness struct {
 func newRegistryModelHarness(t *testing.T) *registryModelHarness {
 	t.Helper()
 	h := newHarness(t, harnessOptions{})
-	fake := newExitTrackingMCPServer(t, "pong from model")
+	fake := newFakeMCPServer(t, "pong from model", false)
 	return &registryModelHarness{harness: h, registry: h.mgr.mcpStore, workDir: h.workDir(), fake: fake}
 }
 
@@ -434,7 +306,7 @@ func (h *registryModelHarness) apply(t *testing.T, command registryModelCommand)
 	case registryDisable:
 		require.NoError(t, h.registry.SetEnabled(ctx, &h.projectID, "fake", false))
 		h.reference.enabled = false
-	case registryRelease:
+	case registryRelease, registryRestart:
 		if h.service != nil {
 			h.service.Stop()
 			h.service = nil
@@ -447,12 +319,6 @@ func (h *registryModelHarness) apply(t *testing.T, command registryModelCommand)
 		require.NoError(t, h.registry.Remove(ctx, &h.projectID, "fake"))
 		h.reference.registered = false
 		h.reference.enabled = false
-	case registryRestart:
-		if h.service != nil {
-			h.service.Stop()
-			h.service = nil
-		}
-		h.reference.visible = false
 	default:
 		t.Fatalf("unknown registry model command %q", command)
 	}
@@ -489,163 +355,24 @@ func (h *registryModelHarness) close() {
 	_ = h.db.Close()
 }
 
-func newShiftingMCPServer(t *testing.T, pong string) *fakeMCPServer {
-	t.Helper()
-	if runtime.GOOS == "windows" {
-		t.Skip("the fake MCP server is a POSIX shell script")
-	}
-	dir := t.TempDir()
-	f := &fakeMCPServer{path: filepath.Join(dir, "shiftingmcp.sh"), log: filepath.Join(dir, "events.log"), pong: pong}
-	require.NoError(t, os.WriteFile(f.path, []byte(shiftingMCPScript), 0o700))
-	require.NoError(t, os.WriteFile(f.log, nil, 0o600))
-	return f
-}
-
-const exitTrackingMCPScript = `#!/bin/sh
-LOG="$1"
-PONG="$2"
-(
-  parent=$$
-  while kill -0 "$parent" 2>/dev/null; do sleep 0.01; done
-  echo exit >> "$LOG"
-) &
-echo spawn >> "$LOG"
-while IFS= read -r line; do
-  id=$(printf '%s' "$line" | sed -n 's/.*"id":\([0-9]*\).*/\1/p')
-  [ -n "$id" ] || continue
-  case "$line" in
-    *'"method":"initialize"'*)
-      printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":"2024-11-05","capabilities":{"tools":{}},"serverInfo":{"name":"exit-mcp","version":"0.0.1"}}}\n' "$id"
-      ;;
-    *'"method":"tools/list"'*)
-      printf '{"jsonrpc":"2.0","id":%s,"result":{"tools":[{"name":"ping","description":"Answers pong.","inputSchema":{"type":"object","properties":{}}}]}}\n' "$id"
-      ;;
-    *'"method":"tools/call"'*)
-      printf '{"jsonrpc":"2.0","id":%s,"result":{"content":[{"type":"text","text":"%s"}]}}\n' "$id" "$PONG"
-      ;;
-    *)
-      printf '{"jsonrpc":"2.0","id":%s,"error":{"code":-32601,"message":"Method not found"}}\n' "$id"
-      ;;
-  esac
-done
-`
-
-type exitTrackingMCPServer struct {
-	path string
-	log  string
-	pong string
-}
-
-func newExitTrackingMCPServer(t *testing.T, pong string) *exitTrackingMCPServer {
-	t.Helper()
-	if runtime.GOOS == "windows" {
-		t.Skip("the fake MCP server is a POSIX shell script")
-	}
-	dir := t.TempDir()
-	fake := &exitTrackingMCPServer{
-		path: filepath.Join(dir, "exit-mcp.sh"),
-		log:  filepath.Join(dir, "events.log"),
-		pong: pong,
-	}
-	require.NoError(t, os.WriteFile(fake.path, []byte(exitTrackingMCPScript), 0o700))
-	require.NoError(t, os.WriteFile(fake.log, nil, 0o600))
-	return fake
-}
-
-func (f *exitTrackingMCPServer) args() []string {
-	return []string{f.log, f.pong}
-}
-
-func (f *exitTrackingMCPServer) count(t *testing.T, event string) int {
-	t.Helper()
-	data, err := os.ReadFile(f.log)
-	require.NoError(t, err)
-	return strings.Count(string(data), event+"\n")
-}
-
-func exitTrackingParams(t *testing.T, fake *exitTrackingMCPServer) string {
-	t.Helper()
-	data, err := json.Marshal(fake.args())
-	require.NoError(t, err)
-	return `{"name":"fake","scope":"project","command":"` + fake.path + `","args":` + string(data) + `}`
-}
-
 func disableScenarioResponder(fake *fakeMCPServer) func(string, []llmwire.Message) *llmwire.Response {
-	return func(_ string, messages []llmwire.Message) *llmwire.Response {
-		const nudgePrefix = "You ended your previous response without calling a tool."
-		last := ""
-		for _, m := range messages {
-			// Confirmation must answer the task again; its host nudge is not a new user registration turn.
-			if m.Role == llmwire.RoleUser && !strings.HasPrefix(m.Content, nudgePrefix) {
-				last = m.Content
-			}
-		}
-
-		switch {
-		case strings.Contains(last, "USE_AFTER_RESTART"):
-			if toolResultForCallID(messages, "ping-after-restart") != nil {
-				return textReply("used after restart")
-			}
-			return mcpPingCall("ping-after-restart")
-		case strings.Contains(last, "USE_IT"):
-			if toolResultForCallID(messages, "ping-before-restart") != nil {
-				return textReply("used before restart")
-			}
-			return mcpPingCall("ping-before-restart")
-		case strings.Contains(last, "DISABLE_IT"):
-			if hasToolResultFor(messages, tool.IDMCPDisable) {
-				return textReply("disabled")
-			}
-			return mcpToolCall("disable-1", tool.IDMCPDisable, `{"name":"fake","scope":"project"}`)
-		default:
-			if hasToolResultFor(messages, tool.IDMCPAdd) {
-				return textReply("registered")
-			}
-			return mcpToolCall("add-1", tool.IDMCPAdd, fake.addParams("fake", "project"))
-		}
-	}
+	return scriptTurns{
+		{"USE_AFTER_RESTART", []scriptCall{{"ping-after-restart", "mcp__fake__ping", `{}`}}, "used after restart"},
+		{"USE_IT", []scriptCall{{"ping-before-restart", "mcp__fake__ping", `{}`}}, "used before restart"},
+		{"DISABLE_IT", []scriptCall{{"disable-1", tool.IDMCPDisable, `{"name":"fake","scope":"project"}`}}, "disabled"},
+		{"", []scriptCall{{"add-1", tool.IDMCPAdd, fake.addParams("fake", "project")}}, "registered"},
+	}.respond
 }
 
 func removeScenarioResponder(
 	t *testing.T,
-	fake *exitTrackingMCPServer,
+	fake *fakeMCPServer,
 ) func(string, []llmwire.Message) *llmwire.Response {
 	t.Helper()
-	return func(_ string, messages []llmwire.Message) *llmwire.Response {
-		const nudgePrefix = "You ended your previous response without calling a tool."
-		last := ""
-		for _, m := range messages {
-			// Confirmation must answer the task again; its host nudge is not a new user registration turn.
-			if m.Role == llmwire.RoleUser && !strings.HasPrefix(m.Content, nudgePrefix) {
-				last = m.Content
-			}
-		}
-
-		switch {
-		case strings.Contains(last, "USE_AFTER_REMOVE"):
-			if toolResultForCallID(messages, "ping-after-remove") != nil {
-				return textReply("used after remove")
-			}
-
-			return mcpPingCall("ping-after-remove")
-		case strings.Contains(last, "USE_IT"):
-			if toolResultForCallID(messages, "ping-before-remove") != nil {
-				return textReply("used before remove")
-			}
-
-			return mcpPingCall("ping-before-remove")
-		case strings.Contains(last, "REMOVE_IT"):
-			if hasToolResultFor(messages, tool.IDMCPRemove) {
-				return textReply("removed")
-			}
-
-			return mcpToolCall("remove-1", tool.IDMCPRemove, `{"name":"fake","scope":"project"}`)
-		default:
-			if hasToolResultFor(messages, tool.IDMCPAdd) {
-				return textReply("registered")
-			}
-
-			return mcpToolCall("add-1", tool.IDMCPAdd, exitTrackingParams(t, fake))
-		}
-	}
+	return scriptTurns{
+		{"USE_AFTER_REMOVE", []scriptCall{{"ping-after-remove", "mcp__fake__ping", `{}`}}, "used after remove"},
+		{"USE_IT", []scriptCall{{"ping-before-remove", "mcp__fake__ping", `{}`}}, "used before remove"},
+		{"REMOVE_IT", []scriptCall{{"remove-1", tool.IDMCPRemove, `{"name":"fake","scope":"project"}`}}, "removed"},
+		{"", []scriptCall{{"add-1", tool.IDMCPAdd, fake.addParams("fake", "project")}}, "registered"},
+	}.respond
 }

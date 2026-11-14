@@ -31,7 +31,7 @@ func TestPublishGate_RoutesRootOnlyToOwningManager(t *testing.T) {
 	beta := mgr.bus.SubscribeManager("beta")
 	rec := h.createRoot(managerAttrs("alpha"))
 	mgr.NotifySession(rec, sessionevent.Notification{Type: sessionevent.NotifyMessage, Message: "private"})
-	assert.Equal(t, rec, requireManagerNotification(t, alpha).SessionID)
+	assert.Equal(t, rec, requireNotification(t, alpha).SessionID)
 	requireNoManagerNotification(t, beta)
 }
 
@@ -53,7 +53,7 @@ func TestPublishGate_ClaimingOwnerUpdatesTheWarmRoute(t *testing.T) {
 	requireNoManagerNotification(t, alpha)
 	require.NoError(t, mgr.SetAttributes(context.Background(), rec, managerAttrs("alpha")))
 	mgr.NotifySession(rec, sessionevent.Notification{Type: sessionevent.NotifyMessage, Message: "after"})
-	assert.Equal(t, "after", requireManagerNotification(t, alpha).Notification.Message)
+	assert.Equal(t, "after", requireNotification(t, alpha).Notification.Message)
 }
 
 func TestPublishGate_ConcurrentClaimWinsOverAStaleRouteRead(t *testing.T) {
@@ -74,11 +74,11 @@ func TestPublishGate_ConcurrentClaimWinsOverAStaleRouteRead(t *testing.T) {
 			Type: sessionevent.NotifyMessage, Message: "claimed while lookup was stale",
 		})
 	}()
-	requireSignal(t, stale.read)
+	waitForScenarioSignal(t, stale.read, "scenario signal")
 	require.NoError(t, mgr.SetAttributes(context.Background(), rec, managerAttrs("alpha")))
 	close(stale.release)
-	requireSignal(t, published)
-	assert.Equal(t, "claimed while lookup was stale", requireManagerNotification(t, alpha).Notification.Message)
+	waitForScenarioSignal(t, published, "scenario signal")
+	assert.Equal(t, "claimed while lookup was stale", requireNotification(t, alpha).Notification.Message)
 }
 
 func TestPublishGate_DropsMalformedEventBeforeSessionLookup(t *testing.T) {

@@ -10,7 +10,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/pilat/coagent/internal/config"
 	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/sessionevent"
 )
@@ -109,7 +108,7 @@ func TestTeardownOnStoreFailureDoesNotPublishIdle(t *testing.T) {
 	failing.pending.Store(true)
 	mgr := h.mgr
 	mgr.store = failing
-	controllers := newTestController(mgr, &config.Config{}, nil, nil)
+	controllers := newTestController(mgr)
 	notifications := controllers.ForManager("manager-teardown").Subscribe()
 	mgr.publishIdle(ctx, record.ID)
 	requireNoManagerNotification(t, notifications)
