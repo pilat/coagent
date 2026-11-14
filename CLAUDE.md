@@ -92,10 +92,10 @@ During an implementation session run by a coding agent:
   prescribes; apply the fixes it returns.
 - After all tasks: delegate `make lint` to a subagent (same model) and apply its
   fixes in that same subagent, not in the session.
-- Then delegate `make ci` (with the `CI=true` special parameter, which is
-  permitted only inside that subagent run) to a subagent (same model); the
-  subagent's job is only to report what to do next — the session decides and
-  performs the fixes.
+- `make ci` never runs locally, not even inside a subagent: it is too heavy for
+  a development machine. Once a PR exists, its `Verify (ubuntu-latest)` job is
+  that gate, for the first push and for later fix-and-push cycles. Never open a
+  PR just to get it.
 
 ## Merge Gate
 
@@ -103,8 +103,33 @@ Nothing merges without a cold review of the final diff: a reviewer with none of
 the authoring context (a fresh same-model subagent or a human). This includes
 CI, dependency, test-only and bot PRs. Grade findings P0 (critical), P1
 (behavior, security or data-integrity failure) or P2 (smaller concrete defect);
-nits don't block. Confirm each finding in code, fix every confirmed P0–P2, and
-re-review whatever changed after the review. A green CI run does not replace it.
+nits don't block. A finding whose only trigger is an unlikely precondition (see
+Proportionate Robustness) is a noted limitation, not a P0–P2, unless it is
+observed, cheap to fix or irreversible in damage.
+Confirm each finding in code, fix every confirmed P0–P2, and re-review whatever
+changed after the review. A green CI run does not replace it.
+
+## Proportionate Robustness
+
+Do not build machinery for failures that need an unlikely precondition: a
+non-crash storage error at one exact step, a sub-second race window, a crash
+between two adjacent writes, a provider or OS misbehaving in a never-observed
+way. Such machinery costs more in codebase complexity than the failures cost.
+Add no lock, flag, callback, durable state, retry/replay path, settlement pass,
+ADR or scenario test for it; note it in one line (the review report, or the
+PR's "Architecture and security" section) and move on. Where `docs/testing.md`
+asks for race, crash or reordering coverage, this rule sets the scope: cover
+restart and the orderings ordinary use produces, not every window between two
+adjacent writes.
+
+This is not licence for sloppiness. The normal path and ordinary failures
+(restart, `/stop`, a tool error, a provider 4xx/5xx, bad model output, user input
+at any moment) stay correct and tested, and no existing guarantee or test is
+weakened or removed under this rule. Promote a hypothetical case to real work
+once it is observed, cheap to fix (a few lines, no new state or protocol), or
+irreversible in damage (data loss, a destructive action repeated on the user's
+machine, a security boundary). This bar fits the project's current stage and
+will tighten later.
 
 ## Testing Strategy
 
