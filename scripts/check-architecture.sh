@@ -33,7 +33,7 @@ for heading in \
 	"### Pending external calls: producer ledger and exact result" \
 	"### Subagent creation and completion" \
 	"### Schedule delivery identity" \
-	"### Configuration restart verdict" \
+	"### Configuration apply and boot rollback" \
 	"### Recovery and root-only publication" \
 	"## Security and Trust Boundaries" \
 	"### Credential boundary" \

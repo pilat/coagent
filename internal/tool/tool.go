@@ -39,9 +39,8 @@ type FrameAvailability interface { //nolint:iface // Its implementation and cons
 // externalCallTools suspend the loop awaiting an outcome produced outside it.
 // Never re-executed, never stubbed by repair; only an injection resolves one.
 var externalCallTools = map[string]bool{
-	IDSleep:      true,
-	IDTask:       true,
-	IDConfigEdit: true,
+	IDSleep: true,
+	IDTask:  true,
 }
 
 // IsExternalCall reports whether a tool's pending call waits on the outside
@@ -98,8 +97,7 @@ type SkillLoader interface { //nolint:iface // Declared by builtin, consulted by
 }
 
 // ActivationDeclarer marks mutations that require an exact user command turn.
-// The declaration advertises routing only; execution must revalidate the
-// durable grant carried by the tool context.
+// Execution must revalidate the grant carried by the tool context.
 type ActivationDeclarer interface {
 	Tool
 	ActivationCommands() []string

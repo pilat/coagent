@@ -12,14 +12,12 @@ type Outcome struct {
 	// RolledBack means the config on disk is now the backup again and the caller
 	// must re-run its startup validation against it.
 	RolledBack bool
-	// Verdict is what to deliver into the waiting session.
+	// Verdict explains whether boot accepted, rolled back, or never saw the write.
 	Verdict Verdict
 }
 
-// ResolvePending decides what a boot makes of a marker. bootErr covers the whole
-// startup validation, since enrichment is what pre-write checks cannot see. The
-// marker survives: only the caller knows whether the verdict was delivered, and
-// a marker cleared before that leaves the waiting session unanswerable.
+// ResolvePending checks boot validation and restores the backup when it fails.
+// The caller clears the marker after recording any rollback notice.
 func (s *svc) ResolvePending(p Pending, bootErr error) (Outcome, error) {
 	out := Outcome{Pending: p}
 

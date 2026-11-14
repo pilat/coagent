@@ -55,7 +55,7 @@ func assertSchemaGolden(t *testing.T, db *sql.DB, name string) {
 	want, err := os.ReadFile(filepath.Join("testdata", name))
 	require.NoError(t, err)
 	assert.Equal(t, string(want), normalizedSchema(t, db))
-	assert.Equal(t, []string{"47", "48", "49", "50"}, stringColumn(t, db,
+	assert.Equal(t, []string{"47", "48", "49", "50", "51"}, stringColumn(t, db,
 		`SELECT CAST(version_id AS TEXT) FROM goose_db_version
 		WHERE version_id > 46 AND is_applied = 1 ORDER BY id`))
 }

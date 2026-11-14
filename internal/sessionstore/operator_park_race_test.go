@@ -18,46 +18,28 @@ func TestOperatorProtocolModel_UserInputRacesPark(t *testing.T) {
 
 	ctx := context.Background()
 
-	armFired := func(t *testing.T, prepareClear bool) (*Store, int64, *budget.Record, *ToolActivation) {
+	armFired := func(t *testing.T) (*Store, int64, *budget.Record) {
 		t.Helper()
 
 		store, _, projectID := newTestStore(t) //nolint:contextcheck // test helper owns its own bootstrap context
 		root, err := store.CreateSession(ctx, projectID, "priced", "", map[string]any{"manager_id": "telegram-test"})
 		require.NoError(t, err)
-		input, err := enqueueInput(ctx, store, root.ID, InputSourceUser, "/budget")
-		require.NoError(t, err)
-		_, _, err = acceptActivation(ctx, store, input.ID, "/budget\n\nactivate",
-			ActivationDraft{ToolID: "set_budget", Command: "/budget"})
-		require.NoError(t, err)
 		limit := 1.0
 		_, err = store.Arm(ctx, budget.Mutation{
-			RootSessionID: root.ID, InputID: input.ID, ToolID: "set_budget", Command: "/budget",
-			ToolCallID: "arm", CostLimitUSD: &limit, Receipt: "Budget armed",
+			RootSessionID: root.ID, ToolCallID: "arm", CostLimitUSD: &limit, Receipt: "Budget armed",
 		})
 		require.NoError(t, err)
-
-		var clearGrant *ToolActivation
-		if prepareClear {
-			clearInput, enqueueErr := enqueueInput(ctx, store, root.ID, InputSourceUser, "/budget clear")
-			require.NoError(t, enqueueErr)
-			_, clearGrant, enqueueErr = acceptActivation(ctx, store,
-				clearInput.ID,
-				"/budget clear\n\nactivate",
-				ActivationDraft{ToolID: "set_budget", Command: "/budget"},
-			)
-			require.NoError(t, enqueueErr)
-		}
 		record, _, err := store.FireBudget(ctx, root.ID, 1, "cost", 1.5, "Budget checkpoint reached (cost).")
 		require.NoError(t, err)
 		require.Equal(t, budget.Fired, record.State)
 
-		return store, root.ID, record, clearGrant
+		return store, root.ID, record
 	}
 
 	t.Run("input wins release while drain has not begun", func(t *testing.T) {
 		t.Parallel()
 
-		store, rootID, _, _ := armFired(t, false)
+		store, rootID, _ := armFired(t)
 
 		_, err := enqueueUser(ctx, store, rootID, "continue")
 		require.NoError(t, err)
@@ -70,7 +52,7 @@ func TestOperatorProtocolModel_UserInputRacesPark(t *testing.T) {
 	t.Run("draining owns the tree and rejects the input", func(t *testing.T) {
 		t.Parallel()
 
-		store, rootID, record, _ := armFired(t, false)
+		store, rootID, record := armFired(t)
 		_, err := store.BeginBudgetDrain(ctx, rootID, record.Generation, record.ParkOwner)
 		require.NoError(t, err)
 
@@ -87,7 +69,7 @@ func TestOperatorProtocolModel_UserInputRacesPark(t *testing.T) {
 	t.Run("parked budget releases on the next user turn", func(t *testing.T) {
 		t.Parallel()
 
-		store, rootID, record, _ := armFired(t, false)
+		store, rootID, record := armFired(t)
 		_, err := store.BeginBudgetDrain(ctx, rootID, record.Generation, record.ParkOwner)
 		require.NoError(t, err)
 		_, err = store.MarkBudgetParked(ctx, rootID, record.Generation, record.ParkOwner)
@@ -105,13 +87,12 @@ func TestOperatorProtocolModel_UserInputRacesPark(t *testing.T) {
 	// still owns: the drain window refuses every external release, /budget included.
 	t.Run("draining budget refuses clear", func(t *testing.T) {
 		t.Parallel()
-		store, rootID, record, grant := armFired(t, true)
+		store, rootID, record := armFired(t)
 		_, err := store.BeginBudgetDrain(ctx, rootID, record.Generation, record.ParkOwner)
 		require.NoError(t, err)
 
 		_, err = store.Clear(ctx, budget.Mutation{
-			RootSessionID: rootID, InputID: grant.InputID, ToolID: "set_budget",
-			Command: "/budget", ToolCallID: "clear-call", Receipt: "Budget cleared",
+			RootSessionID: rootID, ToolCallID: "clear-call", Receipt: "Budget cleared",
 		})
 		require.ErrorIs(t, err, budget.ErrConflict)
 

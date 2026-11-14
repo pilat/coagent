@@ -19,15 +19,13 @@ import (
 	"github.com/pilat/coagent/internal/tool"
 )
 
-// budgetFixture builds a real store plus one root with a pending /budget grant,
-// mirroring how the daemon hands the tool its authority.
+// budgetFixture builds the durable budget state behind a session-owned grant.
 type budgetFixture struct {
 	t      *testing.T
 	db     *sql.DB
 	store  *sessionstore.Store
 	svc    budget.Service
 	rootID int64
-	input  *sessionstore.InboxInput
 	grants int
 }
 
@@ -52,12 +50,12 @@ func newBudgetFixture(ctx context.Context, t *testing.T) *budgetFixture {
 	store := sessionstore.NewStore(db)
 	root, err := store.CreateSession(ctx, projectID, "priced", "", map[string]any{"manager_id": "telegram-test"})
 	require.NoError(t, err)
-	input := fGrant(ctx, t, store, root.ID)
+	fGrant(ctx, t, store, root.ID)
 
-	return &budgetFixture{t: t, db: db, store: store, svc: budget.New(store), rootID: root.ID, input: input}
+	return &budgetFixture{t: t, db: db, store: store, svc: budget.New(store), rootID: root.ID}
 }
 
-// fGrant enqueues one /budget user input and promotes it with a pending grant.
+// fGrant enqueues the user turn whose running session would hold the grant.
 func fGrant(ctx context.Context, t *testing.T, store *sessionstore.Store, rootID int64) *sessionstore.InboxInput {
 	t.Helper()
 
@@ -65,24 +63,6 @@ func fGrant(ctx context.Context, t *testing.T, store *sessionstore.Store, rootID
 		ctx,
 		sessionstore.Input{SessionID: rootID, Source: sessionstore.InputSourceUser, Content: "/budget five dollars"},
 	)
-	require.NoError(t, err)
-	_, err = store.Commit(ctx, sessionstore.Commit{
-		SessionID: rootID,
-		Accept: []sessionstore.Accept{
-			{
-				InputID: input.Input.ID,
-				State:   sessionstore.InputStateAccepted,
-				Content: "/budget five dollars\n\nactivate",
-				LinkRef: -1,
-			},
-		},
-		Activation: &sessionstore.ActivationChange{
-			InputID: input.Input.ID,
-			State:   sessionstore.ActivationPending,
-			ToolID:  budget.ToolID,
-			Command: "/budget",
-		},
-	})
 	require.NoError(t, err)
 
 	return input.Input
@@ -113,20 +93,18 @@ func (f *budgetFixture) checkpointContent(ctx context.Context, generation int64)
 
 func (f *budgetFixture) grant() budget.Grant {
 	return budget.Grant{
-		RootID: f.rootID, InputID: f.input.ID, ToolID: budget.ToolID,
-		Command: "/budget", ToolCallID: "call-budget-1",
+		RootID: f.rootID, ToolCallID: "call-budget-1",
 	}
 }
 
-// newGrant creates a fresh user turn with its own pending grant.
+// newGrant creates a fresh user turn and call identity.
 func (f *budgetFixture) newGrant(ctx context.Context) budget.Grant {
 	f.grants++
 
-	input := fGrant(ctx, f.t, f.store, f.rootID)
+	fGrant(ctx, f.t, f.store, f.rootID)
 
 	return budget.Grant{
-		RootID: f.rootID, InputID: input.ID, ToolID: budget.ToolID,
-		Command: "/budget", ToolCallID: "call-budget-" + strconv.Itoa(f.grants+1),
+		RootID: f.rootID, ToolCallID: "call-budget-" + strconv.Itoa(f.grants+1),
 	}
 }
 
@@ -145,13 +123,6 @@ func TestBudgetServiceSetClearAndRearm(t *testing.T) {
 	assert.Equal(t, budget.Armed, armed.State)
 	assert.Equal(t, int64(1), armed.Generation)
 	assert.Equal(t, "Budget armed: $5.000000 additional persisted cost", receipt)
-
-	// A duplicate arm with the same consumed grant is the crash-replay
-	// contract: the same generation and receipt, no second mutation.
-	replayed, replayReceipt, err := f.set(ctx, f.grant(), &cost, nil)
-	require.NoError(t, err)
-	assert.Equal(t, armed.Generation, replayed.Generation)
-	assert.Equal(t, receipt, replayReceipt)
 
 	rearmed, receipt2, err := f.set(ctx, f.newGrant(ctx), nil, new(2*time.Hour))
 	require.NoError(t, err)
@@ -332,8 +303,7 @@ func TestBudgetToolAuthorizationAndReceipts(t *testing.T) {
 
 	authoredCtx := func(grant budget.Grant) context.Context {
 		return tool.WithActivationGrant(tool.WithCallID(ctx, grant.ToolCallID), tool.ActivationGrant{
-			SessionID: grant.RootID, InputID: grant.InputID, ToolID: grant.ToolID,
-			Command: grant.Command,
+			SessionID: grant.RootID, ToolID: budget.ToolID, Command: "/budget",
 		})
 	}
 
@@ -360,28 +330,23 @@ func TestBudgetToolAuthorizationAndReceipts(t *testing.T) {
 		f2 := newBudgetFixture(ctx, t)
 		f2Tool := toolFor(f2)
 
-		refused := func(t *testing.T, grant budget.Grant) {
+		refused := func(t *testing.T, grant tool.ActivationGrant) {
 			t.Helper()
 
-			_, err := f2Tool.Execute(authoredCtx(grant), mustJSON(t, map[string]any{
+			authored := tool.WithActivationGrant(tool.WithCallID(ctx, "wrong-grant"), grant)
+			_, err := f2Tool.Execute(authored, mustJSON(t, map[string]any{
 				"action": "set", "cost_usd": 1.0,
 			}))
 			require.EqualError(t, err, "This change requires a current user message beginning with /budget.")
 		}
 
 		base := f2.grant()
-
-		wrongTool := base
-		wrongTool.ToolID = "other_tool"
-		refused(t, wrongTool)
-
-		wrongCommand := base
-		wrongCommand.Command = "/budgetx"
-		refused(t, wrongCommand)
+		refused(t, tool.ActivationGrant{SessionID: f2.rootID, ToolID: "other_tool", Command: "/budget"})
+		refused(t, tool.ActivationGrant{SessionID: f2.rootID, ToolID: budget.ToolID, Command: "/budgetx"})
 
 		wrongSessionCtx := tool.WithActivationGrant(tool.WithCallID(ctx, base.ToolCallID),
 			tool.ActivationGrant{
-				SessionID: f2.rootID + 1, InputID: base.InputID, ToolID: budget.ToolID, Command: "/budget",
+				SessionID: f2.rootID + 1, ToolID: budget.ToolID, Command: "/budget",
 			})
 		_, err := f2Tool.Execute(wrongSessionCtx, mustJSON(t, map[string]any{
 			"action": "set", "cost_usd": 1.0,
@@ -447,15 +412,6 @@ func TestBudgetToolAuthorizationAndReceipts(t *testing.T) {
 		}))
 		require.NoError(t, err)
 		assert.Equal(t, []string{"Budget cleared"}, result.DirectMessages)
-
-		// A second matching call in a later turn (new tool_call id) is refused
-		// with the exact contract text.
-		_, err = f2Tool.Execute(tool.WithActivationGrant(tool.WithCallID(ctx, "call-later"),
-			tool.ActivationGrant{
-				SessionID: f2.rootID, InputID: grant2.InputID, ToolID: budget.ToolID,
-				Command: "/budget", ToolCallID: "call-budget-2",
-			}), mustJSON(t, map[string]any{"action": "clear"}))
-		require.EqualError(t, err, "This change requires a current user message beginning with /budget.")
 	})
 
 	t.Run("clear rejects limit fields", func(t *testing.T) {
@@ -501,9 +457,6 @@ func (f *budgetFixture) set(
 		ctx,
 		budget.Mutation{
 			RootSessionID:   grant.RootID,
-			InputID:         grant.InputID,
-			ToolID:          grant.ToolID,
-			Command:         grant.Command,
 			ToolCallID:      grant.ToolCallID,
 			CostLimitUSD:    cost,
 			DurationSeconds: seconds,
@@ -519,9 +472,6 @@ func (f *budgetFixture) clear(ctx context.Context, grant budget.Grant) (*budget.
 		ctx,
 		budget.Mutation{
 			RootSessionID: grant.RootID,
-			InputID:       grant.InputID,
-			ToolID:        grant.ToolID,
-			Command:       grant.Command,
 			ToolCallID:    grant.ToolCallID,
 			Receipt:       receipt,
 		},

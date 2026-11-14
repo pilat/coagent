@@ -1,7 +1,6 @@
 package configops
 
 import (
-	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -16,17 +15,12 @@ import (
 	"github.com/pilat/coagent/internal/logger"
 )
 
-// Pending is what a daemon restarting into a new config must know to explain
-// itself. Written after the backup, before the config — see Commit.
+// Pending identifies the rollback target and the session to notify on failed boot.
 type Pending struct {
-	// SessionID is the session waiting for the verdict. Zero means a bootstrap
-	// op did this: there is nothing to wake, only a rollback to perform.
-	SessionID  int64  `json:"session_id"`
-	ToolCallID string `json:"tool_call_id"`
-	ToolName   string `json:"tool_name"`
-	BakPath    string `json:"bak_path"`
-	NewHash    string `json:"new_config_sha256"`
-	Summary    string `json:"summary"`
+	// SessionID is notified only on rollback; zero means an unattended apply.
+	SessionID int64  `json:"session_id"`
+	BakPath   string `json:"bak_path"`
+	NewHash   string `json:"new_config_sha256"`
 }
 
 // LoadPending reads the marker. A missing marker is nil, not an error: that is
@@ -52,7 +46,7 @@ func (s *svc) LoadPending() (*Pending, error) {
 }
 
 // ClearPending removes the marker p came from. A marker that no longer matches
-// belongs to a newer apply with its own waiting call, so it is left alone.
+// belongs to a newer apply, so it is left alone.
 func (s *svc) ClearPending(p Pending) error {
 	current, err := os.ReadFile(s.markerPath())
 	if errors.Is(err, os.ErrNotExist) {
@@ -63,14 +57,14 @@ func (s *svc) ClearPending(p Pending) error {
 		return fmt.Errorf("read pending-apply marker: %w", err)
 	}
 
-	want, err := json.Marshal(p)
-	if err != nil {
-		return fmt.Errorf("encode pending-apply marker: %w", err)
+	var decoded Pending
+	if err := json.Unmarshal(current, &decoded); err != nil {
+		return fmt.Errorf("parse pending-apply marker: %w", err)
 	}
 
-	if !bytes.Equal(bytes.TrimSpace(current), bytes.TrimSpace(want)) {
+	if decoded != p {
 		logger.Named("configops").Warn("pending_apply_marker_superseded",
-			zap.Int64("session_id", p.SessionID), zap.String("tool_call_id", p.ToolCallID))
+			zap.Int64("session_id", p.SessionID))
 
 		return nil
 	}

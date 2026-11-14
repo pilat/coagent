@@ -369,14 +369,15 @@ _Avoid_: iteration budget, billing limit, permanent ceiling.
 **human input**:
 Every session input with `source = 'user'`. Model-bound human input to a root
 can release a fired budget; a matching leading command creates its exact
-durable tool activation grant.
+tool activation grant.
 _Avoid_: real user message (authority follows the source field).
 
 **tool activation grant**:
-Durable one-turn authority created only by a manager-owned **human input** whose
-leading command matches a tool's declared activation command. It is bound to
-the exact input/session/tool/command and is consumed only by the first valid
-matching mutation; prompt text is never authority.
+One-turn authority held by the running session, created only by a manager-owned
+**human input** whose leading command matches a tool's declared activation
+command. It is bound to that input, session, tool and command; spent once the first
+matching mutation executes; gone when the run ends or the daemon restarts.
+Prompt text is never authority.
 _Avoid_: command text authorization, hidden tool.
 
 **suspend** (`ErrSuspend`):
@@ -434,7 +435,7 @@ parent-delivery state. A stopped link preserves the child session for explicit
 follow-up without making startup resume it.
 
 **pending external call**:
-A tool call whose outcome comes from outside the loop — a sleep timer, a subagent or a config apply across a restart. The loop never re-executes one and never advances past it; transcript repair never stubs one. Exact call-result inbox rows, producer ledgers and the config-apply marker establish ownership; only that producer, stop or the boot orphan sweep resolves it.
+A tool call whose outcome comes from outside the loop — a sleep timer or a subagent. The loop never re-executes one and never advances past it; transcript repair never stubs one. Exact call-result inbox rows and producer ledgers establish ownership; only that producer, stop or the boot orphan sweep resolves it.
 _Avoid_: suspended call, blocked tool.
 
 **interrupted in-loop call**:
@@ -444,13 +445,13 @@ _Avoid_: orphaned call (the orphaned-call pass covers external calls only), re-e
 **stop boundary**:
 The durable `/stop` transition for an active root tree. It fences producers,
 cancels and joins runners, settles active unresolved calls, then marks the tree
-stopped. The daemon owns the tree fence, transcript and activation settlement,
+stopped. The daemon owns the tree fence and transcript settlement,
 then producer cancellation and the terminal manager output. Later root
 input and explicit child follow-up are new work; neither replays pre-stop calls.
 _Avoid_: cancellation alone, pause.
 
 **pending apply**:
-A config change that has been written and is waiting for the restart to confirm it. Its marker (`~/.coagent/pending-apply.json`) carries the session to answer, the backup to restore, and the hash of the config that was about to land — which is what lets the next boot tell "the write never happened" from "the write landed and something else broke".
+A config change that has been written and is waiting for the restart to confirm it. Its marker (`~/.coagent/pending-apply.json`) carries the session to notify on rollback, the backup to restore, and the hash of the config that was about to land — which is what lets the next boot tell "the write never happened" from "the write landed and something else broke".
 _Avoid_: transaction, staged config (that is the pre-write `Staged`).
 
 ## Memory & persistence

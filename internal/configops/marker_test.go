@@ -1,6 +1,7 @@
 package configops
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -37,7 +38,7 @@ models:
     - id: claude-sonnet-5
       provider: work
 `, Pending{
-		SessionID: 42, ToolCallID: "call-1", ToolName: "config_edit",
+		SessionID: 42,
 	})
 
 	p, err := f.svc.LoadPending()
@@ -45,10 +46,6 @@ models:
 	require.NotNil(t, p)
 
 	assert.Equal(t, int64(42), p.SessionID)
-	assert.Equal(t, "call-1", p.ToolCallID)
-	assert.Equal(t, ReplaceSummary, p.Summary)
-	assert.Contains(t, p.Summary, "ENTIRE configuration", "the applied receipt restates whole-document semantics")
-	assert.Contains(t, p.Summary, "was deleted")
 
 	// The backup names the file that was live, and the hash the one that landed.
 	require.NotEmpty(t, p.BakPath)
@@ -63,7 +60,7 @@ models:
 
 func TestResolvePending_AppliedWhenTheBootSucceeds(t *testing.T) {
 	f := newFixture(t, baseConfig, baseSecrets)
-	f.commit(t, singleModelDocument, Pending{SessionID: 7, ToolCallID: "c"})
+	f.commit(t, singleModelDocument, Pending{SessionID: 7})
 
 	p, err := f.svc.LoadPending()
 	require.NoError(t, err)
@@ -75,7 +72,7 @@ func TestResolvePending_AppliedWhenTheBootSucceeds(t *testing.T) {
 	assert.False(t, out.RolledBack)
 	assert.Equal(t, int64(7), out.Pending.SessionID)
 
-	// The waiting session has not been told yet, so the marker is still owed.
+	// Boot owns clearing after resolution, including successful starts.
 	assert.FileExists(t, markerFile(f))
 	require.NoError(t, f.svc.ClearPending(*p))
 	assert.NoFileExists(t, markerFile(f))
@@ -85,7 +82,7 @@ func TestResolvePending_AppliedWhenTheBootSucceeds(t *testing.T) {
 // catalog enrichment, most of all.
 func TestResolvePending_RollsBackWhenTheBootFails(t *testing.T) {
 	f := newFixture(t, baseConfig, baseSecrets)
-	f.commit(t, singleModelDocument, Pending{SessionID: 7, ToolCallID: "c"})
+	f.commit(t, singleModelDocument, Pending{SessionID: 7})
 
 	p, err := f.svc.LoadPending()
 	require.NoError(t, err)
@@ -99,7 +96,7 @@ func TestResolvePending_RollsBackWhenTheBootFails(t *testing.T) {
 	assert.Contains(t, out.Verdict.Reason(), "not in the anthropic catalog")
 
 	assert.Equal(t, baseConfig, f.configBytes(t), "the daemon boots on the config that worked")
-	assert.FileExists(t, markerFile(f), "a rejection still has a session waiting for it")
+	assert.FileExists(t, markerFile(f), "ResolvePending leaves the marker for the caller to clear")
 }
 
 // A crash between the marker and the write leaves a config the marker's hash does
@@ -149,24 +146,34 @@ func TestLoadPending_AbsentMarkerIsNotAnError(t *testing.T) {
 	assert.Nil(t, p, "no marker is the normal boot")
 }
 
-// Clearing acknowledges one specific verdict. A marker written after it belongs to
-// another waiting call, and deleting that one would strand it.
+// Clearing an older resolution must not disarm a newer apply's rollback.
 func TestClearPending_OnlyRemovesTheMarkerItResolved(t *testing.T) {
 	f := newFixture(t, baseConfig, baseSecrets)
-	f.commit(t, singleModelDocument, Pending{SessionID: 1, ToolCallID: "c1"})
+	f.commit(t, singleModelDocument, Pending{SessionID: 1})
 
 	first, err := f.svc.LoadPending()
 	require.NoError(t, err)
 	require.NotNil(t, first)
 
-	f.commit(t, twoModelDocument, Pending{SessionID: 2, ToolCallID: "c2"})
+	f.commit(t, twoModelDocument, Pending{SessionID: 2})
 
 	require.NoError(t, f.svc.ClearPending(*first))
 
 	current, err := f.svc.LoadPending()
 	require.NoError(t, err)
-	require.NotNil(t, current, "the newer apply still owes its own session a verdict")
+	require.NotNil(t, current, "the newer apply retains its rollback marker")
 	assert.Equal(t, int64(2), current.SessionID)
+	wrongHash := *current
+	wrongHash.NewHash = "different-hash"
+	require.NoError(t, f.svc.ClearPending(wrongHash))
+	assert.FileExists(t, markerFile(f))
+
+	data, err := json.Marshal(map[string]any{
+		"session_id": current.SessionID, "bak_path": current.BakPath, "new_config_sha256": current.NewHash,
+		"tool_call_id": "old-call", "tool_name": "config_edit", "summary": "replace configuration",
+	})
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(markerFile(f), data, 0o600))
 
 	require.NoError(t, f.svc.ClearPending(*current))
 	assert.NoFileExists(t, markerFile(f))

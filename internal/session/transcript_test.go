@@ -76,27 +76,27 @@ func TestHasPendingExternalCall(t *testing.T) {
 	}{
 		{
 			name:   "staged and unanswered",
-			staged: map[string]string{"c1": tool.IDConfigEdit},
-			msgs:   []llmwire.Message{asst("", call("c1", tool.IDConfigEdit))},
+			staged: map[string]string{"c1": tool.IDTask},
+			msgs:   []llmwire.Message{asst("", call("c1", tool.IDTask))},
 			want:   true,
 		},
 		{
 			name:   "staged and answered",
-			staged: map[string]string{"c1": tool.IDConfigEdit},
-			msgs:   []llmwire.Message{asst("", call("c1", tool.IDConfigEdit)), toolRes("c1")},
+			staged: map[string]string{"c1": tool.IDTask},
+			msgs:   []llmwire.Message{asst("", call("c1", tool.IDTask)), toolRes("c1")},
 			want:   false,
 		},
 		{
 			name:   "nothing staged",
 			staged: nil,
-			msgs:   []llmwire.Message{asst("", call("c1", tool.IDConfigEdit))},
+			msgs:   []llmwire.Message{asst("", call("c1", tool.IDTask))},
 			want:   false,
 		},
 		{
 			name:   "staged in a superseded turn",
-			staged: map[string]string{"c1": tool.IDConfigEdit},
+			staged: map[string]string{"c1": tool.IDTask},
 			msgs: []llmwire.Message{
-				asst("", call("c1", tool.IDConfigEdit)),
+				asst("", call("c1", tool.IDTask)),
 				toolRes("c1"),
 				usr("next"),
 				asst("", call("c2", "read")),
@@ -131,18 +131,13 @@ func TestPendingExternalCallIDs(t *testing.T) {
 			want: []string{"c1"},
 		},
 		{
-			name: "a config call is protected by name",
-			msgs: []llmwire.Message{asst("", call("c1", tool.IDConfigEdit))},
-			want: []string{"c1"},
-		},
-		{
 			name: "an ordinary call is not",
 			msgs: []llmwire.Message{asst("", call("c1", "read"))},
 			want: nil,
 		},
 		{
 			name: "protection survives a trailing user message",
-			msgs: []llmwire.Message{asst("", call("c1", tool.IDConfigEdit)), usr("hurry up")},
+			msgs: []llmwire.Message{asst("", call("c1", tool.IDTask)), usr("hurry up")},
 			want: []string{"c1"},
 		},
 		{
@@ -182,17 +177,16 @@ func TestPendingExternalCallIDs(t *testing.T) {
 }
 
 // Repair stubs dangling calls so the provider never sees an unanswered tool_use.
-// A pending external call is the one thing it must leave alone: the verdict needs
-// that tool_use still open to land on.
+// A pending external call stays open for its producer result.
 func TestRepair_LeavesAPendingExternalCallAlone(t *testing.T) {
 	msgs := []llmwire.Message{
-		usr("replace the config"),
-		asst("", call("c1", tool.IDConfigEdit)),
+		usr("start the child task"),
+		asst("", call("c1", tool.IDTask)),
 		usr("hurry up"),
 	}
 
 	agent := newTestAgent()
-	agent.stagedCalls = map[string]string{"c1": tool.IDConfigEdit}
+	agent.stagedCalls = map[string]string{"c1": tool.IDTask}
 	setTestMessages(agent, msgs)
 
 	repaired := repairTranscript(msgs, agent.pendingExternalCallIDs())
@@ -531,13 +525,13 @@ func TestUnresolvedStoredExternalCalls(t *testing.T) {
 	}{
 		{
 			name: "an unresolved external call is pending",
-			msgs: []*transcript.Message{storedAssistant(`[{"id":"c1","name":"config_edit"}]`)},
-			want: []PendingToolCall{{ID: "c1", Name: tool.IDConfigEdit}},
+			msgs: []*transcript.Message{storedAssistant(`[{"id":"c1","name":"task"}]`)},
+			want: []PendingToolCall{{ID: "c1", Name: tool.IDTask}},
 		},
 		{
 			name: "an answered call is not",
 			msgs: []*transcript.Message{
-				storedAssistant(`[{"id":"c1","name":"config_edit"}]`),
+				storedAssistant(`[{"id":"c1","name":"task"}]`),
 				storedToolResult("c1"),
 			},
 		},

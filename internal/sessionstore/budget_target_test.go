@@ -10,7 +10,7 @@ import (
 	"github.com/pilat/coagent/internal/budget"
 )
 
-func TestBudgetStore_TargetedGrantAndReceiptReplay(t *testing.T) {
+func TestBudgetStore_TargetedMutationDeliversReceiptToCaller(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
 	store, db, project := newTestStore(t)
@@ -32,13 +32,6 @@ func TestBudgetStore_TargetedGrantAndReceiptReplay(t *testing.T) {
 		assert.Equal(t, target.ID, record.RootSessionID)
 		assert.InDelta(t, 2, record.BaselineCostUSD, 1e-9)
 		assert.Equal(t, []int64{target.ID}, store.TakeWoken())
-		activation, loadErr := store.CurrentActivation(ctx, caller.ID)
-		require.NoError(t, loadErr)
-		assert.Equal(t, ActivationConsumed, activation.State)
-		assert.Equal(t, action, activation.ToolCallID)
-		replayed, replayErr := mutate(ctx, mutation)
-		require.NoError(t, replayErr)
-		assert.Equal(t, record, replayed)
 		var callerReceipts, targetReceipts int
 		require.NoError(t, db.QueryRowContext(ctx, `SELECT COUNT(*) FROM session_outbox
 			WHERE session_id = ? AND source_key = ?`, caller.ID, "tool:"+action+":direct:0").Scan(&callerReceipts))
@@ -46,7 +39,7 @@ func TestBudgetStore_TargetedGrantAndReceiptReplay(t *testing.T) {
 			WHERE session_id = ? AND source_key = ?`, target.ID, "tool:"+action+":direct:0").Scan(&targetReceipts))
 		assert.Equal(t, 1, callerReceipts)
 		assert.Zero(t, targetReceipts)
-		_, loadErr = store.Get(ctx, caller.ID)
+		_, loadErr := store.Get(ctx, caller.ID)
 		require.ErrorIs(t, loadErr, budget.ErrNotFound)
 	}
 }
@@ -96,8 +89,6 @@ func TestBudgetStore_ArmProtectsParkingAndAllowsReleasedPhases(t *testing.T) {
 				after, loadErr := store.Get(ctx, target.ID)
 				require.NoError(t, loadErr)
 				assert.Equal(t, before, after)
-				_, loadErr = store.PendingActivation(ctx, caller.ID)
-				require.NoError(t, loadErr, "a refusal leaves the grant available")
 				return
 			}
 			require.NoError(t, armErr)
@@ -121,57 +112,13 @@ func TestBudgetStore_RejectsNegativeGrantSession(t *testing.T) {
 	require.ErrorIs(t, err, budget.ErrConflict)
 }
 
-func TestBudgetStore_RejectsMissingInputOrCommandWithoutChanges(t *testing.T) {
-	for _, missing := range []string{"zero input", "negative input", "empty command"} {
-		t.Run(missing, func(t *testing.T) {
-			t.Parallel()
-			store, db, project := newTestStore(t)
-			root := chatTestRoot(t, store, project, "owner")
-			valid := targetedBudgetMutation(t, store, root.ID, root.ID, "arm")
-			before, err := store.Arm(t.Context(), valid)
-			require.NoError(t, err)
-			mutation := targetedBudgetMutation(t, store, root.ID, root.ID, "refused")
-			inputID := mutation.InputID
-			switch missing {
-			case "zero input":
-				mutation.InputID = 0
-			case "negative input":
-				mutation.InputID = -1
-			case "empty command":
-				mutation.Command = ""
-			}
-			for _, action := range []string{"arm", "clear"} {
-				mutate := store.Arm
-				if action == "clear" {
-					mutation.DurationSeconds = nil
-					mutate = store.Clear
-				}
-				_, err := mutate(t.Context(), mutation)
-				require.ErrorIs(t, err, budget.ErrConflict)
-				after, err := store.Get(t.Context(), root.ID)
-				require.NoError(t, err)
-				assert.Equal(t, before, after)
-				grant, err := store.PendingActivation(t.Context(), root.ID)
-				require.NoError(t, err)
-				assert.Equal(t, inputID, grant.InputID)
-				var receipts int
-				require.NoError(t, db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM session_outbox
-					WHERE session_id = ? AND source_key = 'tool:refused:direct:0'`, root.ID).Scan(&receipts))
-				assert.Zero(t, receipts)
-			}
-		})
-	}
-}
-
 func targetedBudgetMutation(t *testing.T, store *Store, grant, target int64, call string) budget.Mutation {
 	t.Helper()
-	input, err := enqueueInput(t.Context(), store, grant, InputSourceUser, "/budget 1m")
-	require.NoError(t, err)
-	_, _, err = acceptActivation(t.Context(), store, input.ID, "/budget 1m\n\nactivate",
-		ActivationDraft{ToolID: budget.ToolID, Command: "/budget"})
-	require.NoError(t, err)
 	return budget.Mutation{
-		RootSessionID: target, GrantSessionID: grant, InputID: input.ID, ToolID: budget.ToolID,
-		Command: "/budget", ToolCallID: call, DurationSeconds: new(int64(60)), Receipt: "budget " + call,
+		RootSessionID:   target,
+		GrantSessionID:  grant,
+		ToolCallID:      call,
+		DurationSeconds: new(int64(60)),
+		Receipt:         "budget " + call,
 	}
 }

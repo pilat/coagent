@@ -63,8 +63,8 @@ does not imply a tier except where it expresses an implementation variant.
 - `internal/catalog` — external model metadata acquisition, caching and identifier matching.
 - `internal/coagenthome` — sole resolver and name owner for the coagent home directory, including each project's process output.
 - `internal/config` — typed configuration and secrets resolution policy.
-- `internal/configapply` — activation-gated config read/edit tools, staged apply ledger, serialized commit claim and restart trigger.
-- `internal/configops` — guarded whole-document configuration staging, backups and restart verdict markers.
+- `internal/configapply` — activation-gated config read/edit tools, serialized commit claim and restart trigger.
+- `internal/configops` — guarded whole-document configuration staging, backups and the boot-rollback marker.
 - `internal/controllerapi` — private daemon-to-manager contract and DTO vocabulary.
 - `internal/ctl` — authenticated local control socket, status operation registry and client.
 - `internal/daemon` — runner and tree lifecycle, admission, boot recovery, commands and session-event composition.
@@ -127,18 +127,18 @@ SQLite is the source of truth for runtime facts that must survive restart:
 projects, sessions, append-only messages, durable inbox entries, delivery
 identity, subagent links, schedules, curated memory, MCP definitions, producer
 delivery records, append-only manager output, chat focus and its cursor,
-tool-activation grants, root-tree budgets, durable
+root-tree budgets, durable
 TODO state, per-session file-read ledger (storing `{mtime_unix_nano, size, hash}`
 for write-guard checks), and the background-process lifecycle ledger. Configuration files, their recoverable
 backups and the pending-apply marker are atomic filesystem state owned by config operations.
-Other memory is coordination or cache only and must be reconstructible from
-durable state. A runtime state label shown by a controller is an in-memory
+Coordination and caches are reconstructible from durable state; one-turn tool
+grants are deliberately process-local authority. A runtime state label shown by a controller is an in-memory
 projection; persisted session status is the recovery source.
 
 Session-store operations own transactional message ordering and compare-and-swap
 delivery. The daemon owns orchestration across those facts: it must not recreate
 them from transcript text or infer correctness from a notification. Schedule,
-MCP, config-apply, and subagent packages each own their producer ledger; the
+MCP and subagent packages each own their producer ledger; the
 daemon joins those ledgers into a session's runnable and waiting projections.
 Subagent link vocabulary, child creation, activation terminalization and
 completion enqueueing belong to `subagent`. Its transactions use session-store
@@ -266,8 +266,12 @@ inventory share one marked, persisted user-role row before the exact opening
 task. Resume uses those stored rows unchanged; the system prompt contains only
 stable environment and registry context, while new timestamped input carries
 local time, zone abbreviation and numeric offset.
-The session boundary resolves FIFO inbox rows, one-turn activations and command
-outputs in one commit. Exact call results are handled before ordinary rows;
+The session boundary resolves FIFO inbox rows and command outputs in one commit.
+After acceptance commits, a matching manager-owned human command creates a
+one-turn grant held only by the running session. Its turn blocks later input;
+the first matching mutation's receipt spends it. An unspent grant produces a
+releasing unchanged notice at run end; cancellation or restart simply loses it.
+Exact call results are handled before ordinary rows;
 non-sleep external work defers new model input. Every producer uses the same
 durable enqueue path, which wakes runners only after commit. `/status` is
 answered at enqueue by the daemon; queued read-only commands are resolved by
@@ -296,10 +300,6 @@ receipt for that work. Stop/kill fences suppress late failure receipts. A fresh
 user action or explicit daemon restart may retry after configuration repair.
 Pending agent or schedule input also wakes an errored root; a user command alone
 does not trigger that automatic wake.
-Teardown releases an abandoned configuration apply and settles its durable call
-under the lifecycle fence through a direct store commit, without constructing
-another session. Its grant expires before the result is written; a failed result
-write retains its producer for the next explicit activation.
 
 The provider's normalized and native finish reasons are independent of response
 shape. They describe one attempt, never task completion ([ADR-0060](docs/adr/0060-wake-aware-model-completion-check.md)).
@@ -378,11 +378,11 @@ stop — including its owed terminal output — before ordinary resume; a later
 root input or explicit child follow-up is a new activation, never a replay of
 pre-stop work.
 
-Configuration application is a controlled restart: the tool stages work and
-suspends; the daemon makes the suspension durable, commits guarded files, then
-execs. The next boot resolves the pending marker and injects one verdict before
-the owed call can be considered complete. This prevents a restart from losing
-the answer or applying two unrelated changes to the same suspended call.
+Configuration application is a controlled restart: the ordinary tool writes
+guarded files and returns its result and receipt before the daemon execs when
+the applying run ends. Boot resolves the marker, posts a plain chat notice only
+on rollback, and clears it without waking the session
+([ADR-0093](docs/adr/0093-one-turn-grants-and-config-apply-live-in-the-process.md)).
 
 ## Durable protocols
 
@@ -512,8 +512,9 @@ daemon publishes idle for a completed, parked, stopped or killed root when its
 runner is no longer active, regardless of whether its output has been sent.
 
 `/budget` grants one exact manager-owned human input authority to arm, replace or clear
-a one-shot root-tree cost/duration checkpoint, consuming the grant inside the
-same transaction as the mutation it authorizes. Model responses and successful
+a one-shot root-tree cost/duration checkpoint. The budget mutation and its keyed
+receipt share a transaction; the session spends its in-memory grant once it executes.
+Model responses and successful
 compaction summaries commit usage, fire comparison, skipped returned-tool
 results and checkpoint intent in one session-store transaction. The daemon
 closes admission before a generation drains and parks. Rearming refuses a fired
@@ -575,17 +576,17 @@ same validation, marking its combined result failed when any nested call did.
 ### Pending external calls: producer ledger and exact result
 
 `ErrSuspend` means a tool has created work whose answer comes from outside the
-agent loop. Sleep, blocking subagent work, config apply and terminal input are
+agent loop. Sleep, blocking subagent work and terminal input are
 examples. A pending external call has a specific tool-call identifier, producer
 owner and eventual result. It is never executed again, synthesized by transcript
 repair, or bypassed by later normal input.
 
 The owning producer records enough durable state to recover after restart. The
-daemon snapshots ownership from pending call-result rows, config applies, sleeps
+daemon snapshots ownership from pending call-result rows, sleeps
 and undelivered blocking links. The session accepts a result only if its call
 and tool identities match an unresolved owned call. The result enters the durable
 inbox, then the append-only transcript at an activation boundary. This exactness
-is what prevents stale timers, child completions or restart verdicts from
+is what prevents stale timers or child completions from
 answering a newer call.
 
 ### Subagent creation and completion
@@ -663,24 +664,28 @@ The ordinary `schedule` tool manages recurring work for its own root;
 listing and cancellation exclude sleep rows. Existing non-sleep one-shot rows
 retain their delivery and retry behavior.
 
-### Configuration restart verdict
+### Configuration apply and boot rollback
 
 Semantic configuration changes belong to config operations rather than direct
 tool file edits. Validation works from raw, unresolved configuration and refuses
 self-edit candidates with no models, including sandbox-only fragments. A guarded
-commit writes a recoverable backup, records a pending-apply marker, publishes the
-new file atomically, then triggers restart only after the caller's suspension is
-durable. One daemon accepts one apply at a time.
+commit takes one process-wide apply slot, writes a recoverable backup, records
+a pending-apply marker and publishes the new file atomically. The ordinary tool
+returns a result and receipt; the daemon requests one restart when the applying
+session's run ends, after its reply commits. A successful write holds the slot
+for the rest of the process image.
 
-On boot the marker proves which session and call await an answer, what backup is
-available, and which intended configuration hash was written. Successful boot,
-rollback, or failure becomes one durable verdict injected to that call. The
-marker remains until delivery is durable or the owed session is known gone. This
-is a protocol, not a best-effort notification.
+The marker names the session to notify on rollback, its backup and the intended
+configuration hash. Boot rolls back a failed start and posts one plain chat
+notice; successful or interrupted-before-write outcomes post nothing. Boot
+always attempts to clear the resolved marker, without an inbox result or model
+wake. Clearing compares decoded identity so old markers with extra fields also
+clear, while a newer marker stays protected. A crash between file write and
+result commit leaves an interrupted tool call; it is never re-executed.
 
 ### Recovery and root-only publication
 
-The daemon recovery worker rebuilds state from sessions, durable inbox entries, schedules, config markers,
+The daemon recovery worker rebuilds state from sessions, durable inbox entries, schedules,
 subagent links and delivery records. Recovery never replays arbitrary
 notifications to reconstitute state. Startup may re-arm unfinished producer
 work, but it must validate exact delivery ownership before making a transcript
@@ -872,7 +877,7 @@ before creating the subagent, then sends the canonical envelope through the
 child's ordinary initial-input path; the child does not rediscover it by name.
 
 Every manager-owned root exposes `config_read` and `config_edit` under the
-same durable human `/config` grant. Unowned roots receive neither tool. Only edit
+same one-turn `/config` grant. Unowned roots receive neither tool. Only edit
 declares the activation route; read returns the exact trusted configuration document without consuming the grant.
 An edit replaces the complete document, restarts, boot-validates and rolls back
 on failure. A configuration question or bare activation is not a change request.
@@ -927,7 +932,7 @@ The daemon converts the session's context projection into `progress`'s neutral
 diagnostic status vocabulary.
 The session reads pending inbox rows directly and reloads the active transcript
 after every step commit. Stop commits unresolved-call
-failures and activation expiry without status or output changes, then finishes
+failures without status or output changes, then finishes
 the stop and cancels
 producer obligations. Explicit stop completes the manager-owned root atomically
 with its terminal output; pending scheduled input can then reactivate it.
@@ -1116,12 +1121,12 @@ whole-document staging that accepts literal credential values and `${VAR}`
 references alike, backup retention and pending-apply recovery. Config apply owns
 the agent-facing schema and strict argument parsing; the `/config`
 read/edit tools register on every manager-owned root; an edit commits only
-under the durable human `/config` activation. Config apply owns the staged
-ledger, process-wide commit claim and restart channel; the daemon gates tool
-availability and calls apply under its tree fence after suspension persists.
-One-shot `/config` grant settlement
-rides the commit in the apply process, falls back to the boot's marker
-resolution, and the stop path expires grants their settlement orphaned.
+under the running session's one-turn `/config` grant. Config apply owns the
+process-wide commit claim and restart channel. The tool writes synchronously
+and returns an ordinary result and receipt; the daemon gates tool availability
+and signals restart when the applying run ends. Boot resolves the rollback
+marker, posts a plain notice only on rollback, and clears it independently of
+session recovery.
 Migration owns SQLite opening and schema progression.
 A production upgrade of an existing database creates a consistent SQLite backup
 before applying pending migrations and fails closed if inspection, backup or

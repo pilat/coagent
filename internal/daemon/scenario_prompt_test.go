@@ -479,7 +479,7 @@ func newRegistryPromptHarness(
 	h := newHarness(t, harnessOptions{clientFor: func(*config.Config) (llm.Client, error) {
 		return &registryPromptLLM{respond: respond, recorder: recorder, prompts: prompts}, nil
 	}})
-	h.mgr.applier = configapply.New(newTestConfigOps(t, t.TempDir()), h.store)
+	h.mgr.applier = configapply.New(newTestConfigOps(t, t.TempDir()))
 	return &registryPromptHarness{harness: h, schemas: recorder, prompts: prompts}
 }
 

@@ -15,7 +15,7 @@ import (
 const ReplaceSummary = "replaced the ENTIRE configuration document — every section or entry absent from it was deleted"
 
 // Service is the whole-document mutation layer: config_edit stages a complete
-// candidate, the daemon commits it and resolves the pending marker on boot.
+// candidate, commits it, and leaves a marker for boot rollback.
 type Service interface {
 	// StageDocument validates a caller-supplied complete candidate document —
 	// strict parse, secrets resolved, defaults and semantic checks applied —
@@ -23,7 +23,7 @@ type Service interface {
 	// editing path for config_edit.
 	StageDocument(candidate []byte) (*Staged, Verdict)
 	// Commit replaces config.yaml with a staged candidate, leaving behind the
-	// pending-apply marker that lets the daemon explain itself after the restart.
+	// pending-apply marker that lets the daemon roll back a failed boot.
 	Commit(staged *Staged, p Pending) Verdict
 	// LoadPending reads the pending-apply marker; nil when there is none.
 	LoadPending() (*Pending, error)
@@ -31,7 +31,7 @@ type Service interface {
 	// startup validation it wrapped failed. The marker stays until ClearPending.
 	ResolvePending(p Pending, bootErr error) (Outcome, error)
 	// ClearPending removes the marker p came from — the caller's acknowledgement
-	// that the verdict landed. A marker superseded by a newer apply is left alone.
+	// that boot resolved it. A marker superseded by a newer apply is left alone.
 	ClearPending(p Pending) error
 	// ConfigHash is the current file's sha256, "" when there is no file.
 	ConfigHash() (string, error)
@@ -48,7 +48,7 @@ type Staged struct {
 	// a daemon booting after a crash can tell "the write landed" from "it never
 	// happened".
 	Hash string
-	// Summary is the op's one-liner, for the marker and the verdict.
+	// Summary is the whole-document receipt's one-liner.
 	Summary string
 }
 
@@ -121,10 +121,6 @@ func (s *svc) Commit(staged *Staged, p Pending) Verdict {
 
 	p.BakPath = bak
 	p.NewHash = staged.Hash
-
-	if p.Summary == "" {
-		p.Summary = staged.Summary
-	}
 
 	if err := writeMarker(s.markerPath(), p); err != nil {
 		return Reject("", err)

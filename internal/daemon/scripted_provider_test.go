@@ -448,7 +448,6 @@ func newScenarioDaemon(
 	in.MCPStore = mcp
 	applier := configapply.New(
 		configops.New(filepath.Join(in.Config.WorkDir, "config.yaml"), filepath.Join(in.Config.WorkDir, "secrets")),
-		store,
 	)
 	service := New(
 		ctx, in, store, links, budgets, backgroundprocess.NewStore(db, store), progressruntime.New(store), bus,
@@ -466,9 +465,6 @@ func lifecycleInput(ctx context.Context, t *testing.T, s *Service, id int64, com
 
 func enqueueCallResult(ctx context.Context, store Store, id int64, callID, name, content string) (bool, error) {
 	key := "result:" + callID
-	if name == "config_edit" {
-		key = "config_apply:" + callID
-	}
 	result, err := store.Enqueue(
 		ctx, sessionstore.Input{
 			SessionID:   id,

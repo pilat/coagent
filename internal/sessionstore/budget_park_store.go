@@ -3,6 +3,7 @@ package sessionstore
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 
 	"github.com/pilat/coagent/internal/budget"
@@ -29,8 +30,8 @@ func (s *Store) BeginBudgetDrain(
 	if err != nil {
 		return nil, fmt.Errorf("begin budget drain: %w", err)
 	}
-	if err := requireActivationChanged(result); err != nil {
-		return nil, budget.ErrConflict
+	if err := requireBudgetRowChanged(result); err != nil {
+		return nil, err
 	}
 
 	return s.Get(ctx, rootID)
@@ -69,9 +70,22 @@ func (s *Store) MarkBudgetParked(
 	if err != nil {
 		return nil, fmt.Errorf("mark budget parked: %w", err)
 	}
-	if err := requireActivationChanged(result); err != nil {
-		return nil, budget.ErrConflict
+	if err := requireBudgetRowChanged(result); err != nil {
+		return nil, err
 	}
 
 	return s.Get(ctx, rootID)
+}
+
+func requireBudgetRowChanged(result sql.Result) error {
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("budget rows affected: %w", err)
+	}
+
+	if affected != 1 {
+		return budget.ErrConflict
+	}
+
+	return nil
 }

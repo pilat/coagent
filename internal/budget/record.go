@@ -38,11 +38,8 @@ type Record struct {
 
 type Mutation struct {
 	RootSessionID int64
-	// GrantSessionID receives the receipt; delegated mutations have no input or command.
+	// GrantSessionID receives the receipt; zero uses the root session.
 	GrantSessionID  int64
-	InputID         int64
-	ToolID          string
-	Command         string
 	ToolCallID      string
 	CostLimitUSD    *float64
 	DurationSeconds *int64

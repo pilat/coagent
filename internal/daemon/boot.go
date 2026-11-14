@@ -296,7 +296,7 @@ func (s *Service) settleUnresolvedCalls(ctx context.Context) error {
 		}
 
 		if len(internal) > 0 {
-			if err := s.settleCalls(ctx, record.ID, internal, interruptedCallNotice, false); err != nil {
+			if err := s.settleCalls(ctx, record.ID, internal, interruptedCallNotice); err != nil {
 				return fmt.Errorf("settle interrupted tools %d: %w", record.ID, err)
 			}
 		}

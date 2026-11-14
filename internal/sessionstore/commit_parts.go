@@ -61,22 +61,7 @@ func commitBoundaryPartsTx(ctx context.Context, tx *sql.Tx, c Commit, result *Co
 		return err
 	}
 
-	deferred := c.Activation != nil && activationLinked(c.Activation, linked)
-	if !deferred {
-		if err := commitActivationPartTx(ctx, tx, c, result); err != nil {
-			return err
-		}
-	}
-
-	if err := commitMessagePartsTx(ctx, tx, c, linked, result); err != nil {
-		return err
-	}
-
-	if deferred {
-		return commitActivationPartTx(ctx, tx, c, result)
-	}
-
-	return nil
+	return commitMessagePartsTx(ctx, tx, c, linked, result)
 }
 
 func commitAcceptPartsTx(
@@ -99,21 +84,6 @@ func commitAcceptPartsTx(
 	}
 
 	return linked, nil
-}
-
-func commitActivationPartTx(ctx context.Context, tx *sql.Tx, c Commit, result *CommitResult) error {
-	if c.Activation == nil {
-		return nil
-	}
-
-	grant, err := commitActivationTx(ctx, tx, c)
-	if err != nil {
-		return err
-	}
-
-	result.Activation = grant
-
-	return nil
 }
 
 func commitMessagePartsTx(

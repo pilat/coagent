@@ -309,8 +309,8 @@ func runToolCalls(ctx context.Context, agent *Session, toolCalls []llmwire.ToolC
 	return recordToolResults(ctx, agent, results, agent.loopDetector.check())
 }
 
-// recordToolResults commits the decided set before activation/progress events.
-// Only the final persisted result receives a loop warning.
+// Mutations precede result persistence, so their grants must be spent even
+// when the result set cannot be committed.
 func recordToolResults(
 	ctx context.Context,
 	agent *Session,
@@ -322,6 +322,10 @@ func recordToolResults(
 	warnIdx := -1
 
 	for i, r := range results {
+		if r.outcome == tool.OutcomeExecuted {
+			consumeActivation(agent, r)
+		}
+
 		if r.outcome == tool.OutcomeExecuted || r.outcome == tool.OutcomeFailed {
 			warnIdx = i
 		}
@@ -382,14 +386,13 @@ func recordToolResults(
 		}
 	}
 
-	return commitToolState(ctx, agent, c, results)
+	return commitToolState(ctx, agent, c)
 }
 
 func commitToolState(
 	ctx context.Context,
 	agent *Session,
 	c sessionstore.Commit,
-	results []toolCallResultItem,
 ) error {
 	data, err := json.Marshal(agent.prompt.Todos.List())
 	if err != nil {
@@ -404,15 +407,6 @@ func commitToolState(
 	}
 
 	agent.stamper.Touch()
-
-	// All rows are durable; user-facing semantics fire only now.
-	for _, r := range results {
-		if r.outcome != tool.OutcomeExecuted {
-			continue
-		}
-
-		consumeActivation(agent, r)
-	}
 
 	return nil
 }

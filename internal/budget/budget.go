@@ -27,9 +27,6 @@ type Service interface {
 
 type Grant struct {
 	RootID     int64
-	InputID    int64
-	ToolID     string
-	Command    string
 	ToolCallID string
 }
 

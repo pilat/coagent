@@ -15,7 +15,7 @@ import (
 )
 
 func TestCommit_Parts(t *testing.T) {
-	for _, name := range []string{"accept and receipt", "resolutions", "linked acceptance", "messages and retry", "tool result replay", "replace", "activation", "state", "candidate CAS", "outputs and replay", "unfired", "budget suppression", "budget hidden candidate", "budget rejected attempt", "rollback", "lifecycle fence", "ownerless output", "keyless outputs", "host keyless outputs", "reset context", "final content", "activation provenance", "activation expiry", "call pending"} {
+	for _, name := range []string{"accept and receipt", "resolutions", "linked acceptance", "messages and retry", "tool result replay", "replace", "state", "candidate CAS", "outputs and replay", "unfired", "budget suppression", "budget hidden candidate", "budget rejected attempt", "rollback", "lifecycle fence", "ownerless output", "keyless outputs", "host keyless outputs", "reset context", "final content", "call pending"} {
 		t.Run(name, func(t *testing.T) {
 			ctx := t.Context()
 			store, db, projectID := newTestStore(t)
@@ -164,40 +164,6 @@ func TestCommit_Parts(t *testing.T) {
 					HeadIDs: ids,
 					Entries: []CompactionEntry{{Message: &transcript.Message{Role: "user", Content: "summary"}}},
 				}
-			case "activation":
-				input, enqueueErr := store.Enqueue(
-					ctx,
-					Input{SessionID: root.ID, Source: InputSourceUser, Content: "/budget"},
-				)
-				require.NoError(t, enqueueErr)
-				step.Accept = []Accept{
-					{
-						InputID:    input.Input.ID,
-						State:      InputStateAccepted,
-						Content:    "/budget",
-						LinkRef:    -1,
-						ModelBound: true,
-					},
-				}
-				step.Activation = &ActivationChange{InputID: input.Input.ID, ToolID: "set_budget", Command: "/budget"}
-				result, commitErr := store.Commit(ctx, step)
-				require.NoError(t, commitErr)
-				require.NotNil(t, result.Activation)
-				step.Accept = nil
-				step.Activation.State = ActivationConsumed
-				step.Activation.ToolCallID = "budget-call"
-				_, commitErr = store.Commit(ctx, step)
-				require.NoError(t, commitErr)
-				_, commitErr = store.Commit(ctx, step)
-				require.NoError(t, commitErr)
-				step.Activation.ToolCallID = "other-call"
-				_, commitErr = store.Commit(ctx, step)
-				require.ErrorIs(t, commitErr, ErrActivationConflict)
-				step.Activation.State = ActivationExpired
-				result, commitErr = store.Commit(ctx, step)
-				require.NoError(t, commitErr)
-				assert.Equal(t, ActivationConsumed, result.Activation.State)
-				return
 			case "state":
 				step.State = StatePatch{
 					Iteration:       new(3),
@@ -291,74 +257,6 @@ func TestCommit_Parts(t *testing.T) {
 						ReleasesInput: true,
 					},
 				}
-			case "activation provenance":
-				for _, source := range []InputSource{InputSourceAgent, InputSourceProcess, InputSourceSubagent, InputSourceSchedule} {
-					input, enqueueErr := store.Enqueue(
-						ctx,
-						Input{SessionID: root.ID, Source: source, Content: "/budget"},
-					)
-					require.NoError(t, enqueueErr)
-					_, commitErr := store.Commit(
-						ctx,
-						Commit{
-							SessionID: root.ID,
-							Accept: []Accept{
-								{
-									InputID:    input.Input.ID,
-									State:      InputStateAccepted,
-									Content:    "/budget",
-									LinkRef:    -1,
-									ModelBound: true,
-								},
-							},
-							Activation: &ActivationChange{
-								InputID: input.Input.ID,
-								ToolID:  "set_budget",
-								Command: "/budget",
-							},
-						},
-					)
-					require.ErrorIs(t, commitErr, ErrActivationConflict)
-					assertInputState(t, db, input.Input.ID, InputStatePending)
-				}
-				return
-			case "activation expiry":
-				input, enqueueErr := store.Enqueue(
-					ctx,
-					Input{SessionID: root.ID, Source: InputSourceUser, Content: "/budget"},
-				)
-				require.NoError(t, enqueueErr)
-				_, commitErr := store.Commit(
-					ctx,
-					Commit{
-						SessionID: root.ID,
-						Accept: []Accept{
-							{
-								InputID:    input.Input.ID,
-								State:      InputStateAccepted,
-								Content:    "/budget",
-								LinkRef:    -1,
-								ModelBound: true,
-							},
-						},
-						Activation: &ActivationChange{
-							InputID: input.Input.ID,
-							ToolID:  "set_budget",
-							Command: "/budget",
-						},
-					},
-				)
-				require.NoError(t, commitErr)
-				result, commitErr := store.Commit(
-					ctx,
-					Commit{
-						SessionID:  root.ID,
-						Activation: &ActivationChange{InputID: input.Input.ID, State: ActivationExpired},
-					},
-				)
-				require.NoError(t, commitErr)
-				assert.Equal(t, ActivationExpired, result.Activation.State)
-				return
 			case "unfired", "budget suppression", "budget hidden candidate", "budget rejected attempt":
 				step.Messages = []*transcript.Message{
 					{

@@ -420,10 +420,6 @@ func (*mockSessionStore) ListPending(context.Context, int64) ([]*sessionstore.In
 	return nil, nil
 }
 
-func (*mockSessionStore) PendingActivation(context.Context, int64) (*sessionstore.ToolActivation, error) {
-	return nil, sessionstore.ErrActivationNotFound
-}
-
 func (m *mockSessionStore) HasBackgroundWakeSource(context.Context, int64) (bool, error) {
 	return m.wake || len(m.live) > 0, nil
 }

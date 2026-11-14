@@ -22,7 +22,7 @@ func TestRun_BoundarySettlesCallsBeforeContinuation(t *testing.T) {
 		name, toolID, result string
 		producerReplied      bool
 	}{
-		{name: "producer result", toolID: tool.IDConfigEdit, result: "configuration applied", producerReplied: true},
+		{name: "producer result", toolID: tool.IDTask, result: "configuration applied", producerReplied: true},
 		{name: "interrupted sleep", toolID: tool.IDSleep, result: sleepInterruptedMessage},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -111,13 +111,13 @@ func TestRun_ExternalCallOwnership(t *testing.T) {
 	}{
 		{name: "producer has not replied"},
 		{name: "wrong producer result", resultTool: tool.IDSleep},
-		{name: "exact producer result", resultTool: tool.IDConfigEdit, resolved: true},
+		{name: "exact producer result", resultTool: tool.IDTask, resolved: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, store, id := newAttachmentsStore(t)
 			transcriptRows := []llmwire.Message{
 				usr("change configuration"),
-				asst("", call("apply-1", tool.IDConfigEdit)),
+				asst("", call("apply-1", tool.IDTask)),
 				asst("", call("newer-event", "process_event")),
 				{
 					Role:       llmwire.RoleTool,
@@ -148,7 +148,7 @@ func TestRun_ExternalCallOwnership(t *testing.T) {
 			}
 			record, err := store.GetSession(t.Context(), id)
 			require.NoError(t, err)
-			counter := &countingTool{id: tool.IDConfigEdit}
+			counter := &countingTool{id: tool.IDTask}
 			reg := tool.NewRegistry()
 			reg.Register(counter)
 			prompt := sessionprompt.NewBuilder("stable", "")
@@ -163,7 +163,7 @@ func TestRun_ExternalCallOwnership(t *testing.T) {
 					Registry:      reg,
 					Prompt:        prompt,
 					Store:         store,
-					ExternalCalls: map[string]string{"apply-1": tool.IDConfigEdit},
+					ExternalCalls: map[string]string{"apply-1": tool.IDTask},
 					OutputEnabled: true,
 				},
 			)
@@ -214,23 +214,30 @@ func TestBoundaryActivationRequiresHumanInput(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
 		source sessionstore.InputSource
+		owner  string
 		human  bool
 	}{
-		{"user", sessionstore.InputSourceUser, true},
-		{"agent", sessionstore.InputSourceAgent, false},
-		{"process", sessionstore.InputSourceProcess, false},
-		{"subagent", sessionstore.InputSourceSubagent, false},
+		{"user", sessionstore.InputSourceUser, "owner", true},
+		{"agent", sessionstore.InputSourceAgent, "owner", false},
+		{"schedule", sessionstore.InputSourceSchedule, "owner", false},
+		{"process", sessionstore.InputSourceProcess, "owner", false},
+		{"subagent", sessionstore.InputSourceSubagent, "owner", false},
+		{"ownerless user", sessionstore.InputSourceUser, "", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			_, store, s := newBoundaryFixture(t, nil)
+			db, store, s := newBoundaryFixture(t, nil)
+			if tc.owner == "" {
+				_, err := db.ExecContext(t.Context(), "UPDATE sessions SET attributes = '{}' WHERE id = ?", s.id)
+				require.NoError(t, err)
+			}
 			s.registry.Register(configapply.NewConfigEdit(s.id, nil))
 			require.NoError(t, s.prepareRun(t.Context()))
 			input, err := store.Enqueue(t.Context(), sessionstore.Input{
 				SessionID:  s.id,
 				Source:     tc.source,
 				Content:    "/config x",
-				Attributes: map[string]any{"manager_id": "owner"},
+				Attributes: map[string]any{"manager_id": tc.owner},
 			})
 			require.NoError(t, err)
 			batch := s.newBoundaryBatch()
@@ -239,24 +246,52 @@ func TestBoundaryActivationRequiresHumanInput(t *testing.T) {
 			require.Len(t, batch.commit.Messages, 1)
 			content := batch.commit.Messages[0].Content
 			assert.Contains(t, content, "/config x")
-			if tc.human {
-				require.NotNil(t, batch.commit.Activation)
-				assert.Contains(t, content, "Host activation")
-			} else {
-				assert.Nil(t, batch.commit.Activation)
-				assert.NotContains(t, content, "Host activation")
-			}
+			assert.Nil(t, s.currentActivation, "authority starts only after acceptance commits")
 			_, err = s.commitBoundaryBatch(t.Context(), &runState{}, batch, 1)
 			require.NoError(t, err)
-			grant, err := store.PendingActivation(t.Context(), s.id)
 			if tc.human {
-				require.NoError(t, err)
-				assert.Equal(t, input.Input.ID, grant.InputID)
+				assert.Contains(t, content, "[Host activation")
+				assert.Equal(t, &tool.ActivationGrant{
+					SessionID: s.id, InputID: input.Input.ID, ToolID: tool.IDConfigEdit, Command: "/config",
+				}, s.currentActivation)
 			} else {
-				require.ErrorIs(t, err, sessionstore.ErrActivationNotFound)
+				assert.NotContains(t, content, "[Host activation")
+				assert.Nil(t, s.currentActivation)
 			}
 		})
 	}
+}
+
+func TestBoundaryActivationSurvivesAStaleCallResult(t *testing.T) {
+	_, store, s := newBoundaryFixture(t, []llmwire.Message{
+		usr("earlier task"), asst("", call("old-task", tool.IDTask)), toolRes("old-task"), asst("done"),
+	})
+	s.registry.Register(configapply.NewConfigEdit(s.id, nil))
+	require.NoError(t, s.prepareRun(t.Context()))
+	_, err := store.Enqueue(t.Context(), sessionstore.Input{
+		SessionID: s.id, Source: sessionstore.InputSourceUser, Content: "/config x",
+	})
+	require.NoError(t, err)
+	_, err = s.boundaryStep(t.Context(), &runState{})
+	require.NoError(t, err)
+	grant := s.currentActivation
+	require.NotNil(t, grant)
+	_, err = store.Enqueue(t.Context(), sessionstore.Input{
+		SessionID: s.id, Source: sessionstore.InputSourceCallResult, Content: "late child result",
+		Attributes: map[string]any{"call_id": "old-task", "tool_id": tool.IDTask},
+	})
+	require.NoError(t, err)
+	_, err = store.Enqueue(t.Context(), sessionstore.Input{
+		SessionID: s.id, Source: sessionstore.InputSourceUser, Content: "wait for the command",
+	})
+	require.NoError(t, err)
+	_, err = s.boundaryStep(t.Context(), &runState{})
+	require.NoError(t, err)
+	assert.Equal(t, grant, s.currentActivation)
+	pending, err := store.ListPending(t.Context(), s.id)
+	require.NoError(t, err)
+	require.Len(t, pending, 1)
+	assert.Equal(t, "wait for the command", pending[0].RawContent)
 }
 
 func TestRunBoundaryScopesHumanInput(t *testing.T) {

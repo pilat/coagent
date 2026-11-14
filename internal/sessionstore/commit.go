@@ -40,16 +40,6 @@ func (s *Store) Commit(ctx context.Context, c Commit) (*CommitResult, error) {
 	return result, nil
 }
 
-func activationLinked(change *ActivationChange, linked []Accept) bool {
-	for _, accept := range linked {
-		if accept.InputID == change.InputID {
-			return true
-		}
-	}
-
-	return false
-}
-
 func appendCommitMessages(
 	ctx context.Context,
 	tx *sql.Tx,

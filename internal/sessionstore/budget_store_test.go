@@ -21,15 +21,11 @@ func TestEnqueueCompactWithFocusKeepsParkedBudget(t *testing.T) {
 			store, db, projectID := newTestStore(t)
 			root, err := store.CreateSession(ctx, projectID, "priced", "", map[string]any{"manager_id": "cli:main"})
 			require.NoError(t, err)
-			input, err := enqueueInput(ctx, store, root.ID, InputSourceUser, "/budget")
-			require.NoError(t, err)
-			_, _, err = acceptActivation(ctx, store, input.ID, "/budget\n\nactivate",
-				ActivationDraft{ToolID: "set_budget", Command: "/budget"})
+			_, err = enqueueInput(ctx, store, root.ID, InputSourceUser, "/budget")
 			require.NoError(t, err)
 			limit := 1.0
 			_, err = store.Arm(ctx, budget.Mutation{
-				RootSessionID: root.ID, InputID: input.ID, ToolID: "set_budget", Command: "/budget",
-				ToolCallID: "arm", CostLimitUSD: &limit, Receipt: "Budget armed",
+				RootSessionID: root.ID, ToolCallID: "arm", CostLimitUSD: &limit, Receipt: "Budget armed",
 			})
 			require.NoError(t, err)
 			fired, _, err := store.FireBudget(ctx, root.ID, 1, "cost", 1.5, "Budget checkpoint reached (cost).")
@@ -76,15 +72,9 @@ func TestBudgetStore_ArmFireAndReplayAreAtomic(t *testing.T) {
 	store, db, projectID := newTestStore(t)
 	root, err := store.CreateSession(ctx, projectID, "priced", "", map[string]any{"manager_id": "telegram:main"})
 	require.NoError(t, err)
-	input, err := enqueueInput(ctx, store, root.ID, InputSourceUser, "/budget two dollars")
-	require.NoError(t, err)
-	_, _, err = acceptActivation(ctx, store, input.ID, "/budget two dollars\n\nactivate",
-		ActivationDraft{ToolID: "set_budget", Command: "/budget"})
-	require.NoError(t, err)
 	limit := 2.0
 	mutation := budget.Mutation{
-		RootSessionID: root.ID, InputID: input.ID,
-		ToolID: "set_budget", Command: "/budget", ToolCallID: "call-budget",
+		RootSessionID: root.ID, ToolCallID: "call-budget",
 		CostLimitUSD: &limit, Receipt: "Budget armed: $2.000000 additional persisted cost",
 	}
 
@@ -92,9 +82,6 @@ func TestBudgetStore_ArmFireAndReplayAreAtomic(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, budget.Armed, armed.State)
 
-	replayed, err := store.Arm(ctx, mutation)
-	require.NoError(t, err)
-	assert.Equal(t, armed.Generation, replayed.Generation)
 	var receipts int
 	require.NoError(t, db.QueryRowContext(ctx, `SELECT COUNT(*) FROM session_outbox
 		WHERE session_id = ? AND source_key = 'tool:call-budget:direct:0'`, root.ID).Scan(&receipts))
@@ -119,15 +106,9 @@ func TestBudgetStore_CrossingResponseCommitsUsageNonExecutionAndCheckpointTogeth
 	store, db, projectID := newTestStore(t)
 	root, err := store.CreateSession(ctx, projectID, "priced", "", map[string]any{"manager_id": "cli:main"})
 	require.NoError(t, err)
-	input, err := enqueueInput(ctx, store, root.ID, InputSourceUser, "/budget")
-	require.NoError(t, err)
-	_, _, err = acceptActivation(ctx, store, input.ID, "/budget\n\nactivate",
-		ActivationDraft{ToolID: "set_budget", Command: "/budget"})
-	require.NoError(t, err)
 	limit := 0.5
 	_, err = store.Arm(ctx, budget.Mutation{
-		RootSessionID: root.ID, InputID: input.ID, ToolID: "set_budget", Command: "/budget",
-		ToolCallID: "arm", CostLimitUSD: &limit, Receipt: "Budget armed",
+		RootSessionID: root.ID, ToolCallID: "arm", CostLimitUSD: &limit, Receipt: "Budget armed",
 	})
 	require.NoError(t, err)
 
@@ -166,26 +147,4 @@ func TestBudgetStore_CrossingResponseCommitsUsageNonExecutionAndCheckpointTogeth
 	require.NoError(t, db.QueryRowContext(ctx, `SELECT COUNT(*) FROM messages
 		WHERE session_id = ? AND role = 'tool' AND tool_call_id = 'late'`, root.ID).Scan(&lateResults))
 	assert.Equal(t, 1, lateResults)
-}
-
-func TestBudgetStore_RejectsCrossSessionGrant(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	store, _, projectID := newTestStore(t)
-	first, err := store.CreateSession(ctx, projectID, "priced", "", map[string]any{"manager_id": "one"})
-	require.NoError(t, err)
-	second, err := store.CreateSession(ctx, projectID, "priced", "", map[string]any{"manager_id": "two"})
-	require.NoError(t, err)
-	input, err := enqueueInput(ctx, store, first.ID, InputSourceUser, "/budget")
-	require.NoError(t, err)
-	_, _, err = acceptActivation(ctx, store, input.ID, "/budget\n\nactivate",
-		ActivationDraft{ToolID: "set_budget", Command: "/budget"})
-	require.NoError(t, err)
-	limit := 1.0
-	_, err = store.Arm(ctx, budget.Mutation{
-		RootSessionID: second.ID, InputID: input.ID,
-		ToolID: "set_budget", Command: "/budget", ToolCallID: "wrong", CostLimitUSD: &limit,
-		Receipt: "Budget armed: $1.000000 additional persisted cost",
-	})
-	require.ErrorIs(t, err, budget.ErrConflict)
 }

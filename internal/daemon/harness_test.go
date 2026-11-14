@@ -151,7 +151,7 @@ func newApplyDaemonWith(
 	t.Helper()
 	h := newHarness(t, harnessOptions{dbPath: dbPath, respond: respond})
 	ops := configops.New(filepath.Join(configDir, "config.yaml"), filepath.Join(configDir, "secrets"))
-	h.mgr.applier = configapply.New(ops, h.store)
+	h.mgr.applier = configapply.New(ops)
 	return &applyDaemon{harness: h, ops: ops, restarts: h.mgr.applier.Restart()}
 }
 
@@ -194,97 +194,6 @@ func newApplyDaemon(t *testing.T, dbPath, configDir string) *applyDaemon {
 }
 
 func (d *applyDaemon) restartCount() int { return len(d.restarts) }
-
-// Boot resolves the marker and spends an applied grant before delivering the suspended call's verdict.
-func (d *applyDaemon) bootVerdict(t *testing.T) (configops.Outcome, error) {
-	t.Helper()
-	pending, err := d.ops.LoadPending()
-	require.NoError(t, err)
-	require.NotNil(t, pending, "the boot after an apply must still find the marker")
-	outcome, err := d.ops.ResolvePending(*pending, nil)
-	require.NoError(t, err)
-	if !outcome.Verdict.Failed() {
-		d.mgr.applier.ConsumeConfigEditActivation(d.ctx, outcome.Pending.SessionID, outcome.Pending.ToolCallID)
-	}
-	message := "Config applied: " + outcome.Pending.Summary
-	if outcome.Verdict.Failed() {
-		message = "Config change rejected — " + outcome.Verdict.Reason()
-	}
-	if _, err := enqueueCallResult(
-		d.ctx, d.mgr.store, outcome.Pending.SessionID, outcome.Pending.ToolCallID, outcome.Pending.ToolName, message,
-	); err != nil {
-		return outcome, err
-	}
-	return outcome, d.ops.ClearPending(outcome.Pending)
-}
-
-// The staged apply must be committed at its durable suspend before the restart image begins.
-func stageApplyAndStop(t *testing.T, dbPath, configDir string) int64 {
-	t.Helper()
-	first := newApplyDaemon(t, dbPath, configDir)
-	first.startInboxWake()
-	sessionID := startConfigEditSession(t, first, "reconfigure the daemon")
-	first.waitUntil("restart requested", func() bool {
-		select {
-		case <-first.restarts:
-			return true
-		default:
-			return false
-		}
-	})
-	first.waitUntil("config suspended", func() bool {
-		return !first.mgr.HasActiveLoop(sessionID)
-	})
-	pending, err := first.ops.LoadPending()
-	require.NoError(t, err)
-	require.NotNil(t, pending, "the commit leaves a marker naming the waiting session")
-	require.Equal(t, sessionID, pending.SessionID)
-	require.Equal(t, applyCallID, pending.ToolCallID)
-	require.Equal(t, tool.IDConfigEdit, pending.ToolName)
-	msgs := first.messages(sessionID)
-	require.Equal(t, 1, countAssistantToolCallsFor(msgs, tool.IDConfigEdit))
-	require.Zero(t, countToolResultsFor(msgs, tool.IDConfigEdit), "the call is out with the world")
-	first.shutdown()
-	return sessionID
-}
-
-func stagePlainRootApplyAndStop(t *testing.T, dbPath, configDir string) int64 {
-	t.Helper()
-	first := newApplyDaemon(t, dbPath, configDir)
-	id := first.createRoot(managerAttrs("telegram:main"))
-	input, err := first.store.Enqueue(first.ctx, sessionstore.Input{
-		SessionID: id, Source: sessionstore.InputSourceUser, Content: configapply.ConfigEditCommand,
-	})
-	require.NoError(t, err)
-	calls, err := json.Marshal([]llmwire.ToolCall{{ID: applyCallID, Name: tool.IDConfigEdit}})
-	require.NoError(t, err)
-	_, err = first.store.Commit(first.ctx, sessionstore.Commit{
-		SessionID: id,
-		Accept: []sessionstore.Accept{{
-			InputID: input.Input.ID, State: sessionstore.InputStateAccepted,
-			Content: configapply.ConfigEditCommand, LinkRef: -1, ModelBound: true,
-		}},
-		Activation: &sessionstore.ActivationChange{
-			InputID: input.Input.ID, ToolID: tool.IDConfigEdit,
-			Command: configapply.ConfigEditCommand, State: sessionstore.ActivationPending,
-		},
-		Messages: []*transcript.Message{{Role: llmwire.RoleAssistant, ToolCalls: calls}},
-	})
-	require.NoError(t, err)
-	_, err = configapply.NewConfigEdit(id, first.mgr.applier).Execute(
-		grantedCall(first.ctx, id, applyCallID), configEditArgs(configEditCandidate))
-	require.ErrorIs(t, err, tool.ErrSuspend)
-	require.NoError(t, first.store.UpdateSessionStatus(first.ctx, id, sessionstore.SessionStatusSuspended))
-	first.mgr.applier.RunStagedApply(first.ctx, id)
-	require.Len(t, first.restarts, 1)
-	pending, err := first.ops.LoadPending()
-	require.NoError(t, err)
-	require.NotNil(t, pending)
-	require.Equal(t, id, pending.SessionID)
-	require.Equal(t, applyCallID, pending.ToolCallID)
-	first.shutdown()
-	return id
-}
 
 const configEditCandidate = `providers:
     work:
@@ -385,7 +294,7 @@ func newGatingHarness(
 			},
 		},
 	)
-	h.mgr.applier = configapply.New(newTestConfigOps(t, t.TempDir()), h.store)
+	h.mgr.applier = configapply.New(newTestConfigOps(t, t.TempDir()))
 	return &gatingHarness{harness: h, schemas: rec}
 }
 
