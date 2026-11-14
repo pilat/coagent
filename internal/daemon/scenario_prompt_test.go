@@ -45,16 +45,10 @@ func TestHarnessScenario_SystemPromptMatchesTheDaemonRegisteredToolset(t *testin
 		return &llmwire.Response{ToolCalls: []llmwire.ToolCall{spawnTaskCall(exploreCallID, "explore", "CHILD_PROMPT")}}
 	}
 	h := newGatingHarness(t, map[string]string{"reviewer.md": promptReviewerAgentFile}, respond)
-	h.startInboxWake()
-	parentID, err := h.mgr.Send(h.ctx, h.projectID, "spawn an explore child", "fake-model", nil)
-	require.NoError(t, err)
-	h.waitUntil("child link", func() bool { return h.linkByCall(parentID, exploreCallID) != nil })
-	link := *h.linkByCall(parentID, exploreCallID)
-	h.waitUntil(
-		"child delivery",
-		func() bool { link := h.link(link.ChildID); return link != nil && link.DeliveredAt != 0 },
-	)
-	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(parentID) })
+	parentID := h.send("spawn an explore child", nil)
+	link := h.waitLink(parentID, exploreCallID)
+	h.waitDelivered(link.ChildID)
+	h.waitAnswer(parentID, "")
 	root := prompts.first(t, "root")
 	assert.Contains(t, root, "Sub-agents: task", "the inventory names the daemon-registered task tool")
 	assert.Contains(t, root, "Scheduling: schedule")
@@ -99,8 +93,7 @@ func TestHarnessScenario_ActiveProcessPromptAndSleepGuard(t *testing.T) {
 			context.Background(), "bgp_prompt_guard", backgroundprocess.IntentSessionKilled, 0,
 		)
 	})
-	h.startInboxWake()
-	require.NoError(t, h.mgr.sendToSession(h.ctx, root, "wait for the process"))
+	h.say(root, "wait for the process")
 	collector.waitMessage(root, "background process polling rejected")
 	_, _, err = h.mgr.processStore.FinalizeWithIntent(
 		context.Background(), "bgp_prompt_guard", backgroundprocess.IntentSessionKilled, 0,
@@ -141,10 +134,8 @@ func TestHarnessScenario_EmptyActiveBackgroundAddsNoProviderRow(t *testing.T) {
 		return textReply("done")
 	}
 	h := newHarness(t, harnessOptions{respond: respond})
-	h.startInboxWake()
-	root, err := h.mgr.Send(h.ctx, h.projectID, "ordinary task", "fake-model", nil)
-	require.NoError(t, err)
-	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(root) })
+	root := h.send("ordinary task", nil)
+	h.waitAnswer(root, "")
 	requestMu.Lock()
 	recorded := append([]llmwire.Message(nil), requestMessages...)
 	requestMu.Unlock()
@@ -162,23 +153,16 @@ func TestHarnessScenario_DynamicRegistryPromptMatchesEachActivation(t *testing.T
 	fake := newFakeMCPServer(t, "pong from registry", false)
 	wrapped := newRegistryPromptHarness(t, registryPromptRespond(fake))
 	h, schemas, prompts := wrapped.harness, wrapped.schemas, wrapped.prompts
-	h.startInboxWake()
-	parentID, err := h.mgr.Send(h.ctx, h.projectID, "exercise dynamic registry", "fake-model", map[string]any{
+	parentID := h.send("exercise dynamic registry", map[string]any{
 		"channel": "cli",
 	})
-	require.NoError(t, err)
-	h.waitUntil("child link", func() bool { return h.linkByCall(parentID, "task-registry") != nil })
-	link := *h.linkByCall(parentID, "task-registry")
-	h.waitUntil(
-		"child delivery",
-		func() bool { link := h.link(link.ChildID); return link != nil && link.DeliveredAt != 0 },
-	)
-	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(parentID) })
+	link := h.waitLink(parentID, "task-registry")
+	h.waitDelivered(link.ChildID)
+	h.waitAnswer(parentID, "")
 	assertInitialRegistryProjection(t, h, schemas, prompts, parentID, link.ChildID)
 	assert.Contains(t, promptLastToolResultContent(h.messages(parentID), "mcp__fake__ping"), "unknown tool")
-	h.startInboxWake()
-	require.NoError(t, h.mgr.sendToSession(h.ctx, parentID, registryUseMarker))
-	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(parentID) })
+	h.say(parentID, registryUseMarker)
+	h.waitAnswer(parentID, "")
 	assertNextRegistryProjection(t, h, schemas, prompts, parentID)
 }
 
@@ -190,10 +174,8 @@ func TestHarnessScenario_RootSessionRunsAsTheBuildAgent(t *testing.T) {
 		return textReply("done")
 	}
 	h := newGatingHarness(t, nil, respond)
-	h.startInboxWake()
-	rootID, err := h.mgr.Send(h.ctx, h.projectID, "do the thing", "fake-model", nil)
-	require.NoError(t, err)
-	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(rootID) })
+	rootID := h.send("do the thing", nil)
+	h.waitAnswer(rootID, "")
 	system := prompts.first(t, "root")
 	assert.True(t, strings.HasPrefix(system, agentregistry.BuildAgentPrompt),
 		"root must open with the primary build prompt, got: %s", firstLine(system))
@@ -224,13 +206,11 @@ func TestHarnessScenario_UntrustedToolOutputCarriesWrapperAndGuidance(t *testing
 		return callReply("fetch-1", "webfetch", string(args))
 	}
 	h := newGatingHarness(t, nil, respond)
-	h.startInboxWake()
-	parentID, err := h.mgr.Send(h.ctx, h.projectID, "probe untrusted output", "fake-model", nil)
-	require.NoError(t, err)
+	parentID := h.send("probe untrusted output", nil)
 	h.waitUntil("webfetch result stored", func() bool {
 		return strings.Contains(promptLastToolResultContent(h.messages(parentID), "webfetch"), untrustedProbeMarker)
 	})
-	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(parentID) })
+	h.waitAnswer(parentID, "")
 	msgs := h.messages(parentID)
 	require.NoError(t, llmtest.ValidateToolPairing(msgs), "transcript must stay provider-valid")
 	content := promptLastToolResultContent(msgs, "webfetch")
@@ -244,12 +224,11 @@ func TestHarnessScenario_UntrustedToolOutputCarriesWrapperAndGuidance(t *testing
 	requestMsgs := requests.lastMessages(t)
 	requestContent := promptLastToolResultContent(requestMsgs, "webfetch")
 	assert.Equal(t, content, requestContent)
-	h.startInboxWake()
-	require.NoError(t, h.mgr.sendToSession(h.ctx, parentID, "continue the probe"))
+	h.say(parentID, "continue the probe")
 	h.waitUntil("next model activation", func() bool {
 		return hasUserContaining(requests.lastMessages(t), "continue the probe")
 	})
-	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(parentID) })
+	h.waitAnswer(parentID, "")
 	assert.Equal(t, content, promptLastToolResultContent(requests.lastMessages(t), "webfetch"))
 	assert.Equal(t, content, promptLastToolResultContent(h.messages(parentID), "webfetch"))
 
@@ -268,18 +247,14 @@ func TestHarnessScenario_HelpIncludesGWT(t *testing.T) {
 		modelCalls.Add(1)
 		return textReply("session ready")
 	}})
-	collector := collectEvents(t, h.mgr.bus.SubscribeAll())
-	defer collector.stop()
-	h.startInboxWake()
-	sessionID, err := h.mgr.Send(h.ctx, h.projectID, "open session", "fake-model", map[string]any{
+	collector := h.collect()
+	sessionID := h.send("open session", map[string]any{
 		controllerapi.SessionAttributeManagerID: scenarioManagerID,
 		"channel":                               "telegram",
 	})
-	require.NoError(t, err)
 	collector.waitMessage(sessionID, "session ready")
-	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(sessionID) })
-	h.startInboxWake()
-	require.NoError(t, h.mgr.sendToSession(h.ctx, sessionID, "/help"))
+	h.waitAnswer(sessionID, "")
+	h.say(sessionID, "/help")
 	collector.waitMessage(sessionID, helpWithGWT)
 	collector.waitIdleAfter(sessionID, helpWithGWT)
 

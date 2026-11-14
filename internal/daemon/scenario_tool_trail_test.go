@@ -24,11 +24,8 @@ func TestHarnessScenario_WorkToolStepsPublishOneMessageEach(t *testing.T) {
 			ID: "silent-ls", Name: "ls", Arguments: []byte(`{"path":"."}`),
 		}, llmwire.ToolCall{ID: "silent-glob", Name: "glob", Arguments: []byte(`{"pattern":"*.go"}`)})
 	}})
-	collector := collectEvents(t, h.mgr.bus.SubscribeAll())
-	defer collector.stop()
-	h.startInboxWake()
-	root, err := h.mgr.Send(h.ctx, h.projectID, "inspect files", "fake-model", managerAttrs(scenarioManagerID))
-	require.NoError(t, err)
+	collector := h.collect()
+	root := h.send("inspect files", managerAttrs(scenarioManagerID))
 	collector.waitIdleAfter(root, "Work complete.")
 	assert.Equal(t, 1, assistantSayCount(t, h, root, "Work complete."))
 	assertNarratedOutputOrder(t, h, root, "→ ls: `.`\n→ glob: `*.go`", "Checking files\n\n→ ls: `.`", "Work complete.")
@@ -58,9 +55,7 @@ func TestHarnessScenario_SubagentToolStepsHaveNoOutbox(t *testing.T) {
 			`{"prompt":"TRAIL_CHILD","description":"inspect child","subagent_type":"general"}`,
 		)
 	}})
-	h.startInboxWake()
-	root, err := h.mgr.Send(h.ctx, h.projectID, "inspect with a child", "fake-model", managerAttrs(scenarioManagerID))
-	require.NoError(t, err)
+	root := h.send("inspect with a child", managerAttrs(scenarioManagerID))
 	h.waitUntil("parent finished", func() bool {
 		return lastAssistantTextDTO(h.messages(root)) == "Parent complete." && !h.mgr.HasActiveLoop(root)
 	})

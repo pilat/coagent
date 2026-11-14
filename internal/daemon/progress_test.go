@@ -1,7 +1,6 @@
 package daemon
 
 import (
-	"context"
 	"testing"
 	"time"
 
@@ -15,17 +14,15 @@ import (
 )
 
 func TestPublishWaiting_ProjectsOnlyOneShotsOwnedByPendingSleepCalls(t *testing.T) {
-	ctx := context.Background()
 	h := newHarness(t, harnessOptions{configure: withTestModels, clientFor: (&mockFactory{}).client})
-	mgr, projects, schedules := h.mgr, h.store, h.schedules
-	projectID := testProject(t, projects, "/tmp/test")
-	rec, err := mgr.store.CreateSession(ctx, projectID, "fake-model", "", nil)
-	require.NoError(t, err)
+	ctx := h.ctx
+	mgr, schedules := h.mgr, h.schedules
+	rec := h.createRoot(nil)
 	now := time.Now().UTC().Truncate(time.Second)
 	standaloneAt := now.Add(10 * time.Minute)
-	_, err = schedules.AddSchedule(
+	_, err := schedules.AddSchedule(
 		ctx,
-		rec.ID,
+		rec,
 		"",
 		&standaloneAt,
 		"standalone reminder",
@@ -35,7 +32,7 @@ func TestPublishWaiting_ProjectsOnlyOneShotsOwnedByPendingSleepCalls(t *testing.
 	require.NoError(t, err)
 	sleepAt := now.Add(20 * time.Minute)
 	_, err = mgr.store.Commit(ctx, sessionstore.Commit{
-		SessionID: rec.ID,
+		SessionID: rec,
 		Messages: []*transcript.Message{
 			{Role: "assistant", ToolCalls: []byte(`[{"ID":"sleep-call","Name":"sleep","Arguments":"e30="}]`)},
 		},
@@ -43,12 +40,12 @@ func TestPublishWaiting_ProjectsOnlyOneShotsOwnedByPendingSleepCalls(t *testing.
 	require.NoError(t, err)
 	_, err = schedule.NewService(schedules, mgr.store.(*sessionstore.Store)).
 		AddSleep(
-			ctx, rec.ID, "sleep-call", sleepAt, "wake",
+			ctx, rec, "sleep-call", sleepAt, "wake",
 		)
 	require.NoError(t, err)
-	notifications := mgr.bus.Subscribe(rec.ID)
-	defer mgr.bus.Unsubscribe(rec.ID, notifications)
-	mgr.publishWaiting(ctx, rec.ID)
+	notifications := mgr.bus.Subscribe(rec)
+	defer mgr.bus.Unsubscribe(rec, notifications)
+	mgr.publishWaiting(ctx, rec)
 	var notification sessionevent.Notification
 	select {
 	case notification = <-notifications:

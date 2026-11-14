@@ -90,13 +90,12 @@ func TestPendingExternalCallsRetainsAtomicChildHandoff(t *testing.T) {
 }
 
 func TestFollowUpAcceptedBeforeTerminalBoundaryStaysInSameActivation(t *testing.T) {
-	ctx := context.Background()
 	h := newHarness(t, harnessOptions{configure: withTestModels, clientFor: (&mockFactory{}).client})
-	mgr, projects := h.mgr, h.store
-	projectID := testProject(t, projects, "/tmp/follow-up-boundary")
-	parent, err := mgr.store.CreateSession(ctx, projectID, "fake-model", "", nil)
-	require.NoError(t, err)
-	childID := createBackgroundChild(t, mgr, projectID, parent.ID)
+	ctx := h.ctx
+	mgr := h.mgr
+	projectID := h.projectID
+	parent := h.createRoot(nil)
+	childID := createBackgroundChild(t, mgr, projectID, parent)
 
 	// Keep the accepted child parked so the test can place finalization exactly
 	// after the durable enqueue and before any runner promotes the input.
@@ -116,13 +115,12 @@ func TestFollowUpAcceptedBeforeTerminalBoundaryStaysInSameActivation(t *testing.
 }
 
 func TestTerminalChildDeliversPreviousOutcomeBeforeRearm(t *testing.T) {
-	ctx := context.Background()
 	h := newHarness(t, harnessOptions{configure: withTestModels, clientFor: (&mockFactory{}).client})
+	ctx := h.ctx
 	mgr, projects := h.mgr, h.store
-	projectID := testProject(t, projects, t.TempDir())
-	parent, err := mgr.store.CreateSession(ctx, projectID, "fake-model", "", nil)
-	require.NoError(t, err)
-	childID := createBackgroundChild(t, mgr, projectID, parent.ID)
+	projectID := h.projectID
+	parent := h.createRoot(nil)
+	childID := createBackgroundChild(t, mgr, projectID, parent)
 	require.NoError(
 		t,
 		seedTerminalChild(ctx, projects, childID, subagent.StateCompleted, "first outcome", subagent.OutcomeCompleted),
@@ -135,7 +133,7 @@ func TestTerminalChildDeliversPreviousOutcomeBeforeRearm(t *testing.T) {
 		if linkErr != nil || link == nil || link.State != subagent.StateRunning || link.DeliveredAt != 0 {
 			return false
 		}
-		messages, msgErr := mgr.store.LoadActiveMessages(ctx, parent.ID)
+		messages, msgErr := mgr.store.LoadActiveMessages(ctx, parent)
 		if msgErr != nil {
 			return false
 		}

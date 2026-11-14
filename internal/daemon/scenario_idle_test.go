@@ -15,11 +15,8 @@ func TestHarnessScenario_OwnedRootBecomesIdleWithoutOutputAcknowledgement(t *tes
 	h := newHarness(t, harnessOptions{respond: func(string, []llmwire.Message) *llmwire.Response {
 		return textReply("finished without delivery")
 	}})
-	collector := collectEvents(t, h.mgr.bus.SubscribeAll())
-	defer collector.stop()
-	h.startInboxWake()
-	root, err := h.mgr.Send(h.ctx, h.projectID, "finish", "fake-model", managerAttrs(scenarioManagerID))
-	require.NoError(t, err)
+	collector := h.collect()
+	root := h.send("finish", managerAttrs(scenarioManagerID))
 	collector.waitMessage(root, "finished without delivery")
 	collector.waitIdleAfter(root, "finished without delivery")
 	assert.False(t, h.mgr.HasActiveLoop(root))

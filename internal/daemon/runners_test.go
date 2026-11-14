@@ -1,7 +1,6 @@
 package daemon
 
 import (
-	"context"
 	"database/sql"
 	"fmt"
 	"testing"
@@ -53,8 +52,8 @@ func TestRunnerSetRetryBackoff(t *testing.T) {
 func TestDrainPendingRunners_DerivesPromotedRecoveryAfterCapacityWait(t *testing.T) {
 	factory := &mockFactory{}
 	h := newHarness(t, harnessOptions{configure: withTestModels, clientFor: factory.client})
-	mgr, projects := h.mgr, h.store
-	ctx := context.Background()
+	mgr := h.mgr
+	ctx := h.ctx
 	reserved := maxTotal
 	for range reserved {
 		require.True(t, mgr.runners.tryAdmit(false, 0))
@@ -65,42 +64,19 @@ func TestDrainPendingRunners_DerivesPromotedRecoveryAfterCapacityWait(t *testing
 		}
 		mgr.Shutdown(t.Context(), 3*time.Second)
 	})
-	projectID := testProject(t, projects, t.TempDir())
-	rec, err := mgr.store.CreateSession(ctx, projectID, "fake-model", "", nil)
-	require.NoError(t, err)
-	input, err := mgr.store.Enqueue(
-		ctx,
-		sessionstore.Input{SessionID: rec.ID, Source: sessionstore.InputSourceUser, Content: "promoted before crash"},
-	)
-	require.NoError(t, err)
-	_, err = mgr.store.Commit(
-		ctx, sessionstore.Commit{
-			SessionID: input.Input.SessionID,
-			Accept: []sessionstore.Accept{
-				{
-					InputID:    input.Input.ID,
-					State:      sessionstore.InputStateAccepted,
-					Content:    "promoted before crash",
-					LinkRef:    -1,
-					ModelBound: true,
-				},
-			},
-		},
-	)
-	require.NoError(t, err)
+	rec := h.createRoot(nil)
+	h.acceptUserInput(rec, "promoted before crash", "promoted before crash")
 	sess := &mockSession{completeAfter: 10 * time.Millisecond}
 	factory.nextSess = sess
 	events := collectEvents(t, mgr.bus.SubscribeAll())
 	t.Cleanup(events.stop)
-	require.NoError(t, mgr.start(ctx, rec.ID))
-	assert.False(t, mgr.HasActiveLoop(rec.ID))
+	require.NoError(t, mgr.start(ctx, rec))
+	assert.False(t, mgr.HasActiveLoop(rec))
 	require.Equal(t, 1, runnerWaitingCount(mgr.runners))
 	mgr.runners.release(false, 0)
 	reserved--
 	mgr.drain(ctx)
-	events.waitFor(t, "session state", func(events []controllerapi.SessionNotification) bool {
-		return hasStateEvent(events, rec.ID, controllerapi.StateIdle)
-	})
+	events.waitState(rec, controllerapi.StateIdle)
 	sess.mu.Lock()
 	ran := sess.ran
 	sess.mu.Unlock()
@@ -109,11 +85,7 @@ func TestDrainPendingRunners_DerivesPromotedRecoveryAfterCapacityWait(t *testing
 
 // A failed classification must preserve the entire waiting FIFO for retry.
 func TestDrainQueue_UnknownChildStateDefers(t *testing.T) {
-	var flaky *flakyLinkStore
-	h := newHarness(t, harnessOptions{respond: trivialRespond, links: func(inner subagent.Store) subagent.Store {
-		flaky = newFlakyLinkStore(inner)
-		return flaky
-	}})
+	h, flaky := newFlakyLinkHarness(t, trivialRespond)
 	parent := h.createRoot(nil)
 	for _, callID := range []string{"bg-1", "bg-2", "bg-3"} {
 		childID := h.createChild(parent, subagent.Link{TaskCallID: callID})
@@ -139,19 +111,16 @@ func TestStartSkipsTerminalAndStoppedChildren(t *testing.T) {
 	for _, state := range []subagent.State{subagent.StateCompleted, subagent.StateStopped, subagent.StateKilled} {
 		t.Run(string(state), func(t *testing.T) {
 			h := newHarness(t, harnessOptions{configure: withTestModels, clientFor: (&mockFactory{}).client})
-			mgr, projects := h.mgr, h.store
+			mgr := h.mgr
 			defer mgr.Shutdown(t.Context(), time.Second)
-			ctx := context.Background()
-			projectID := testProject(t, projects, t.TempDir())
-			parent, err := mgr.store.CreateSession(ctx, projectID, "fake-model", "", nil)
-			require.NoError(t, err)
-			child, err := mgr.store.CreateSession(ctx, projectID, "fake-model", "", nil)
-			require.NoError(t, err)
+			ctx := h.ctx
+			parent := h.createRoot(nil)
+			child := h.createRoot(nil)
 			h.attachChildLink(subagent.Link{
-				ParentID: parent.ID, ChildID: child.ID, TaskCallID: "terminal", State: state,
+				ParentID: parent, ChildID: child, TaskCallID: "terminal", State: state,
 			})
-			require.NoError(t, mgr.start(ctx, child.ID))
-			assert.False(t, mgr.HasActiveLoop(child.ID))
+			require.NoError(t, mgr.start(ctx, child))
+			assert.False(t, mgr.HasActiveLoop(child))
 			assert.Zero(t, runnerRunningCount(mgr.runners))
 		})
 	}
@@ -161,21 +130,18 @@ func TestStartRejectsKilledSessionWithRunningChildLink(t *testing.T) {
 	h := newHarness(t, harnessOptions{configure: withTestModels, clientFor: (&mockFactory{}).client})
 	mgr, projects := h.mgr, h.store
 	defer mgr.Shutdown(t.Context(), time.Second)
-	ctx := context.Background()
-	projectID := testProject(t, projects, t.TempDir())
-	parent, err := mgr.store.CreateSession(ctx, projectID, "fake-model", "", nil)
-	require.NoError(t, err)
-	child, err := mgr.store.CreateSession(ctx, projectID, "fake-model", "", nil)
-	require.NoError(t, err)
+	ctx := h.ctx
+	parent := h.createRoot(nil)
+	child := h.createRoot(nil)
 	h.attachChildLink(subagent.Link{
-		ParentID: parent.ID, ChildID: child.ID, TaskCallID: "running", State: subagent.StateRunning,
+		ParentID: parent, ChildID: child, TaskCallID: "running", State: subagent.StateRunning,
 	})
 	require.NoError(t, projects.WithTx(ctx, func(tx *sql.Tx) error {
-		return sessionstore.MarkSessionKilledTx(ctx, tx, child.ID)
+		return sessionstore.MarkSessionKilledTx(ctx, tx, child)
 	}))
-	err = mgr.start(ctx, child.ID)
+	err := mgr.start(ctx, child)
 	require.ErrorContains(t, err, "killed")
-	assert.False(t, mgr.HasActiveLoop(child.ID))
+	assert.False(t, mgr.HasActiveLoop(child))
 	assert.Zero(t, runnerRunningCount(mgr.runners))
 }
 
@@ -195,15 +161,11 @@ func TestScenario_RunnerAddsNoChildLifetimeDeadline(t *testing.T) {
 		)
 	}
 	h := newHarness(t, harnessOptions{respond: respond})
-	defer func() {
-		closeOnce(childRelease)
-		h.shutdown()
-	}()
+	defer closeOnce(childRelease)
 	h.startInboxWake()
 	parentID, err := h.mgr.Send(h.ctx, h.projectID, "spawn for seam check", "fake-model", nil)
 	require.NoError(t, err)
-	h.waitUntil("child link", func() bool { return h.linkByCall(parentID, taskCallID) != nil })
-	link := *h.linkByCall(parentID, taskCallID)
+	link := h.waitLink(parentID, taskCallID)
 	childSessionID := fmt.Sprintf("%d:%d", parentID, link.ChildID)
 
 	// Inspect the context inside Chat; the runner must not add a child lifetime deadline.
@@ -227,15 +189,12 @@ func TestScenario_RunnerAddsNoChildLifetimeDeadline(t *testing.T) {
 
 func TestEnsureRunner_EmptyRootPublishesCreatedAndIdle(t *testing.T) {
 	h := newHarness(t, harnessOptions{configure: withTestModels, clientFor: (&mockFactory{}).client})
-	mgr, projects := h.mgr, h.store
-	ctx := context.Background()
-	workDir := t.TempDir()
-	projectID := testProject(t, projects, workDir)
-	rec, err := mgr.store.CreateSession(ctx, projectID, "fake-model", "", nil)
-	require.NoError(t, err)
+	mgr := h.mgr
+	ctx := h.ctx
+	rec := h.createRoot(nil)
 	notifications := mgr.bus.SubscribeAll()
 	defer mgr.bus.UnsubscribeAll(notifications)
-	require.NoError(t, mgr.start(ctx, rec.ID))
+	require.NoError(t, mgr.start(ctx, rec))
 	created := requireNotification(t, notifications)
 	assert.Equal(t, sessionevent.NotifySessionCreated, created.Notification.Type)
 	idle := requireNotification(t, notifications)
@@ -243,7 +202,7 @@ func TestEnsureRunner_EmptyRootPublishesCreatedAndIdle(t *testing.T) {
 	assert.Equal(t, controllerapi.StateIdle, idle.Notification.Status)
 	h.waitUntil(
 		"empty runner idle",
-		func() bool { return !mgr.HasActiveLoop(rec.ID) },
+		func() bool { return !mgr.HasActiveLoop(rec) },
 	)
 }
 
@@ -256,11 +215,7 @@ func TestStartLockedRejectsShutdown(t *testing.T) {
 
 // An unreadable ledger must not let a child bypass its parent's quota.
 func TestEnsureRunner_ClassifyErrorBlocksStart(t *testing.T) {
-	var flaky *flakyLinkStore
-	h := newHarness(t, harnessOptions{respond: trivialRespond, links: func(inner subagent.Store) subagent.Store {
-		flaky = newFlakyLinkStore(inner)
-		return flaky
-	}})
+	h, flaky := newFlakyLinkHarness(t, trivialRespond)
 	var err error
 	rec := h.createRoot(nil)
 	totalBefore, childrenBefore := runnerRunningCount(h.mgr.runners), runnerChildCount(h.mgr.runners)
@@ -274,11 +229,7 @@ func TestEnsureRunner_ClassifyErrorBlocksStart(t *testing.T) {
 
 // Failed starts retain their input and wait for the bounded admission retry.
 func TestDrainQueue_StartErrorRetainsWaitingInput(t *testing.T) {
-	var flaky *flakyLinkStore
-	h := newHarness(t, harnessOptions{respond: trivialRespond, links: func(inner subagent.Store) subagent.Store {
-		flaky = newFlakyLinkStore(inner)
-		return flaky
-	}})
+	h, flaky := newFlakyLinkHarness(t, trivialRespond)
 	parent := h.createRoot(nil)
 	childID := h.createChild(parent, subagent.Link{TaskCallID: "bg"})
 	h.mgr.runners.wait(waitingRunner{sessionID: childID, parentID: parent, child: true})

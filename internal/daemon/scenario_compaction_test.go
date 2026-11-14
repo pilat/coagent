@@ -38,11 +38,8 @@ func TestScenario_AutomaticCompactionRunsInsideTheDaemon(t *testing.T) {
 	}
 	h := newHarness(t, harnessOptions{respond: respond})
 
-	events := collectEvents(t, h.mgr.bus.SubscribeAll())
-	defer events.stop()
-	h.startInboxWake()
-	parentID, err := h.mgr.Send(h.ctx, h.projectID, "start the scripted work", "fake-model", nil)
-	require.NoError(t, err)
+	events := h.collect()
+	parentID := h.send("start the scripted work", nil)
 	h.waitUntil("compacted answer", func() bool {
 		return !h.mgr.HasActiveLoop(parentID) &&
 			lastAssistantTextDTO(h.messages(parentID)) == "work complete"
@@ -106,13 +103,9 @@ func TestScenario_AutoCompactionWhileABackgroundChildIsInFlight(t *testing.T) {
 	}
 	h := newHarness(t, harnessOptions{respond: respond})
 
-	events := collectEvents(t, h.mgr.bus.SubscribeAll())
-	defer events.stop()
-	h.startInboxWake()
-	parentID, err := h.mgr.Send(h.ctx, h.projectID, "spawn then keep working", "fake-model", nil)
-	require.NoError(t, err)
-	h.waitUntil("child link", func() bool { return h.linkByCall(parentID, taskCallID) != nil })
-	link := *h.linkByCall(parentID, taskCallID)
+	events := h.collect()
+	parentID := h.send("spawn then keep working", nil)
+	link := h.waitLink(parentID, taskCallID)
 	require.False(t, link.Blocking, "the scenario needs a background child")
 	select {
 	case <-compactionEntered:
@@ -127,10 +120,7 @@ func TestScenario_AutoCompactionWhileABackgroundChildIsInFlight(t *testing.T) {
 		return lerr == nil && lnk != nil && lnk.Terminal()
 	})
 	close(compactionRelease)
-	h.waitUntil(
-		"child delivery",
-		func() bool { link := h.link(link.ChildID); return link != nil && link.DeliveredAt != 0 },
-	)
+	h.waitDelivered(link.ChildID)
 	// Delivery commits the inbox before the parent resumes; an idle gap is not completion.
 	events.waitIdleAfter(parentID, "child completion handled")
 	msgs := h.messages(parentID)
@@ -168,24 +158,13 @@ func TestScenario_AutoCompactionWhileABackgroundChildIsInFlight(t *testing.T) {
 func TestScenario_DeferredCompactAnnouncesItselfOncePerEpisode(t *testing.T) {
 	release := make(chan struct{})
 	h := newHarness(t, harnessOptions{respond: blockingCompactRespond(release)})
-	collector := collectEvents(t, h.mgr.bus.SubscribeAll())
-	closed := false
-	defer func() {
-		if !closed {
-			close(release)
-		}
-		collector.stop()
-		h.shutdown()
-	}()
-	h.startInboxWake()
-	parentID, err := h.mgr.Send(h.ctx, h.projectID, "do work then spawn", "fake-model", nil)
-	require.NoError(t, err)
-	h.waitUntil("child link", func() bool { return h.linkByCall(parentID, taskCallID) != nil })
-	link := *h.linkByCall(parentID, taskCallID)
+	collector := h.collect()
+	defer closeOnce(release)
+	parentID := h.send("do work then spawn", nil)
+	link := h.waitLink(parentID, taskCallID)
 	require.True(t, link.Blocking)
 	h.waitUntil("parent suspended", func() bool { return !h.mgr.HasActiveLoop(parentID) })
-	h.startInboxWake()
-	require.NoError(t, h.mgr.sendToSession(h.ctx, parentID, "/compact"))
+	h.say(parentID, "/compact")
 	collector.waitFor(
 		t,
 		"deferral notice reaches the controller",
@@ -197,19 +176,14 @@ func TestScenario_DeferredCompactAnnouncesItselfOncePerEpisode(t *testing.T) {
 
 	// Repeated wakes rebuild durable state without starting a new episode for the pending child.
 	for _, msg := range []string{"any progress?", "still there?"} {
-		h.startInboxWake()
-		require.NoError(t, h.mgr.sendToSession(h.ctx, parentID, msg))
+		h.say(parentID, msg)
 		h.waitUntil("wake finished", func() bool { return !h.mgr.HasActiveLoop(parentID) })
 	}
 	assert.Equal(t, 1, countPublishedMessage(collector.snapshot(), parentID, noticeCompactDeferred),
 		"one deferral notice per deferral episode, however often the session is woken")
 	close(release)
-	closed = true
-	h.waitUntil(
-		"child delivery",
-		func() bool { link := h.link(link.ChildID); return link != nil && link.DeliveredAt != 0 },
-	)
-	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(parentID) })
+	h.waitDelivered(link.ChildID)
+	h.waitAnswer(parentID, "")
 
 	// The episode ends by running: the deferred request is not silently dropped.
 	collector.waitFor(t, "the deferred compaction runs", func(events []controllerapi.SessionNotification) bool {
@@ -221,27 +195,22 @@ func TestScenario_DeferredCompactAnnouncesItselfOncePerEpisode(t *testing.T) {
 // Compaction progress must reach the controller in the recorded order.
 func TestScenario_CompactPublishesItsOrderedNoticeTrace(t *testing.T) {
 	h := newHarness(t, harnessOptions{respond: compactOnlyRespond})
-	collector := collectEvents(t, h.mgr.bus.SubscribeAll())
-	defer collector.stop()
-	h.startInboxWake()
-	sessionID, err := h.mgr.Send(h.ctx, h.projectID, "do some work", "fake-model", nil)
-	require.NoError(t, err)
-	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(sessionID) })
-	h.startInboxWake()
-	require.NoError(t, h.mgr.sendToSession(h.ctx, sessionID, "/compact"))
+	collector := h.collect()
+	sessionID := h.send("do some work", nil)
+	h.waitAnswer(sessionID, "")
+	h.say(sessionID, "/compact")
 	collector.waitFor(t, "first compaction reported", func(events []controllerapi.SessionNotification) bool {
 		return countPublishedMessage(events, sessionID, noticeCompacted) == 1
 	})
-	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(sessionID) })
+	h.waitAnswer(sessionID, "")
 	require.True(t, hasSummaryRow(h.messages(sessionID)))
 
 	// Confirmation creates another raw group, allowing a second compact; the loop tests cover the empty-history branch.
-	h.startInboxWake()
-	require.NoError(t, h.mgr.sendToSession(h.ctx, sessionID, "/compact"))
+	h.say(sessionID, "/compact")
 	collector.waitFor(t, "second compaction reported", func(events []controllerapi.SessionNotification) bool {
 		return countPublishedMessage(events, sessionID, noticeCompacted) == 2
 	})
-	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(sessionID) })
+	h.waitAnswer(sessionID, "")
 	assert.Equal(t,
 		[]string{noticeCompacting, noticeCompacted, noticeCompacting, noticeCompacted},
 		compactionNotices(collector.snapshot(), sessionID),
@@ -251,18 +220,11 @@ func TestScenario_CompactPublishesItsOrderedNoticeTrace(t *testing.T) {
 // Child housekeeping notices must remain inside the tree instead of reaching the human.
 func TestScenario_SubagentCompactionNoticesStayInsideTheTree(t *testing.T) {
 	h := newHarness(t, harnessOptions{})
-	collector := collectEvents(t, h.mgr.bus.SubscribeAll())
-	defer collector.stop()
-	h.startInboxWake()
-	parentID, err := h.mgr.Send(h.ctx, h.projectID, "SPAWN_CHILD please", "fake-model", nil)
-	require.NoError(t, err)
-	h.waitUntil("child link", func() bool { return h.linkByCall(parentID, taskCallID) != nil })
-	link := *h.linkByCall(parentID, taskCallID)
-	h.waitUntil(
-		"child delivery",
-		func() bool { link := h.link(link.ChildID); return link != nil && link.DeliveredAt != 0 },
-	)
-	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(parentID) })
+	collector := h.collect()
+	parentID := h.send("SPAWN_CHILD please", nil)
+	link := h.waitLink(parentID, taskCallID)
+	h.waitDelivered(link.ChildID)
+	h.waitAnswer(parentID, "")
 	require.NoError(t, h.mgr.SendToChild(h.ctx, link.ChildID, "/compact"))
 	h.waitUntil("child compacted", func() bool {
 		stored, loadErr := h.store.LoadActiveMessages(h.ctx, link.ChildID)
@@ -278,22 +240,12 @@ func TestScenario_SubagentCompactionNoticesStayInsideTheTree(t *testing.T) {
 func TestScenario_CompactWaitsForABlockingChildThenRuns(t *testing.T) {
 	release := make(chan struct{})
 	h := newHarness(t, harnessOptions{respond: blockingCompactRespond(release)})
-	closed := false
-	defer func() {
-		if !closed {
-			close(release)
-		}
-		h.shutdown()
-	}()
-	h.startInboxWake()
-	parentID, err := h.mgr.Send(h.ctx, h.projectID, "do work then spawn", "fake-model", nil)
-	require.NoError(t, err)
-	h.waitUntil("child link", func() bool { return h.linkByCall(parentID, taskCallID) != nil })
-	link := *h.linkByCall(parentID, taskCallID)
+	defer closeOnce(release)
+	parentID := h.send("do work then spawn", nil)
+	link := h.waitLink(parentID, taskCallID)
 	require.True(t, link.Blocking)
 	h.waitUntil("parent suspended", func() bool { return !h.mgr.HasActiveLoop(parentID) })
-	h.startInboxWake()
-	require.NoError(t, h.mgr.sendToSession(h.ctx, parentID, "/compact"))
+	h.say(parentID, "/compact")
 
 	// A pending task result keeps the session unrunnable and prevents compaction.
 	msgs := h.messages(parentID)
@@ -301,16 +253,12 @@ func TestScenario_CompactWaitsForABlockingChildThenRuns(t *testing.T) {
 	assert.True(t, (countAssistantToolCallsFor(msgs, "task") > 0), "the tool_use the child owns is still there")
 	assert.Zero(t, countToolResultsFor(msgs, "task"))
 	close(release)
-	closed = true
-	h.waitUntil(
-		"child delivery",
-		func() bool { link := h.link(link.ChildID); return link != nil && link.DeliveredAt != 0 },
-	)
+	h.waitDelivered(link.ChildID)
 	h.waitUntil("deferred compact answered", func() bool {
 		messages := h.messages(parentID)
 		return hasSummaryRow(messages) && countToolResultsFor(messages, "task") == 1
 	})
-	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(parentID) })
+	h.waitAnswer(parentID, "")
 
 	// Settle the tool result before queued compaction so pending-call resolution sees no dangling pair.
 	final := h.messages(parentID)
@@ -329,15 +277,11 @@ func TestScenario_DeferredCompactSurvivesADaemonRestart(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "restart.db")
 	release := make(chan struct{})
 	first := newHarness(t, harnessOptions{dbPath: dbPath, respond: blockingCompactRespond(release)})
-	first.startInboxWake()
-	parentID, err := first.mgr.Send(first.ctx, first.projectID, "do work then spawn", "fake-model", nil)
-	require.NoError(t, err)
-	first.waitUntil("child link", func() bool { return first.linkByCall(parentID, taskCallID) != nil })
-	link := *first.linkByCall(parentID, taskCallID)
+	parentID := first.send("do work then spawn", nil)
+	link := first.waitLink(parentID, taskCallID)
 	require.True(t, link.Blocking)
 	first.waitUntil("parent suspended", func() bool { return !first.mgr.HasActiveLoop(parentID) })
-	first.startInboxWake()
-	require.NoError(t, first.mgr.sendToSession(first.ctx, parentID, "/compact"))
+	first.say(parentID, "/compact")
 	require.False(t, hasSummaryRow(first.messages(parentID)))
 
 	// Daemon goes down with the child still running and /compact still queued.
@@ -345,7 +289,7 @@ func TestScenario_DeferredCompactSurvivesADaemonRestart(t *testing.T) {
 	first.shutdown()
 
 	// Recovery resumes the child, whose completion revives the parent and its queued compaction.
-	second := newHarness(t, harnessOptions{dbPath: dbPath, respond: blockingCompactRespond(nil)})
+	second := first.restart(blockingCompactRespond(nil))
 	require.NoError(t, second.mgr.Start(second.ctx))
 	second.waitUntil("restart compact completed", func() bool {
 		return hasSummaryRow(second.messages(parentID))
@@ -376,31 +320,16 @@ func TestHarnessScenario_CompactMidActivationStillAnswersTheInterruptedWork(t *t
 		return callReply("ls-call-1", "ls", `{"path":"."}`)
 	}
 	h := newHarness(t, harnessOptions{respond: respond})
-	collector := collectEvents(t, h.mgr.bus.SubscribeAll())
-	released := false
-	defer func() {
-		if !released {
-			close(release)
-		}
-		collector.stop()
-		h.shutdown()
-	}()
-	h.startInboxWake()
-	sessionID, err := h.mgr.Send(h.ctx, h.projectID, "list the workdir", "fake-model", nil)
-	require.NoError(t, err)
-	select {
-	case <-entered:
-	case <-time.After(5 * time.Second):
-		t.Fatal("the model was never asked for the first turn")
-	}
-	h.startInboxWake()
-	require.NoError(t, h.mgr.sendToSession(h.ctx, sessionID, "/compact"))
+	collector := h.collect()
+	defer closeOnce(release)
+	sessionID := h.send("list the workdir", nil)
+	require.True(t, closedInTime(entered), "the model was never asked for the first turn")
+	h.say(sessionID, "/compact")
 	close(release)
-	released = true
 	collector.waitFor(t, "the requested compaction runs", func(e []controllerapi.SessionNotification) bool {
 		return countPublishedMessage(e, sessionID, noticeCompacted) == 1
 	})
-	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(sessionID) })
+	h.waitAnswer(sessionID, "")
 	collector.waitFor(t, "the interrupted work is still answered", func(e []controllerapi.SessionNotification) bool {
 		return countPublishedMessage(e, sessionID, "work done") == 1
 	})
@@ -428,16 +357,12 @@ func TestHarnessScenario_CompactSuccessChain(t *testing.T) {
 	}
 	h := newHarness(t, harnessOptions{respond: respond})
 
-	collector := collectEvents(t, h.mgr.bus.SubscribeAll())
-	defer collector.stop()
-	h.startInboxWake()
-	root, err := h.mgr.Send(h.ctx, h.projectID, "first prompt", "fake-model", managerAttrs(scenarioManagerID))
-	require.NoError(t, err)
+	collector := h.collect()
+	root := h.send("first prompt", managerAttrs(scenarioManagerID))
 	collector.waitMessage(root, "First answer.")
 	// Wait for teardown so compaction deterministically re-announces the session.
 	h.waitUntil("first runner gone", func() bool { return !h.mgr.HasActiveLoop(root) })
-	h.startInboxWake()
-	require.NoError(t, h.mgr.sendToSession(h.ctx, root, "/compact keep the TODO state"))
+	h.say(root, "/compact keep the TODO state")
 	collector.waitFor(t, "compaction finished", func(events []controllerapi.SessionNotification) bool {
 		for _, event := range events {
 			if event.SessionID == root && event.Notification.Message == "✅ Context compacted" {

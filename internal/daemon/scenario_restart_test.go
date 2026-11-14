@@ -43,11 +43,7 @@ func TestHarnessScenario_CompletionCheckCrashAfterToolPersistenceRestartsClean(t
 			return callReply("sleep-call", tool.IDSleep, `{"duration":"10m","reason":"hold the turn"}`)
 		}},
 	)
-	first.startInboxWake()
-	root, err := first.mgr.Send(
-		first.ctx, first.projectID, "sleep then answer", "fake-model", managerAttrs(scenarioManagerID),
-	)
-	require.NoError(t, err)
+	root := first.send("sleep then answer", managerAttrs(scenarioManagerID))
 	firstCollector := collectEvents(t, first.mgr.bus.SubscribeAll())
 	defer firstCollector.stop()
 	firstCollector.waitWait(root, sessionevent.WaitSleep)
@@ -56,18 +52,14 @@ func TestHarnessScenario_CompletionCheckCrashAfterToolPersistenceRestartsClean(t
 	state, stateErr := first.store.LoadCompletionCheckState(first.ctx, root)
 	require.NoError(t, stateErr)
 	assert.Nil(t, state.CandidateID, "a tool-bearing response clears any pending check")
-	first.shutdown()
-	second := newHarness(
-		t,
-		harnessOptions{dbPath: dbPath, respond: func(_ string, messages []llmwire.Message) *llmwire.Response {
-			if hasUserContaining(messages, "<interrupted>") {
-				return textReply("settled interrupted call")
-			}
-			return textReply("fresh confirmation after crash")
-		}},
-	)
-	second.startInboxWake()
-	second.mgr.resumeAfterRestart(second.ctx)
+
+	second := first.restart(func(_ string, messages []llmwire.Message) *llmwire.Response {
+		if hasUserContaining(messages, "<interrupted>") {
+			return textReply("settled interrupted call")
+		}
+		return textReply("fresh confirmation after crash")
+	})
+	second.resume()
 	restarted, err := second.store.LoadCompletionCheckState(second.ctx, root)
 	require.NoError(t, err)
 	assert.Nil(t, restarted.CandidateID, "no pending check survives beside a durable tool request")
@@ -103,12 +95,10 @@ func TestHarnessScenario_RestartResumesExplicitInputQueuedOnStoppedRoot(t *testi
 		},
 	)
 	require.NoError(t, err)
-	first.shutdown()
-	second := newHarness(t, harnessOptions{dbPath: dbPath, respond: respond})
-	collector := collectEvents(t, second.mgr.bus.SubscribeAll())
-	defer collector.stop()
-	second.startInboxWake()
-	second.mgr.resumeAfterRestart(second.ctx)
+
+	second := first.restart(nil)
+	collector := second.collect()
+	second.resume()
 	collector.waitMessage(root, "stopped root resumed after restart")
 	collector.waitIdleAfter(root, "stopped root resumed after restart")
 	// Explicit resume still spends a hidden candidate and a confirmation call.
@@ -140,16 +130,14 @@ func TestHarnessScenario_RestartConsumesReadOnlyInputQueuedOnStoppedRoot(t *test
 		},
 	)
 	require.NoError(t, err)
-	first.shutdown()
-	second := newHarness(t, harnessOptions{dbPath: dbPath, respond: respond})
+
+	second := first.restart(nil)
 	beforeRecovery := second.session(root)
 	preserveStopped, err := second.mgr.commandOnlyStoppedRoot(second.ctx, beforeRecovery)
 	require.NoError(t, err)
 	require.True(t, preserveStopped)
-	collector := collectEvents(t, second.mgr.bus.SubscribeAll())
-	defer collector.stop()
-	second.startInboxWake()
-	second.mgr.resumeAfterRestart(second.ctx)
+	collector := second.collect()
+	second.resume()
 	collector.waitFor(t, "session help", func(events []controllerapi.SessionNotification) bool {
 		return slices.ContainsFunc(events, func(event controllerapi.SessionNotification) bool {
 			return event.SessionID == root && event.Notification.Type == sessionevent.NotifyMessage &&
@@ -202,10 +190,8 @@ func TestScenario_RestartResumesExplicitInputQueuedOnErroredChild(t *testing.T) 
 	)
 	require.NoError(t, err)
 	require.NoError(t, first.store.UpdateSessionStatus(first.ctx, root, sessionstore.SessionStatusStopped))
-	first.shutdown()
-	second := newHarness(t, harnessOptions{dbPath: dbPath, respond: func(string, []llmwire.Message) *llmwire.Response {
-		return textReply("must remain queued")
-	}})
+
+	second := first.restart(nil)
 	defer second.shutdown()
 	for i := range maxChildren {
 		require.True(t, second.mgr.runners.tryAdmit(true, int64(30_000+i)))
@@ -260,26 +246,7 @@ func TestHarnessScenario_RestartSettlesPersistedFinalWithoutRepublishing(t *test
 	}
 	first := newHarness(t, harnessOptions{dbPath: dbPath, respond: respond})
 	root := first.createRoot(nil)
-	input, err := first.store.Enqueue(
-		first.ctx,
-		sessionstore.Input{SessionID: root, Source: sessionstore.InputSourceUser, Content: "answered before crash"},
-	)
-	require.NoError(t, err)
-	_, err = first.store.Commit(
-		first.ctx, sessionstore.Commit{
-			SessionID: input.Input.SessionID,
-			Accept: []sessionstore.Accept{
-				{
-					InputID:    input.Input.ID,
-					State:      sessionstore.InputStateAccepted,
-					Content:    "[user] answered before crash",
-					LinkRef:    -1,
-					ModelBound: true,
-				},
-			},
-		},
-	)
-	require.NoError(t, err)
+	first.acceptUserInput(root, "answered before crash", "[user] answered before crash")
 	final, err := first.store.Commit(
 		first.ctx, sessionstore.Commit{
 			SessionID: root,
@@ -292,12 +259,10 @@ func TestHarnessScenario_RestartSettlesPersistedFinalWithoutRepublishing(t *test
 		sessionstore.Commit{SessionID: root, State: sessionstore.StatePatch{ConfirmedAnswerID: &final.MessageIDs[0]}},
 	)
 	require.NoError(t, err)
-	first.shutdown()
-	second := newHarness(t, harnessOptions{dbPath: dbPath, respond: respond})
-	collector := collectEvents(t, second.mgr.bus.SubscribeAll())
-	defer collector.stop()
-	second.startInboxWake()
-	second.mgr.resumeAfterRestart(second.ctx)
+
+	second := first.restart(nil)
+	collector := second.collect()
+	second.resume()
 	collector.waitFor(t, "persisted final settled", func(events []controllerapi.SessionNotification) bool {
 		return slices.ContainsFunc(events, func(event controllerapi.SessionNotification) bool {
 			return event.SessionID == root &&
@@ -347,12 +312,10 @@ func TestHarnessScenario_RestartDoesNotRunHandledHeaderOnlySession(t *testing.T)
 		)
 		return err
 	}())
-	first.shutdown()
-	second := newHarness(t, harnessOptions{dbPath: dbPath, respond: respond})
-	collector := collectEvents(t, second.mgr.bus.SubscribeAll())
-	defer collector.stop()
-	second.startInboxWake()
-	second.mgr.resumeAfterRestart(second.ctx)
+
+	second := first.restart(nil)
+	collector := second.collect()
+	second.resume()
 	assert.False(t, second.mgr.HasActiveLoop(root))
 	assert.Zero(t, modelCalls.Load())
 	assert.Empty(t, collector.snapshot(), "handled control input must not create recovery events")
@@ -381,10 +344,7 @@ func TestIntegration_SweepRedeliversIdempotently(t *testing.T) {
 	// First sweep delivers exactly one completion.
 	h.startInboxWake()
 	h.mgr.resumeAfterRestart(ctx)
-	h.waitUntil(
-		"child delivery",
-		func() bool { delivery := h.link(childID); return delivery != nil && delivery.DeliveredAt != 0 },
-	)
+	h.waitDelivered(childID)
 	h.waitUntil("parent completions", func() bool {
 		count := 0
 		needle := "child_id: " + strconv.FormatInt(childID, 10)
@@ -396,15 +356,14 @@ func TestIntegration_SweepRedeliversIdempotently(t *testing.T) {
 		}
 		return count >= 1
 	})
-	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(parent) })
+	h.waitAnswer(parent, "")
 	msgs := h.messages(parent)
 	require.NoError(t, llmtest.ValidateToolPairing(msgs))
 	assert.Equal(t, 1, restartCountSubagentCompletions(msgs, childID), "exactly one record after first sweep")
 
 	// A delivered link is excluded from the restart sweep, so redelivery adds no second completion.
-	h.startInboxWake()
 	h.mgr.resumeAfterRestart(ctx)
-	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(parent) })
+	h.waitAnswer(parent, "")
 	msgs = h.messages(parent)
 	assert.Equal(
 		t, 1, restartCountSubagentCompletions(
@@ -454,9 +413,7 @@ func TestHarnessModel_PendingExternalCallOwnershipAgreesAfterRestart(t *testing.
 		configDir := newApplyConfigDir(t)
 		var seen modelRequests
 		first := newExternalCallDaemon(t, dbPath, configDir, seen.wrap(askForBlockingTaskRespond))
-		first.startInboxWake()
-		sessionID, err := first.mgr.Send(first.ctx, first.projectID, "do work then spawn", "fake-model", nil)
-		require.NoError(t, err)
+		sessionID := first.send("do work then spawn", nil)
 		first.waitUntil("the parent parked on the child", func() bool {
 			return countAssistantToolCallsFor(first.messages(sessionID), tool.IDTask) == 1 &&
 				!first.mgr.HasActiveLoop(sessionID)
@@ -485,9 +442,7 @@ func TestScenario_BlockingTaskOrphanedByARestartIsClosedOnce(t *testing.T) {
 		return askForBlockingTaskRespond(system, msgs)
 	}
 	first := newExternalCallDaemon(t, dbPath, configDir, seen.wrap(heldRespond))
-	first.startInboxWake()
-	sessionID, err := first.mgr.Send(first.ctx, first.projectID, "do work then spawn", "fake-model", nil)
-	require.NoError(t, err)
+	sessionID := first.send("do work then spawn", nil)
 	first.waitUntil("the parent parked on the child", func() bool {
 		return first.parkedOnChild(sessionID)
 	})
@@ -496,7 +451,7 @@ func TestScenario_BlockingTaskOrphanedByARestartIsClosedOnce(t *testing.T) {
 	link := first.linkByCall(sessionID, orphanTaskCallID)
 	require.NotNil(t, link, "the suspended parent owes its call to a child link")
 	require.Zero(t, link.DeliveredAt, "the child must still be parked when its link is removed")
-	_, err = first.db.ExecContext(first.ctx, `DELETE FROM subagent_links WHERE child_id = ?`, link.ChildID)
+	_, err := first.db.ExecContext(first.ctx, `DELETE FROM subagent_links WHERE child_id = ?`, link.ChildID)
 	require.NoError(t, err)
 	first.shutdown()
 	second := newExternalCallDaemon(t, dbPath, configDir, seen.wrap(askForBlockingTaskRespond))
@@ -509,13 +464,12 @@ func TestScenario_BlockingTaskOrphanedByARestartIsClosedOnce(t *testing.T) {
 	require.NoError(t, llmtest.ValidateToolPairing(recovered), "boot must leave a transcript a provider accepts")
 	require.Equal(t, 1, countToolResultsFor(recovered, tool.IDTask), "the abandoned task is closed exactly once")
 	assert.Contains(t, restartLastToolResultContent(recovered, tool.IDTask), "restarted")
-	second.startInboxWake()
-	require.NoError(t, second.mgr.sendToSession(second.ctx, sessionID, "any progress?"))
+	second.say(sessionID, "any progress?")
 	second.waitUntil("follow-up consumed", func() bool {
 		return hasUserContaining(second.messages(sessionID), "any progress?") &&
 			!second.mgr.HasActiveLoop(sessionID)
 	})
-	second.waitUntil("session idle", func() bool { return !second.mgr.HasActiveLoop(sessionID) })
+	second.waitAnswer(sessionID, "")
 	second.waitUntil("unlinked child completed", func() bool {
 		record, loadErr := second.store.GetSession(second.ctx, link.ChildID)
 		return loadErr == nil && record.Status == sessionstore.SessionStatusCompleted
@@ -571,20 +525,13 @@ func TestScenario_MessageQueuedBehindAnOrphanedTaskRunsAfterRecovery(t *testing.
 	}
 	first := newExternalCallDaemon(t, dbPath, configDir, seen.wrap(heldRespond))
 	defer func() {
-		select {
-		case <-childHeld:
-		default:
-			close(childHeld)
-		}
+		closeOnce(childHeld)
 	}()
-	first.startInboxWake()
-	sessionID, err := first.mgr.Send(first.ctx, first.projectID, "do work then spawn", "fake-model", nil)
-	require.NoError(t, err)
+	sessionID := first.send("do work then spawn", nil)
 	first.waitUntil("the parent parked on the child", func() bool {
 		return first.parkedOnChild(sessionID)
 	})
-	first.startInboxWake()
-	require.NoError(t, first.mgr.sendToSession(first.ctx, sessionID, "any progress?"))
+	first.say(sessionID, "any progress?")
 	first.waitUntil("input behind task", func() bool {
 		_, pendErr := first.store.PeekPending(first.ctx, sessionID)
 		return pendErr == nil && !first.mgr.HasActiveLoop(sessionID)
@@ -602,7 +549,7 @@ func TestScenario_MessageQueuedBehindAnOrphanedTaskRunsAfterRecovery(t *testing.
 	second.waitUntil("the queued message finally ran", func() bool {
 		return hasUserContaining(second.messages(sessionID), "any progress?")
 	})
-	second.waitUntil("session idle", func() bool { return !second.mgr.HasActiveLoop(sessionID) })
+	second.waitAnswer(sessionID, "")
 	final := second.messages(sessionID)
 	require.NoError(t, llmtest.ValidateToolPairing(final))
 	assert.Equal(t, 1, countAssistantToolCallsFor(final, tool.IDTask))
@@ -667,26 +614,7 @@ func TestHarnessScenario_ForegroundBashCrashRestartResolvesInterruptedCall(t *te
 	}
 	first := newHarness(t, harnessOptions{dbPath: dbPath, respond: respond})
 	root := first.createRoot(nil)
-	input, err := first.store.Enqueue(
-		first.ctx,
-		sessionstore.Input{SessionID: root, Source: sessionstore.InputSourceUser, Content: "run the command"},
-	)
-	require.NoError(t, err)
-	_, err = first.store.Commit(
-		first.ctx, sessionstore.Commit{
-			SessionID: input.Input.SessionID,
-			Accept: []sessionstore.Accept{
-				{
-					InputID:    input.Input.ID,
-					State:      sessionstore.InputStateAccepted,
-					Content:    "run the command",
-					LinkRef:    -1,
-					ModelBound: true,
-				},
-			},
-		},
-	)
-	require.NoError(t, err)
+	first.acceptUserInput(root, "run the command", "run the command")
 	toolCalls, err := json.Marshal([]llmwire.ToolCall{
 		{ID: "fg-bash", Name: "bash", Arguments: []byte(`{"command":"printf 'hello\\n'"}`)},
 		{ID: "fg-read", Name: "read", Arguments: []byte(`{"path":"a.go"}`)},
@@ -778,23 +706,17 @@ func TestResponseIntegrity_RestartAfterTerminalFailureDoesNotRetry(t *testing.T)
 			return &llmwire.Response{Text: "discarded terminal", FinishType: llmwire.FinishUnknown}
 		}},
 	)
-	first.startInboxWake()
-	rootID, err := first.mgr.Send(first.ctx, first.projectID, "fail terminally", "fake-model", nil)
-	require.NoError(t, err)
-	first.waitUntil("session idle", func() bool { return !first.mgr.HasActiveLoop(rootID) })
+	rootID := first.send("fail terminally", nil)
+	first.waitAnswer(rootID, "")
 	record := first.session(rootID)
 	require.Equal(t, sessionstore.SessionStatusError, record.Status)
 	first.shutdown()
 	var unexpectedCalls atomic.Int64
-	second := newHarness(
-		t,
-		harnessOptions{dbPath: dbPath, respond: func(_ string, _ []llmwire.Message) *llmwire.Response {
-			unexpectedCalls.Add(1)
-			return &llmwire.Response{Text: "unexpected rerun", FinishType: llmwire.FinishStop}
-		}},
-	)
-	second.startInboxWake()
-	second.mgr.resumeAfterRestart(second.ctx)
+	second := first.restart(func(_ string, _ []llmwire.Message) *llmwire.Response {
+		unexpectedCalls.Add(1)
+		return &llmwire.Response{Text: "unexpected rerun", FinishType: llmwire.FinishStop}
+	})
+	second.resume()
 	assert.Never(t, func() bool { return unexpectedCalls.Load() != 0 }, 300*time.Millisecond, 10*time.Millisecond)
 }
 
@@ -814,9 +736,7 @@ func TestScenario_StopOrdinaryBashDoesNotReplayAfterNewInputOrRestart(t *testing
 		t.Run(map[bool]string{false: "same daemon", true: "after restart"}[restart], func(t *testing.T) {
 			dbPath := filepath.Join(t.TempDir(), "ordinary-bash.db")
 			first := newHarness(t, harnessOptions{dbPath: dbPath, respond: respond})
-			first.startInboxWake()
-			firstID, err := first.mgr.Send(first.ctx, first.projectID, "watch checks", "fake-model", nil)
-			require.NoError(t, err)
+			firstID := first.send("watch checks", nil)
 			first.waitUntil("ordinary bash started", func() bool {
 				return countAssistantToolCallsFor(first.messages(firstID), "bash") == 1 &&
 					first.mgr.HasActiveLoop(firstID)
@@ -831,13 +751,11 @@ func TestScenario_StopOrdinaryBashDoesNotReplayAfterNewInputOrRestart(t *testing
 			assert.Equal(t, 1, countToolResultsFor(active, "bash"))
 			d := first
 			if restart {
-				first.shutdown()
-				d = newHarness(t, harnessOptions{dbPath: dbPath, respond: respond})
+				d = first.restart(nil)
 				require.NoError(t, d.mgr.Start(d.ctx))
 			}
-			d.startInboxWake()
-			require.NoError(t, d.mgr.sendToSession(d.ctx, firstID, "what happened?"))
-			d.waitUntil("session idle", func() bool { return !d.mgr.HasActiveLoop(firstID) })
+			d.say(firstID, "what happened?")
+			d.waitAnswer(firstID, "")
 			final := d.messages(firstID)
 			assert.Equal(t, 1, countAssistantToolCallsFor(final, "bash"))
 			assert.Equal(t, 1, countToolResultsFor(final, "bash"))
@@ -859,9 +777,7 @@ func TestScenario_StopThatDidNotSurviveItsRestartStillSettlesTheOrphan(t *testin
 	configDir := newApplyConfigDir(t)
 	var seen modelRequests
 	first := newExternalCallDaemon(t, dbPath, configDir, seen.wrap(askForBlockingTaskRespond))
-	first.startInboxWake()
-	sessionID, err := first.mgr.Send(first.ctx, first.projectID, "do work then spawn", "fake-model", nil)
-	require.NoError(t, err)
+	sessionID := first.send("do work then spawn", nil)
 	first.waitUntil("the parent parked on the child", func() bool {
 		return countAssistantToolCallsFor(first.messages(sessionID), tool.IDTask) == 1 &&
 			!first.mgr.HasActiveLoop(sessionID)
@@ -872,17 +788,15 @@ func TestScenario_StopThatDidNotSurviveItsRestartStillSettlesTheOrphan(t *testin
 	first.shutdown()
 	second := newExternalCallDaemon(t, dbPath, configDir, seen.wrap(askForBlockingTaskRespond))
 	require.NoError(t, second.mgr.Start(second.ctx))
-	second.startInboxWake()
-	second.mgr.resumeAfterRestart(second.ctx)
+	second.resume()
 	rec := second.session(sessionID)
 	require.Equal(t, sessionstore.SessionStatusStopped, rec.Status, "the recovery finished the park")
 	recovered := second.messages(sessionID)
 	require.NoError(t, llmtest.ValidateToolPairing(recovered),
 		"a resumable stopped session must carry a transcript a provider accepts")
 	require.Equal(t, 1, countToolResultsFor(recovered, tool.IDTask), "the abandoned task is settled exactly once")
-	second.startInboxWake()
-	require.NoError(t, second.mgr.sendToSession(second.ctx, sessionID, "any progress?"))
-	second.waitUntil("session idle", func() bool { return !second.mgr.HasActiveLoop(sessionID) })
+	second.say(sessionID, "any progress?")
+	second.waitAnswer(sessionID, "")
 	final := second.messages(sessionID)
 	require.NoError(t, llmtest.ValidateToolPairing(final))
 	assert.Equal(t, 1, countAssistantToolCallsFor(final, tool.IDTask),
@@ -917,16 +831,9 @@ func TestScenario_CrashBetweenFinalizationAndDeliveryRedeliversExactlyOnce(t *te
 			first := newHarness(t, harnessOptions{dbPath: dbPath, respond: crashWindowRespond(tc.background)})
 			gate := newCrashGate(first.mgr.links)
 			first.mgr.links = gate
-			first.startInboxWake()
-			parentID, err := first.mgr.Send(first.ctx, first.projectID, "spawn a child", "fake-model", nil)
-			require.NoError(t, err)
-			first.waitUntil("child link", func() bool { return first.linkByCall(parentID, taskCallID) != nil })
-			link := *first.linkByCall(parentID, taskCallID)
-			select {
-			case <-gate.rejected:
-			case <-time.After(5 * time.Second):
-				t.Fatal("daemon A never reached the owed-completion window")
-			}
+			parentID := first.send("spawn a child", nil)
+			link := first.waitLink(parentID, taskCallID)
+			require.True(t, closedInTime(gate.rejected), "daemon A never reached the owed-completion window")
 			first.shutdown()
 			second := newHarness(t, harnessOptions{dbPath: dbPath, respond: crashWindowRespond(tc.background)})
 			owed := second.link(link.ChildID)
@@ -938,10 +845,7 @@ func TestScenario_CrashBetweenFinalizationAndDeliveryRedeliversExactlyOnce(t *te
 			require.NoError(t, second.mgr.Start(second.ctx))
 
 			// Completion acceptance precedes the parent reply commit; wait for both.
-			second.waitUntil("completion redelivered", func() bool {
-				return lastAssistantTextDTO(second.messages(parentID)) == "parent got the child result"
-			})
-			second.waitUntil("session idle", func() bool { return !second.mgr.HasActiveLoop(parentID) })
+			second.waitAnswer(parentID, "parent got the child result")
 			msgs := second.messages(parentID)
 			require.NoError(t, llmtest.ValidateToolPairing(msgs), "the recovered transcript must stay provider-valid")
 			assert.Equal(t, 1, tc.completions(msgs, link.ChildID), "the redelivery commits exactly one completion")
@@ -973,21 +877,17 @@ func TestScenario_StoppedChildSurvivesARestartWithoutResurrection(t *testing.T) 
 	// An immediate answer after restart exposes an incorrectly resumed child as a delivery.
 	eager := crashWindowRespond(true)
 	first := newHarness(t, harnessOptions{dbPath: dbPath, respond: held})
-	first.startInboxWake()
-	parentID, err := first.mgr.Send(first.ctx, first.projectID, "spawn a child", "fake-model", nil)
-	require.NoError(t, err)
-	first.waitUntil("child link", func() bool { return first.linkByCall(parentID, taskCallID) != nil })
-	link := *first.linkByCall(parentID, taskCallID)
+	parentID := first.send("spawn a child", nil)
+	link := first.waitLink(parentID, taskCallID)
 	first.waitUntil("child loop is live", func() bool { return first.mgr.HasActiveLoop(link.ChildID) })
 	require.NoError(t, first.mgr.sendToSession(first.ctx, link.ChildID, "/stop"))
 	parked := first.link(link.ChildID)
 	require.Equal(t, subagent.StateStopped, parked.State)
-	first.shutdown()
-	second := newHarness(t, harnessOptions{dbPath: dbPath, respond: eager})
+
+	second := first.restart(eager)
 	defer second.shutdown()
 	require.NoError(t, second.mgr.Start(second.ctx))
-	second.startInboxWake()
-	second.mgr.resumeAfterRestart(second.ctx)
+	second.resume()
 	require.Never(t, func() bool {
 		current, linkErr := second.links.GetLink(second.ctx, link.ChildID)
 		return linkErr == nil && current != nil &&
@@ -1062,8 +962,7 @@ func TestScenario_OwnedTaskCallSurvivesSchemaUpgradeAndRestarts(t *testing.T) {
 	}
 	h := newHarness(t, harnessOptions{dbPath: dbPath, respond: respond})
 	require.NoError(t, h.mgr.Start(h.ctx))
-	h.startInboxWake()
-	h.mgr.resumeAfterRestart(h.ctx)
+	h.resume()
 	var timeoutCol int
 	require.NoError(t, h.db.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM pragma_table_info('subagent_links') WHERE name = 'timeout_sec'`).Scan(&timeoutCol))
@@ -1073,10 +972,7 @@ func TestScenario_OwnedTaskCallSurvivesSchemaUpgradeAndRestarts(t *testing.T) {
 	assert.Equal(t, childID, link.ChildID, "the staged link still owns the call — no new child may spawn")
 
 	// The child completes and delivers exactly once to the suspended parent.
-	h.waitUntil(
-		"child delivery",
-		func() bool { delivery := h.link(childID); return delivery != nil && delivery.DeliveredAt != 0 },
-	)
+	h.waitDelivered(childID)
 	h.waitUntil("staged completion consumed", func() bool {
 		return countToolResultsFor(h.messages(parent.ID), tool.IDTask) == 1 &&
 			!h.mgr.HasActiveLoop(parent.ID)
@@ -1123,35 +1019,15 @@ func runAcceptedInputRestartScenario(
 	}
 	first := newHarness(t, harnessOptions{dbPath: dbPath, respond: respond})
 	root := first.createRoot(nil)
-	input, err := first.store.Enqueue(
-		first.ctx,
-		sessionstore.Input{SessionID: root, Source: sessionstore.InputSourceUser, Content: "accepted before crash"},
-	)
-	require.NoError(t, err)
-	_, err = first.store.Commit(
-		first.ctx, sessionstore.Commit{
-			SessionID: input.Input.SessionID,
-			Accept: []sessionstore.Accept{
-				{
-					InputID:    input.Input.ID,
-					State:      sessionstore.InputStateAccepted,
-					Content:    "[user] accepted before crash",
-					LinkRef:    -1,
-					ModelBound: true,
-				},
-			},
-		},
-	)
-	require.NoError(t, err)
+	first.acceptUserInput(root, "accepted before crash", "[user] accepted before crash")
 	if afterInput != nil {
 		afterInput(t, first, root)
 	}
-	first.shutdown()
-	second := newHarness(t, harnessOptions{dbPath: dbPath, respond: respond})
+
+	second := first.restart(nil)
 	collector := collectEvents(t, second.mgr.bus.SubscribeAll())
 	defer collector.stop()
-	second.startInboxWake()
-	second.mgr.resumeAfterRestart(second.ctx)
+	second.resume()
 	collector.waitMessage(root, "accepted input recovered")
 	collector.waitIdleAfter(root, "accepted input recovered")
 	assert.Equal(t, "accepted input recovered", lastAssistantTextDTO(second.messages(root)))
@@ -1211,9 +1087,7 @@ func newExternalCallDaemon(
 func stageTaskAndStop(t *testing.T, dbPath, configDir string, seen *modelRequests) int64 {
 	t.Helper()
 	first := newExternalCallDaemon(t, dbPath, configDir, seen.wrap(askForBlockingTaskRespond))
-	first.startInboxWake()
-	sessionID, err := first.mgr.Send(first.ctx, first.projectID, "do work then spawn", "fake-model", nil)
-	require.NoError(t, err)
+	sessionID := first.send("do work then spawn", nil)
 	first.waitUntil("the parent parked on the child", func() bool {
 		return countAssistantToolCallsFor(first.messages(sessionID), tool.IDTask) == 1 &&
 			!first.mgr.HasActiveLoop(sessionID)
@@ -1296,11 +1170,7 @@ func interruptFirstRecovery(t *testing.T, dbPath string) int64 {
 			return &llmwire.Response{Text: "must be canceled", FinishType: llmwire.FinishStop}
 		}},
 	)
-	first.startInboxWake()
-	rootID, err := first.mgr.Send(
-		first.ctx, first.projectID, "restart the recovery", "fake-model", managerAttrs(scenarioManagerID),
-	)
-	require.NoError(t, err)
+	rootID := first.send("restart the recovery", managerAttrs(scenarioManagerID))
 	waitForScenarioSignal(t, secondCall, "recovery call before restart")
 	var recoveryRows int
 	require.NoError(t, first.db.QueryRowContext(first.ctx, `SELECT COUNT(*) FROM messages
@@ -1325,8 +1195,7 @@ func completeRecoveryAfterRestart(t *testing.T, dbPath string, rootID int64) {
 		}},
 	)
 	collector := collectEvents(t, second.mgr.bus.SubscribeAll())
-	second.startInboxWake()
-	second.mgr.resumeAfterRestart(second.ctx)
+	second.resume()
 	collector.waitMessage(rootID, "recovered after restart")
 	collector.waitIdleAfter(rootID, "recovered after restart")
 	// A no-wake recovery retry spends a hidden candidate and a confirmation call.
@@ -1341,8 +1210,7 @@ func completeRecoveryAfterRestart(t *testing.T, dbPath string, rootID int64) {
 			return &llmwire.Response{Text: "unexpected rerun", FinishType: llmwire.FinishStop}
 		}},
 	)
-	third.startInboxWake()
-	third.mgr.resumeAfterRestart(third.ctx)
+	third.resume()
 	assert.Never(t, func() bool { return unexpectedCalls.Load() != 0 }, 300*time.Millisecond, 10*time.Millisecond)
 	var rejectedRows, acceptedRows int
 	require.NoError(t, third.db.QueryRowContext(third.ctx, `SELECT
