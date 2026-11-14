@@ -34,14 +34,7 @@ func TestScenario_ConfigEditAnswersWithAnOrdinaryResultBeforeRestart(t *testing.
 	configDir := newApplyConfigDirWith(t, toolConfig)
 	first := newApplyDaemonWith(t, dbPath, configDir, configEditRespond)
 	sessionID := startConfigEditSession(t, first, "reconfigure the daemon")
-	first.waitUntil("restart requested", func() bool {
-		select {
-		case <-first.restarts:
-			return true
-		default:
-			return false
-		}
-	})
+	require.True(t, closedInTime(first.restarts), "restart requested")
 	msgs := first.messages(sessionID)
 	require.Equal(t, 1, countToolResultsFor(msgs, tool.IDConfigEdit))
 	assert.Contains(t, lastToolResultContent(msgs, tool.IDConfigEdit), "Config applied")
@@ -89,14 +82,7 @@ func TestScenario_ASecondSessionCannotOverwriteAStagedApply(t *testing.T) {
 	first.startInboxWake()
 	sessionA := openConfigRoot(t, first, "telegram:main", "APPLY_A switch the default model")
 	require.NoError(t, first.mgr.sendToSession(first.ctx, sessionA, configapply.ConfigEditCommand))
-	first.waitUntil("restart requested", func() bool {
-		select {
-		case <-first.restarts:
-			return true
-		default:
-			return false
-		}
-	})
+	require.True(t, closedInTime(first.restarts), "restart requested")
 	first.waitUntil("A finished its reply", func() bool { return !first.mgr.HasActiveLoop(sessionA) })
 	sessionB := openConfigRoot(t, first, "telegram:other", "APPLY_B switch the default model")
 	require.NoError(t, first.mgr.sendToSession(first.ctx, sessionB, configapply.ConfigEditCommand))
@@ -155,20 +141,12 @@ func TestScenario_ConcurrentAppliesResolveExactlyOnce(t *testing.T) {
 	first.waitUntil("both openers settled", func() bool {
 		return !first.mgr.HasActiveLoop(sessionA) && !first.mgr.HasActiveLoop(sessionB)
 	})
-	first.waitUntil("session idle", func() bool { return !first.mgr.HasActiveLoop(sessionA) })
-	first.waitUntil("session idle", func() bool { return !first.mgr.HasActiveLoop(sessionB) })
+	first.waitAnswer(sessionA, "")
+	first.waitAnswer(sessionB, "")
 	for _, session := range []int64{sessionA, sessionB} {
-		first.startInboxWake()
-		require.NoError(t, first.mgr.sendToSession(first.ctx, session, configapply.ConfigEditCommand))
+		first.say(session, configapply.ConfigEditCommand)
 	}
-	first.waitUntil("restart requested", func() bool {
-		select {
-		case <-first.restarts:
-			return true
-		default:
-			return false
-		}
-	})
+	require.True(t, closedInTime(first.restarts), "restart requested")
 	first.waitUntil("both sessions settled", func() bool {
 		return !first.mgr.HasActiveLoop(sessionA) && !first.mgr.HasActiveLoop(sessionB)
 	})
@@ -206,7 +184,7 @@ func TestScenario_ConfigApplyRejectionReachesTheSessionInProcess(t *testing.T) {
 	d.waitUntil("rejection stored", func() bool {
 		return countToolResultsFor(d.messages(sessionID), tool.IDConfigEdit) == 1
 	})
-	d.waitUntil("session idle", func() bool { return !d.mgr.HasActiveLoop(sessionID) })
+	d.waitAnswer(sessionID, "")
 	msgs := d.messages(sessionID)
 	require.NoError(t, llmtest.ValidateToolPairing(msgs))
 	assert.Contains(t, lastToolResultContent(msgs, tool.IDConfigEdit), "rejected")
@@ -264,7 +242,7 @@ func TestScenario_ConfigEditWithoutActivationNeverStages(t *testing.T) {
 	d.waitUntil("refusal stored", func() bool {
 		return countToolResultsFor(d.messages(sessionID), tool.IDConfigEdit) == 1
 	})
-	d.waitUntil("session idle", func() bool { return !d.mgr.HasActiveLoop(sessionID) })
+	d.waitAnswer(sessionID, "")
 	msgs := d.messages(sessionID)
 	require.NoError(t, llmtest.ValidateToolPairing(msgs))
 	assert.Equal(t, 1, countAssistantToolCallsFor(msgs, tool.IDConfigEdit))
@@ -278,14 +256,7 @@ func TestScenario_ConfigEditBootInvalidCandidateRollsBack(t *testing.T) {
 	configDir := newApplyConfigDirWith(t, toolConfig)
 	first := newApplyDaemonWith(t, dbPath, configDir, configEditRespond)
 	sessionID := startConfigEditSession(t, first, "reconfigure the daemon")
-	first.waitUntil("restart requested", func() bool {
-		select {
-		case <-first.restarts:
-			return true
-		default:
-			return false
-		}
-	})
+	require.True(t, closedInTime(first.restarts), "restart requested")
 	pending, err := first.ops.LoadPending()
 	require.NoError(t, err)
 	require.NotNil(t, pending)
@@ -424,13 +395,12 @@ func TestSetModelRecordsTheEffortTheNextRunSends(t *testing.T) {
 		}
 		return replyCount == 2
 	})
-	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(id) })
+	h.waitAnswer(id, "")
 	require.NoError(t, h.mgr.SetModel(h.ctx, id, "thinker", ""))
 	rec := h.session(id)
 	assert.Equal(t, "high", rec.ReasoningLevel,
 		"an unnamed level settles on the model's default, and the record keeps that")
-	h.startInboxWake()
-	require.NoError(t, h.mgr.sendToSession(h.ctx, id, "second"))
+	h.say(id, "second")
 	h.waitUntil("second turn answered", func() bool {
 		replyCount := 0
 		for _, m := range h.messages(id) {
@@ -440,7 +410,7 @@ func TestSetModelRecordsTheEffortTheNextRunSends(t *testing.T) {
 		}
 		return replyCount == 4
 	})
-	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(id) })
+	h.waitAnswer(id, "")
 	reqs := provider.snapshot()
 	require.Len(t, reqs, 4)
 	assert.Equal(t, "plain-model", reqs[0].model)
@@ -728,7 +698,7 @@ func testConfigDocumentThroughHTTP(t *testing.T, damaged bool) {
 	d.mgr.build.Config = wireConfig
 	d.mgr.build.WorkDir = workDir
 	id := startConfigEditSession(t, d, "hello")
-	d.waitUntil("session idle", func() bool { return !d.mgr.HasActiveLoop(id) })
+	d.waitAnswer(id, "")
 	assert.True(t, sawRead.Load())
 	var storedDocuments []string
 	for _, message := range d.messages(id) {
@@ -769,14 +739,7 @@ func TestScenario_ConfigEditFromRoot(t *testing.T) {
 	configDir := newApplyConfigDirWith(t, toolConfig)
 	first := newApplyDaemonWith(t, dbPath, configDir, configReadEditRespond)
 	sessionID := startConfigEditSession(t, first, "reconfigure the daemon")
-	first.waitUntil("restart requested", func() bool {
-		select {
-		case <-first.restarts:
-			return true
-		default:
-			return false
-		}
-	})
+	require.True(t, closedInTime(first.restarts), "restart requested")
 	pending, err := first.ops.LoadPending()
 	require.NoError(t, err)
 	require.NotNil(t, pending)
@@ -790,12 +753,9 @@ func TestScenario_ConfigEditFromRoot(t *testing.T) {
 	assert.Contains(t, lastToolResultContent(msgs, tool.IDConfigEdit), "Config applied")
 	require.NotEmpty(t, msgs)
 	assert.Equal(t, "configuration replaced", msgs[len(msgs)-1].Content)
-	var receipts int
-	for _, row := range first.outbox(sessionID) {
-		if row.Content == "Config applied — the daemon restarts to load it." {
-			receipts++
-		}
-	}
+	receipts := first.countOutbox(sessionID, func(content string) bool {
+		return content == "Config applied — the daemon restarts to load it."
+	})
 	assert.Equal(t, 1, receipts)
 	assert.Zero(t, first.restartCount(), "exactly one signal was received above")
 	assert.Contains(t, configBytesOf(t, configDir), "id: claude-opus-5")

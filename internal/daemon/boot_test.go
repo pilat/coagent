@@ -22,19 +22,14 @@ import (
 )
 
 func TestManager_KillTerminatingOnStartup(t *testing.T) {
-	factory := &mockFactory{}
-	h := newHarness(t, harnessOptions{configure: withTestModels, clientFor: factory.client})
+	h, factory, ch := newMockHarness(t)
 	mgr, s := h.mgr, h.store
-	ch := collectEvents(t, mgr.bus.SubscribeAll())
-	t.Cleanup(ch.stop)
 	factory.nextSess = &mockSession{completeAfter: 50 * time.Millisecond}
 	ctx := context.Background()
 	pid := testProject(t, s, t.TempDir())
 	id, err := mgr.Send(ctx, pid, "init", "", nil)
 	require.NoError(t, err)
-	ch.waitFor(t, "session state", func(events []controllerapi.SessionNotification) bool {
-		return hasStateEvent(events, id, controllerapi.StateIdle)
-	})
+	ch.waitState(id, controllerapi.StateIdle)
 
 	// Simulate: Clear set terminating but daemon died before Kill completed
 	require.NoError(t, mgr.store.UpdateSessionStatus(context.Background(), id, sessionstore.SessionStatusTerminating))
@@ -119,29 +114,28 @@ func TestStartDoesNotLaunchRecoveryAfterShutdown(t *testing.T) {
 }
 
 func TestStartFinishesInterruptedStopBeforeRecoverySweep(t *testing.T) {
-	ctx := context.Background()
 	h := newHarness(t, harnessOptions{configure: withTestModels, clientFor: (&mockFactory{}).client})
-	mgr, projects := h.mgr, h.store
-	projectID := testProject(t, projects, "/tmp/recover-stop")
-	parent, err := mgr.store.CreateSession(ctx, projectID, "fake-model", "", nil)
-	require.NoError(t, err)
+	ctx := h.ctx
+	mgr := h.mgr
+	projectID := h.projectID
+	parent := h.createRoot(nil)
 	childID, err := mgr.links.Create(ctx, subagent.Create{
-		ProjectID: projectID, ParentID: parent.ID, RootID: parent.ID,
+		ProjectID: projectID, ParentID: parent, RootID: parent,
 		Model: "fake-model", TaskCallID: "background", State: subagent.StateRunning,
 	})
 	require.NoError(t, err)
-	require.NoError(t, mgr.store.UpdateSessionStatus(ctx, parent.ID, sessionstore.SessionStatusStopping))
+	require.NoError(t, mgr.store.UpdateSessionStatus(ctx, parent, sessionstore.SessionStatusStopping))
 	require.NoError(t, mgr.store.UpdateSessionStatus(ctx, childID, sessionstore.SessionStatusStopping))
 	outputPath := filepath.Join(t.TempDir(), "stopping.output")
 	require.NoError(t, os.WriteFile(outputPath, []byte("partial"), 0o600))
 	now := time.Now().UTC()
 	require.NoError(t, mgr.processStore.InsertProcess(ctx, backgroundprocess.Process{
-		ID: "stopping-process", SessionID: childID, RootSessionID: parent.ID,
+		ID: "stopping-process", SessionID: childID, RootSessionID: parent,
 		ToolCallID: "stopping-call", OutputPath: outputPath, CreatedAt: now,
 		Deadline: now.Add(time.Minute), AdvertisedAt: &now, State: backgroundprocess.StateRunning,
 	}))
 	require.NoError(t, mgr.Start(ctx))
-	for _, id := range []int64{parent.ID, childID} {
+	for _, id := range []int64{parent, childID} {
 		rec := h.session(id)
 		assert.Equal(t, sessionstore.SessionStatusStopped, rec.Status)
 	}
@@ -152,7 +146,7 @@ func TestStartFinishesInterruptedStopBeforeRecoverySweep(t *testing.T) {
 	process, err := mgr.processStore.GetProcess(ctx, "stopping-process")
 	require.NoError(t, err)
 	assert.Equal(t, backgroundprocess.StateCancelled, process.State)
-	messages, err := mgr.store.LoadActiveMessages(ctx, parent.ID)
+	messages, err := mgr.store.LoadActiveMessages(ctx, parent)
 	require.NoError(t, err)
 	assert.Equal(t, 0, countToolResultsFor(toDTO(messages), "process_event"))
 	mgr.Shutdown(t.Context(), 3*time.Second)

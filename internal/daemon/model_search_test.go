@@ -113,11 +113,7 @@ func TestSetModelPreservesAgentSearchPolicy(t *testing.T) {
 			t.Cleanup(func() {
 				closeOnce(release)
 				cancel()
-				select {
-				case <-done:
-				case <-time.After(5 * time.Second):
-					t.Error("model-switch activation did not stop")
-				}
+				assert.True(t, closedInTime(done), "model-switch activation did not stop")
 				h.mgr.runners.remove(record.ID)
 				rs.Complete()
 			})
@@ -131,11 +127,7 @@ func TestSetModelPreservesAgentSearchPolicy(t *testing.T) {
 			closeOnce(release)
 			after := nextModelSearchRequest(t, requests)
 			assertModelSearchPolicy(t, after, "after", tc.wantSearch)
-			select {
-			case <-done:
-			case <-time.After(5 * time.Second):
-				t.Fatal("model-switch activation did not complete")
-			}
+			require.True(t, closedInTime(done), "model-switch activation did not complete")
 			require.NoError(t, runErr)
 			stored := h.session(record.ID)
 			assert.Equal(t, "after", stored.Model)

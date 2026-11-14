@@ -87,11 +87,8 @@ func TestCreateSession_PersistsOnlyTheBoundManagerOwner(t *testing.T) {
 }
 
 func TestManager_Send(t *testing.T) {
-	factory := &mockFactory{}
-	h := newHarness(t, harnessOptions{configure: withTestModels, clientFor: factory.client})
+	h, factory, ch := newMockHarness(t)
 	mgr, s := h.mgr, h.store
-	ch := collectEvents(t, mgr.bus.SubscribeAll())
-	t.Cleanup(ch.stop)
 
 	// Use completeAfter so Kill (which no longer cancels context) lets session finish naturally
 	factory.nextSess = &mockSession{completeAfter: 200 * time.Millisecond}
@@ -107,29 +104,20 @@ func TestManager_Send(t *testing.T) {
 	// Kill it
 	err = mgr.sendToSession(context.Background(), id, "/kill")
 	require.NoError(t, err)
-	ch.waitFor(t, "session state", func(events []controllerapi.SessionNotification) bool {
-		return hasStateEvent(events, id, controllerapi.StateIdle)
-	})
+	ch.waitState(id, controllerapi.StateIdle)
 	assert.False(t, mgr.HasActiveLoop(id))
 }
 
 func TestManager_SendToSession_PersistsWhileRunning(t *testing.T) {
-	factory := &mockFactory{}
-	h := newHarness(t, harnessOptions{configure: withTestModels, clientFor: factory.client})
+	h, factory, ch := newMockHarness(t)
 	mgr, s := h.mgr, h.store
-
-	// Subscribe to all notifications via pubsub
-	ch := collectEvents(t, mgr.bus.SubscribeAll())
-	t.Cleanup(ch.stop)
 	ctx := context.Background()
 	pid := testProject(t, s, t.TempDir())
 	id, err := mgr.Send(ctx, pid, "init", "", nil)
 	require.NoError(t, err)
 
 	// Wait for RunDaemon to start
-	ch.waitFor(t, "session state", func(events []controllerapi.SessionNotification) bool {
-		return hasStateEvent(events, id, controllerapi.StateRunning)
-	})
+	ch.waitState(id, controllerapi.StateRunning)
 	h.waitUntil("pending input", func() bool {
 		_, err := mgr.store.(*sessionstore.Store).PeekPending(context.Background(), id)
 		if false {
@@ -197,11 +185,8 @@ func TestManager_InputReceivedPubSub(t *testing.T) {
 }
 
 func TestManager_SendCreatesNewSessionAfterCompletion(t *testing.T) {
-	factory := &mockFactory{}
-	h := newHarness(t, harnessOptions{configure: withTestModels, clientFor: factory.client})
+	h, factory, ch := newMockHarness(t)
 	mgr, s := h.mgr, h.store
-	ch := collectEvents(t, mgr.bus.SubscribeAll())
-	t.Cleanup(ch.stop)
 
 	// First session completes quickly
 	factory.nextSess = &mockSession{completeAfter: 50 * time.Millisecond}
@@ -209,18 +194,14 @@ func TestManager_SendCreatesNewSessionAfterCompletion(t *testing.T) {
 	pid := testProject(t, s, t.TempDir())
 	id1, err := mgr.Send(ctx, pid, "init", "", nil)
 	require.NoError(t, err)
-	ch.waitFor(t, "session state", func(events []controllerapi.SessionNotification) bool {
-		return hasStateEvent(events, id1, controllerapi.StateIdle)
-	})
+	ch.waitState(id1, controllerapi.StateIdle)
 
 	// Second Send creates a new session — no resume
 	factory.nextSess = &mockSession{completeAfter: 50 * time.Millisecond}
 	id2, err := mgr.Send(ctx, pid, "wake up message", "", nil)
 	require.NoError(t, err)
 	assert.NotEqual(t, id1, id2, "Send should create new session, not resume")
-	ch.waitFor(t, "session state", func(events []controllerapi.SessionNotification) bool {
-		return hasStateEvent(events, id2, controllerapi.StateRunning)
-	})
+	ch.waitState(id2, controllerapi.StateRunning)
 	mgr.Shutdown(t.Context(), 3*time.Second)
 }
 
@@ -233,9 +214,7 @@ func TestManager_SendToSession_AlreadyRunningUsesDurableInbox(t *testing.T) {
 	pid := testProject(t, s, t.TempDir())
 	id, err := mgr.Send(ctx, pid, "init", "", nil)
 	require.NoError(t, err)
-	ch.waitFor(t, "session state", func(events []controllerapi.SessionNotification) bool {
-		return hasStateEvent(events, id, controllerapi.StateRunning)
-	})
+	ch.waitState(id, controllerapi.StateRunning)
 	h.waitUntil("pending input", func() bool {
 		_, err := mgr.store.(*sessionstore.Store).PeekPending(context.Background(), id)
 		if false {
@@ -257,28 +236,21 @@ func TestManager_SendToSession_AlreadyRunningUsesDurableInbox(t *testing.T) {
 }
 
 func TestManager_SecondSendCreatesNewLoop(t *testing.T) {
-	factory := &mockFactory{}
-	h := newHarness(t, harnessOptions{configure: withTestModels, clientFor: factory.client})
+	h, factory, ch := newMockHarness(t)
 	mgr, s := h.mgr, h.store
-	ch := collectEvents(t, mgr.bus.SubscribeAll())
-	t.Cleanup(ch.stop)
 	factory.nextSess = &mockSession{completeAfter: 50 * time.Millisecond}
 	ctx := context.Background()
 	pid := testProject(t, s, t.TempDir())
 	id1, err := mgr.Send(ctx, pid, "first", "", nil)
 	require.NoError(t, err)
-	ch.waitFor(t, "session state", func(events []controllerapi.SessionNotification) bool {
-		return hasStateEvent(events, id1, controllerapi.StateIdle)
-	})
+	ch.waitState(id1, controllerapi.StateIdle)
 
 	// Second Send creates a new session with its own loop
 	factory.nextSess = &mockSession{completeAfter: 50 * time.Millisecond}
 	id2, err := mgr.Send(ctx, pid, "second", "", nil)
 	require.NoError(t, err)
 	assert.NotEqual(t, id1, id2, "should create new session")
-	ch.waitFor(t, "session state", func(events []controllerapi.SessionNotification) bool {
-		return hasStateEvent(events, id2, controllerapi.StateRunning)
-	})
+	ch.waitState(id2, controllerapi.StateRunning)
 	h.waitUntil("second client created", func() bool {
 		factory.mu.Lock()
 		defer factory.mu.Unlock()
@@ -292,11 +264,8 @@ func TestManager_SecondSendCreatesNewLoop(t *testing.T) {
 }
 
 func TestManager_SendAlwaysCreatesNew(t *testing.T) {
-	factory := &mockFactory{}
-	h := newHarness(t, harnessOptions{configure: withTestModels, clientFor: factory.client})
+	h, factory, ch := newMockHarness(t)
 	mgr, s := h.mgr, h.store
-	ch := collectEvents(t, mgr.bus.SubscribeAll())
-	t.Cleanup(ch.stop)
 
 	// First session completes quickly so Kill can work
 	factory.nextSess = &mockSession{completeAfter: 100 * time.Millisecond}
@@ -305,27 +274,20 @@ func TestManager_SendAlwaysCreatesNew(t *testing.T) {
 	id1, err := mgr.Send(ctx, pid, "init", "", nil)
 	require.NoError(t, err)
 	_ = mgr.sendToSession(context.Background(), id1, "/kill")
-	ch.waitFor(t, "session state", func(events []controllerapi.SessionNotification) bool {
-		return hasStateEvent(events, id1, controllerapi.StateIdle)
-	})
+	ch.waitState(id1, controllerapi.StateIdle)
 
 	// Second Send to same project must create a new session, not resume
 	factory.nextSess = &mockSession{completeAfter: 100 * time.Millisecond}
 	id2, err := mgr.Send(ctx, pid, "init", "", nil)
 	require.NoError(t, err)
 	assert.NotEqual(t, id1, id2, "Send should produce a different session ID")
-	ch.waitFor(t, "session state", func(events []controllerapi.SessionNotification) bool {
-		return hasStateEvent(events, id2, controllerapi.StateRunning)
-	})
+	ch.waitState(id2, controllerapi.StateRunning)
 	mgr.Shutdown(t.Context(), 3*time.Second)
 }
 
 func TestManager_SetModel_IdleSession(t *testing.T) {
-	factory := &mockFactory{}
-	h := newHarness(t, harnessOptions{configure: withTestModels, clientFor: factory.client})
+	h, factory, ch := newMockHarness(t)
 	mgr, s := h.mgr, h.store
-	ch := collectEvents(t, mgr.bus.SubscribeAll())
-	t.Cleanup(ch.stop)
 
 	// Session completes quickly → loop exits → session is idle
 	factory.nextSess = &mockSession{completeAfter: 50 * time.Millisecond}
@@ -333,9 +295,7 @@ func TestManager_SetModel_IdleSession(t *testing.T) {
 	pid := testProject(t, s, t.TempDir())
 	id, err := mgr.Send(ctx, pid, "init", "old-model", nil)
 	require.NoError(t, err)
-	ch.waitFor(t, "session state", func(events []controllerapi.SessionNotification) bool {
-		return hasStateEvent(events, id, controllerapi.StateIdle)
-	})
+	ch.waitState(id, controllerapi.StateIdle)
 	assert.False(t, mgr.HasActiveLoop(id), "session should not be running after idle")
 
 	// SetModel on an idle session must succeed (DB-first pattern)
@@ -349,19 +309,14 @@ func TestManager_SetModel_IdleSession(t *testing.T) {
 }
 
 func TestManager_SendToSession_RejectsKilledSession(t *testing.T) {
-	factory := &mockFactory{}
-	h := newHarness(t, harnessOptions{configure: withTestModels, clientFor: factory.client})
+	h, factory, ch := newMockHarness(t)
 	mgr, s := h.mgr, h.store
-	ch := collectEvents(t, mgr.bus.SubscribeAll())
-	t.Cleanup(ch.stop)
 	factory.nextSess = &mockSession{completeAfter: 50 * time.Millisecond}
 	ctx := context.Background()
 	pid := testProject(t, s, t.TempDir())
 	id, err := mgr.Send(ctx, pid, "init", "", nil)
 	require.NoError(t, err)
-	ch.waitFor(t, "session state", func(events []controllerapi.SessionNotification) bool {
-		return hasStateEvent(events, id, controllerapi.StateIdle)
-	})
+	ch.waitState(id, controllerapi.StateIdle)
 
 	// Prepare a mock for the kill's resume path
 	factory.mu.Lock()
@@ -479,8 +434,7 @@ func TestSetModelUnknownModelNeverReachesTheRecord(t *testing.T) {
 		},
 	)
 
-	events := collectEvents(t, h.mgr.bus.SubscribeAll())
-	defer events.stop()
+	events := h.collect()
 	h.startInboxWake()
 	id, err := h.mgr.Send(h.ctx, h.projectID, "first", "fake-model", nil)
 	require.NoError(t, err)
@@ -495,7 +449,6 @@ func TestSetModelUnknownModelNeverReachesTheRecord(t *testing.T) {
 	assert.Contains(t, err.Error(), "ghost-model")
 	rec := h.session(id)
 	assert.Equal(t, "fake-model", rec.Model, "the record keeps the model the session can actually run")
-	h.startInboxWake()
 	require.NoError(t, h.mgr.sendToSession(h.ctx, id, "second"))
 	h.waitUntil("second turn settled", func() bool {
 		return countAssistantReplies(h.messages(id)) == 4 || hasSessionErrorNotice(events.snapshot())

@@ -124,10 +124,7 @@ func TestHarnessScenario_StopOverYieldedChildSettlesTheTree(t *testing.T) {
 		return h.session(parentID).Status == sessionstore.SessionStatusStopped
 	})
 	id, _ := script.processID.Load().(string)
-	h.waitUntil("process cancelled", func() bool {
-		process, err := h.mgr.processStore.GetProcess(h.ctx, id)
-		return err == nil && process.State == backgroundprocess.StateCancelled
-	})
+	h.waitProcess(id, backgroundprocess.StateCancelled)
 	assert.Equal(t, subagent.StateStopped, h.link(link.ChildID).State)
 	assert.Zero(t, h.processInputs(id), "a stop-caused cancellation wakes nobody")
 

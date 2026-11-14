@@ -25,11 +25,8 @@ func TestHarnessScenario_NewInputMakesRepeatedRunFailureVisible(t *testing.T) {
 	h := newHarness(t, harnessOptions{clientFor: func(*config.Config) (llm.Client, error) {
 		return client, nil
 	}})
-	collector := collectEvents(t, h.mgr.bus.SubscribeAll())
-	defer collector.stop()
-	h.startInboxWake()
-	root, err := h.mgr.Send(h.ctx, h.projectID, "try the task", "fake-model", managerAttrs(scenarioManagerID))
-	require.NoError(t, err)
+	collector := h.collect()
+	root := h.send("try the task", managerAttrs(scenarioManagerID))
 	var generation int64
 	for attempt := 1; attempt <= 2; attempt++ {
 		if attempt == 2 {

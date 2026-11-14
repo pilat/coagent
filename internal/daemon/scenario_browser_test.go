@@ -96,11 +96,8 @@ func TestScenario_BrowserFramesStayStoredAndProjectToLatest(t *testing.T) {
 	require.NoError(t, h.mgr.mcpStore.Add(h.ctx, &h.projectID, mcpstore.ServerDef{
 		Name: "remote", Command: server, Args: []string{log}, Enabled: true,
 	}))
-	h.startInboxWake()
-	rootID, err := h.mgr.Send(h.ctx, h.projectID, "inspect site", "fake-model", nil)
-	require.NoError(t, err)
-	h.waitUntil("browser child spawned", func() bool { return h.linkByCall(rootID, "browser-task") != nil })
-	childID := h.linkByCall(rootID, "browser-task").ChildID
+	rootID := h.send("inspect site", nil)
+	childID := h.waitLink(rootID, "browser-task").ChildID
 	h.waitUntil(
 		"browser child completed",
 		func() bool { return lastAssistantTextDTO(h.messages(childID)) == "browser complete" },
@@ -178,7 +175,7 @@ func TestScenario_BrowserFramesStayStoredAndProjectToLatest(t *testing.T) {
 	assert.Equal(t, 4, strings.Count(string(data), "call\n"), "invalid task_state must not reach the server")
 	h.shutdown()
 	require.NoError(t, h.db.Close())
-	second := newHarness(t, options)
+	second := h.restart(nil)
 	second.startInboxWake()
 	require.NoError(t, second.mgr.SendToChild(second.ctx, childID, "BROWSER_CHILD follow-up after restart"))
 	second.waitUntil("browser follow-up after restart", func() bool {
@@ -273,11 +270,8 @@ func TestScenario_BrowserFramesProjectAfterBoundServerIsDisabled(t *testing.T) {
 	require.NoError(t, h.mgr.mcpStore.Add(h.ctx, &h.projectID, mcpstore.ServerDef{
 		Name: "remote", Command: server, Args: []string{log}, Enabled: true,
 	}))
-	h.startInboxWake()
-	rootID, err := h.mgr.Send(h.ctx, h.projectID, "inspect site", "fake-model", nil)
-	require.NoError(t, err)
-	h.waitUntil("browser child spawned", func() bool { return h.linkByCall(rootID, "browser-task") != nil })
-	childID := h.linkByCall(rootID, "browser-task").ChildID
+	rootID := h.send("inspect site", nil)
+	childID := h.waitLink(rootID, "browser-task").ChildID
 	h.waitUntil(
 		"browser child completed",
 		func() bool { return lastAssistantTextDTO(h.messages(childID)) == "browser complete" },
@@ -289,7 +283,7 @@ func TestScenario_BrowserFramesProjectAfterBoundServerIsDisabled(t *testing.T) {
 
 	h.shutdown()
 	require.NoError(t, h.db.Close())
-	second := newHarness(t, options)
+	second := h.restart(nil)
 	require.NoError(t, second.mgr.mcpStore.SetEnabled(second.ctx, &second.projectID, "remote", false))
 	second.startInboxWake()
 	require.NoError(t, second.mgr.SendToChild(second.ctx, childID, "BROWSER_CHILD follow-up after restart"))
@@ -363,11 +357,8 @@ func TestScenario_BrowserRunsOnlyFirstActionInMessage(t *testing.T) {
 	require.NoError(t, h.mgr.mcpStore.Add(h.ctx, &h.projectID, mcpstore.ServerDef{
 		Name: "remote", Command: server, Args: []string{log}, Enabled: true,
 	}))
-	h.startInboxWake()
-	rootID, err := h.mgr.Send(h.ctx, h.projectID, "inspect site", "fake-model", nil)
-	require.NoError(t, err)
-	h.waitUntil("browser child spawned", func() bool { return h.linkByCall(rootID, "browser-task") != nil })
-	childID := h.linkByCall(rootID, "browser-task").ChildID
+	rootID := h.send("inspect site", nil)
+	childID := h.waitLink(rootID, "browser-task").ChildID
 	h.waitUntil("browser child complete", func() bool {
 		return lastAssistantTextDTO(h.messages(childID)) == "one navigation complete" && !h.mgr.HasActiveLoop(childID)
 	})
@@ -393,9 +384,7 @@ func TestScenario_BrowserUnavailableWithoutBoundServer(t *testing.T) {
 		respond:        func(_ string, _ []llmwire.Message) *llmwire.Response { return textReply("done") },
 		observeRequest: func(request providerRequest) { mu.Lock(); requests = append(requests, request); mu.Unlock() },
 	})
-	h.startInboxWake()
-	id, err := h.mgr.Send(h.ctx, h.projectID, "hello", "fake-model", nil)
-	require.NoError(t, err)
+	id := h.send("hello", nil)
 	h.waitUntil("root completed", func() bool { return lastAssistantTextDTO(h.messages(id)) == "done" })
 	mu.Lock()
 	captured := append([]providerRequest(nil), requests...)
@@ -436,9 +425,7 @@ func TestScenario_PlaywrightWithoutBrowserBindingIsOrdinary(t *testing.T) {
 	require.NoError(t, h.mgr.mcpStore.Add(h.ctx, &h.projectID, mcpstore.ServerDef{
 		Name: "playwright", Command: server, Args: []string{log}, Enabled: true,
 	}))
-	h.startInboxWake()
-	id, err := h.mgr.Send(h.ctx, h.projectID, "inspect site", "fake-model", nil)
-	require.NoError(t, err)
+	id := h.send("inspect site", nil)
 	h.waitUntil(
 		"ordinary calls complete",
 		func() bool { return lastAssistantTextDTO(h.messages(id)) == "ordinary calls complete" },
@@ -550,9 +537,7 @@ func TestScenario_BrowserChildRunsOnConfiguredModelAndEffort(t *testing.T) {
 	require.NoError(t, h.mgr.mcpStore.Add(h.ctx, &h.projectID, mcpstore.ServerDef{
 		Name: "remote", Command: server, Args: []string{log}, Enabled: true,
 	}))
-	h.startInboxWake()
-	rootID, err := h.mgr.Send(h.ctx, h.projectID, "browse", "fake-model", nil)
-	require.NoError(t, err)
+	rootID := h.send("browse", nil)
 	h.waitUntil("root completed", func() bool { return lastAssistantTextDTO(h.messages(rootID)) == "root complete" })
 	require.NotNil(t, h.linkByCall(rootID, "browser-task"))
 

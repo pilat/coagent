@@ -23,11 +23,7 @@ type ledgerHarness struct {
 
 func newLedgerHarness(t *testing.T) *ledgerHarness {
 	t.Helper()
-	var flaky *flakyLinkStore
-	h := newHarness(t, harnessOptions{respond: trivialRespond, links: func(inner subagent.Store) subagent.Store {
-		flaky = newFlakyLinkStore(inner)
-		return flaky
-	}})
+	h, flaky := newFlakyLinkHarness(t, trivialRespond)
 	activation := &flakyActivationStore{Store: h.mgr.links}
 	h.mgr.links = activation
 	parentID := h.createRoot(nil)

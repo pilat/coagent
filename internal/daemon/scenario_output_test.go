@@ -41,11 +41,8 @@ func TestHarnessScenario_CompletionCheckConfirmsBeforePublishing(t *testing.T) {
 		return textReply("why I am stopping")
 	}
 	h := newHarness(t, harnessOptions{respond: respond})
-	collector := collectEvents(t, h.mgr.bus.SubscribeAll())
-	defer collector.stop()
-	h.startInboxWake()
-	root, err := h.mgr.Send(h.ctx, h.projectID, "do the work", "fake-model", managerAttrs(scenarioManagerID))
-	require.NoError(t, err)
+	collector := h.collect()
+	root := h.send("do the work", managerAttrs(scenarioManagerID))
 	collector.waitMessage(root, "premature candidate answer")
 	collector.waitIdleAfter(root, "premature candidate answer")
 	assert.Equal(t, 2, calls, "the no-wake stop costs exactly one confirmation call")
@@ -79,9 +76,7 @@ func TestHarnessScenario_CompletionNudgeAfterToolStopsOnce(t *testing.T) {
 		return textReply("initial candidate")
 	}
 	h := newHarness(t, harnessOptions{respond: respond})
-	h.startInboxWake()
-	root, err := h.mgr.Send(h.ctx, h.projectID, "inspect the project", "fake-model", managerAttrs(scenarioManagerID))
-	require.NoError(t, err)
+	root := h.send("inspect the project", managerAttrs(scenarioManagerID))
 	h.waitUntil("final answer", func() bool {
 		return lastAssistantTextDTO(h.messages(root)) == "complete answer after checking work" &&
 			!h.mgr.HasActiveLoop(root)
@@ -125,26 +120,16 @@ func TestHarnessScenario_CompletionCheckBackgroundProcessYieldPublishesOnce(t *t
 	collector := collectEvents(t, h.mgr.bus.SubscribeAll())
 	defer collector.stop()
 	service := installScenarioProcessService(t, h)
-	h.startInboxWake()
-	root, err := h.mgr.Send(h.ctx, h.projectID, "start a process", "fake-model", managerAttrs(scenarioManagerID))
-	require.NoError(t, err)
+	root := h.send("start a process", managerAttrs(scenarioManagerID))
 
 	// The process holds until the test releases it, so the completion wake lands after the yield has settled.
 	release := filepath.Join(t.TempDir(), "release")
 	process := startScenarioProcess(t, service, root, root,
 		fmt.Sprintf("while [ ! -f %s ]; do sleep 0.05; done; printf 'done\\n'", release))
-	func() backgroundprocess.Process {
-		var record backgroundprocess.Process
-		h.waitUntil("process state", func() bool {
-			var err error
-			record, err = h.mgr.processStore.GetProcess(context.Background(), process.ID)
-			return err == nil && record.State == backgroundprocess.StateRunning
-		})
-		return record
-	}()
+	h.waitProcess(process.ID, backgroundprocess.StateRunning)
 	close(processRunning)
 	collector.waitMessage(root, "yielding to the running process")
-	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(root) })
+	h.waitAnswer(root, "")
 	assert.Equal(t, int64(1), calls.Load(), "a wake yield trusts the stop without a confirmation call")
 	var yieldOutputs int
 	for _, row := range h.outbox(root) {
@@ -181,25 +166,13 @@ func TestHarnessScenario_CompletionCheckEmptyBackgroundYieldYieldsSilently(t *te
 	collector := collectEvents(t, h.mgr.bus.SubscribeAll())
 	defer collector.stop()
 	service := installScenarioProcessService(t, h)
-	h.startInboxWake()
-	root, err := h.mgr.Send(
-		h.ctx, h.projectID, "start a process and wait", "fake-model", managerAttrs(scenarioManagerID),
-	)
-	require.NoError(t, err)
+	root := h.send("start a process and wait", managerAttrs(scenarioManagerID))
 	release := filepath.Join(t.TempDir(), "release")
 	process := startScenarioProcess(t, service, root, root,
 		fmt.Sprintf("while [ ! -f %s ]; do sleep 0.05; done; printf 'done\\n'", release))
-	func() backgroundprocess.Process {
-		var record backgroundprocess.Process
-		h.waitUntil("process state", func() bool {
-			var err error
-			record, err = h.mgr.processStore.GetProcess(context.Background(), process.ID)
-			return err == nil && record.State == backgroundprocess.StateRunning
-		})
-		return record
-	}()
+	h.waitProcess(process.ID, backgroundprocess.StateRunning)
 	close(processRunning)
-	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(root) })
+	h.waitAnswer(root, "")
 	assert.Equal(t, int64(1), calls.Load(), "an empty wake yield ends the activation immediately")
 	var nudges int
 	for _, message := range h.messages(root) {
@@ -228,13 +201,8 @@ func TestHarnessScenario_CompletionCheckStoppedLinkIsNotAWakeSource(t *testing.T
 				return textReply("confirmed answer over dead child")
 			}
 			h := newHarness(t, harnessOptions{respond: respond})
-			collector := collectEvents(t, h.mgr.bus.SubscribeAll())
-			defer collector.stop()
-			h.startInboxWake()
-			root, err := h.mgr.Send(
-				h.ctx, h.projectID, "work while child is dead", "fake-model", managerAttrs(scenarioManagerID),
-			)
-			require.NoError(t, err)
+			collector := h.collect()
+			root := h.send("work while child is dead", managerAttrs(scenarioManagerID))
 			h.createChild(root, subagent.Link{TaskCallID: "task-dead", State: subagent.State(state)})
 			close(linkSeeded)
 			collector.waitMessage(root, "premature answer over dead child")
@@ -279,15 +247,11 @@ func TestHarnessScenario_SecondInputDoesNotReplayPreviousFinal(t *testing.T) {
 		}
 		return textReply("first answer")
 	}})
-	collector := collectEvents(t, h.mgr.bus.SubscribeAll())
-	defer collector.stop()
-	h.startInboxWake()
-	sessionID, err := h.mgr.Send(h.ctx, h.projectID, "first question", "fake-model", nil)
-	require.NoError(t, err)
+	collector := h.collect()
+	sessionID := h.send("first question", nil)
 	collector.waitMessage(sessionID, "first answer")
 	collector.waitIdleAfter(sessionID, "first answer")
-	h.startInboxWake()
-	require.NoError(t, h.mgr.sendToSession(h.ctx, sessionID, "second question"))
+	h.say(sessionID, "second question")
 	collector.waitMessage(sessionID, "second answer")
 	collector.waitIdleAfter(sessionID, "second answer")
 	assertHarnessTrace(t, h, "second_input_no_replay.json", collector.snapshot(), sessionID)
@@ -297,14 +261,11 @@ func TestHarnessScenario_CLIConversationIsManagerOwned(t *testing.T) {
 	h := newHarness(t, harnessOptions{respond: func(string, []llmwire.Message) *llmwire.Response {
 		return textReply("configuration answer")
 	}})
-	collector := collectEvents(t, h.mgr.bus.SubscribeAll())
-	defer collector.stop()
-	h.startInboxWake()
-	sessionID, err := h.mgr.Send(h.ctx, h.projectID, "configure coagent", "fake-model", map[string]any{
+	collector := h.collect()
+	sessionID := h.send("configure coagent", map[string]any{
 		controllerapi.SessionAttributeManagerID: "cli",
 		"channel":                               "cli",
 	})
-	require.NoError(t, err)
 	collector.waitMessage(sessionID, "configuration answer")
 	assertHarnessTrace(t, h, "cli_conversation_manager_owned.json", collector.snapshot(), sessionID)
 }
@@ -343,18 +304,10 @@ func TestHarnessScenario_LongSessionAcceptsInputWithoutChatReceipt(t *testing.T)
 		<-release
 		return textReply("first model progress")
 	}})
-	defer func() {
-		close(release)
-		h.shutdown()
-	}()
-	h.startInboxWake()
-	sessionID, err := h.mgr.Send(
-		h.ctx, h.projectID, "sanitized session-165 root input", "fake-model", managerAttrs("telegram:main"),
-	)
-	require.NoError(t, err)
+	defer close(release)
+	sessionID := h.send("sanitized session-165 root input", managerAttrs("telegram:main"))
 	waitForScenarioSignal(t, entered, "model call")
-	h.startInboxWake()
-	require.NoError(t, h.mgr.sendToSession(h.ctx, sessionID, "queued follow-up"))
+	h.say(sessionID, "queued follow-up")
 	var inputs, acknowledgements int
 	require.NoError(t, h.db.QueryRowContext(h.ctx, `
 		SELECT COUNT(*) FROM session_inbox WHERE session_id = ?`,
@@ -403,21 +356,16 @@ func TestHarnessScenario_OutputChainReportedOrder(t *testing.T) {
 		}
 	}
 	h := newHarness(t, harnessOptions{respond: respond})
-	defer func() {
-		closeOnce.Do(func() { close(followUpQueued) })
-		h.shutdown()
-	}()
+	defer closeOnce.Do(func() { close(followUpQueued) })
 
 	collector := collectEvents(t, h.mgr.bus.SubscribeAll())
 	defer collector.stop()
-	h.startInboxWake()
-	root, err := h.mgr.Send(h.ctx, h.projectID, "do the work", "fake-model", managerAttrs(scenarioManagerID))
-	require.NoError(t, err)
+	root := h.send("do the work", managerAttrs(scenarioManagerID))
 	waitForScenarioSignal(t, entered, "first model call")
 
 	// The follow-up is enqueued while the first tool is unresolved, so it may
 	// only enter history after settlement — advancing the generation exactly once.
-	_, err = h.store.Enqueue(
+	_, err := h.store.Enqueue(
 		h.ctx, sessionstore.Input{
 			SessionID: root,
 			Source:    sessionstore.InputSourceUser,
@@ -467,11 +415,8 @@ func TestHarnessScenario_OutputChainNarratedToolIterations(t *testing.T) {
 	}
 	h := newHarness(t, harnessOptions{respond: respond})
 
-	collector := collectEvents(t, h.mgr.bus.SubscribeAll())
-	defer collector.stop()
-	h.startInboxWake()
-	root, err := h.mgr.Send(h.ctx, h.projectID, "do the work", "fake-model", managerAttrs(scenarioManagerID))
-	require.NoError(t, err)
+	collector := h.collect()
+	root := h.send("do the work", managerAttrs(scenarioManagerID))
 	collector.waitMessage(root, "All done.")
 	assertNarratedOutputOrder(
 		t,
@@ -515,20 +460,10 @@ func TestHarnessScenario_ProcessCompletionAtBusyToolBoundary(t *testing.T) {
 		collector.stop()
 		h.shutdown()
 	}()
-	h.startInboxWake()
-	rootID, err := h.mgr.Send(h.ctx, h.projectID, "start busy process scenario", "fake-model", nil)
-	require.NoError(t, err)
+	rootID := h.send("start busy process scenario", nil)
 	<-entered
 	process := startScenarioProcess(t, service, rootID, rootID, "printf 'finished\\n'")
-	func() backgroundprocess.Process {
-		var record backgroundprocess.Process
-		h.waitUntil("process state", func() bool {
-			var err error
-			record, err = h.mgr.processStore.GetProcess(context.Background(), process.ID)
-			return err == nil && record.State == backgroundprocess.StateCompleted
-		})
-		return record
-	}()
+	h.waitProcess(process.ID, backgroundprocess.StateCompleted)
 	close(release)
 	collector.waitMessage(rootID, "busy process completion observed")
 	observedMu.Lock()
@@ -582,13 +517,8 @@ func TestHarnessScenario_AgentCancelsOwnedBackgroundProcess(t *testing.T) {
 	h := newHarness(t, harnessOptions{respond: respond})
 	service := installScenarioProcessService(t, h)
 	h.mgr.build.ProcessService = service
-	collector := collectEvents(t, h.mgr.bus.SubscribeAll())
-	defer collector.stop()
-	h.startInboxWake()
-	rootID, err := h.mgr.Send(
-		h.ctx, h.projectID, "start then cancel background work", "fake-model", managerAttrs(scenarioManagerID),
-	)
-	require.NoError(t, err)
+	collector := h.collect()
+	rootID := h.send("start then cancel background work", managerAttrs(scenarioManagerID))
 	collector.waitMessage(rootID, "unused background process cancelled")
 	id, ok := processID.Load().(string)
 	require.True(t, ok)
@@ -609,8 +539,7 @@ func TestHarnessScenario_ProcessCompletionAtIdleTransition(t *testing.T) {
 		require.True(t, hasUserContaining(messages, "<process_completion>"))
 		return textReply("idle-transition completion observed")
 	}})
-	collector := collectEvents(t, h.mgr.bus.SubscribeAll())
-	defer collector.stop()
+	collector := h.collect()
 	root, err := h.store.CreateSession(h.ctx, h.projectID, "fake-model", "", managerAttrs(scenarioManagerID))
 	require.NoError(t, err)
 	require.NoError(t, h.store.UpdateSessionStatus(h.ctx, root.ID, sessionstore.SessionStatusCompleted))
@@ -647,8 +576,7 @@ func TestHarnessScenario_ProcessCompletionRevivesCompletedRoot(t *testing.T) {
 		return textReply("idle process completion observed")
 	}})
 	service := installScenarioProcessService(t, h)
-	collector := collectEvents(t, h.mgr.bus.SubscribeAll())
-	defer collector.stop()
+	collector := h.collect()
 	root := h.createRoot(managerAttrs(scenarioManagerID))
 	require.NoError(t, h.store.UpdateSessionStatus(h.ctx, root, sessionstore.SessionStatusCompleted))
 	process := startScenarioProcess(t, service, root, root, "printf 'finished\\n'")
@@ -686,11 +614,8 @@ func TestHarnessScenario_ProcessCompletionInterruptsSleep(t *testing.T) {
 	}
 	h := newHarness(t, harnessOptions{respond: respond})
 	service := installScenarioProcessService(t, h)
-	collector := collectEvents(t, h.mgr.bus.SubscribeAll())
-	defer collector.stop()
-	h.startInboxWake()
-	rootID, err := h.mgr.Send(h.ctx, h.projectID, "start process sleep", "fake-model", managerAttrs(scenarioManagerID))
-	require.NoError(t, err)
+	collector := h.collect()
+	rootID := h.send("start process sleep", managerAttrs(scenarioManagerID))
 	collector.waitWait(rootID, sessionevent.WaitSleep)
 	process := startScenarioProcess(t, service, rootID, rootID, "printf 'wake\\n'")
 	collector.waitMessage(rootID, "process interrupted sleep")
@@ -709,15 +634,7 @@ func TestHarnessScenario_ProcessCompletionInterruptsSleep(t *testing.T) {
 	}
 	assert.Contains(t, toolOutput, "Sleep interrupted")
 	assert.Equal(t, backgroundprocess.StateCompleted,
-		func() backgroundprocess.Process {
-			var record backgroundprocess.Process
-			h.waitUntil("process state", func() bool {
-				var err error
-				record, err = h.mgr.processStore.GetProcess(context.Background(), process.ID)
-				return err == nil && record.State == backgroundprocess.StateCompleted
-			})
-			return record
-		}().State)
+		h.waitProcess(process.ID, backgroundprocess.StateCompleted).State)
 	assertHarnessTrace(t, h, "process_interrupts_sleep.json", turn, rootID)
 }
 
@@ -749,21 +666,11 @@ func TestHarnessScenario_ProcessCompletionWaitsForForegroundChild(t *testing.T) 
 		collector.stop()
 		h.shutdown()
 	}()
-	h.startInboxWake()
-	rootID, err := h.mgr.Send(h.ctx, h.projectID, "start foreground process ordering", "fake-model", nil)
-	require.NoError(t, err)
+	rootID := h.send("start foreground process ordering", nil)
 	collector.waitWait(rootID, sessionevent.WaitSubagent)
 	h.waitUntil("foreground parent parked", func() bool { return !h.mgr.HasActiveLoop(rootID) })
 	process := startScenarioProcess(t, service, rootID, rootID, "printf 'queued\\n'")
-	func() backgroundprocess.Process {
-		var record backgroundprocess.Process
-		h.waitUntil("process state", func() bool {
-			var err error
-			record, err = h.mgr.processStore.GetProcess(context.Background(), process.ID)
-			return err == nil && record.State == backgroundprocess.StateCompleted
-		})
-		return record
-	}()
+	h.waitProcess(process.ID, backgroundprocess.StateCompleted)
 	h.waitUntil("process wake blocked", func() bool {
 		pending, err := h.store.PeekPending(h.ctx, rootID)
 		return err == nil && pending.Source == sessionstore.InputSourceProcess
@@ -812,11 +719,7 @@ func TestProcessCompletionRetainsInputWithoutWakingStoppedOrErroredSession(t *te
 				row, err := h.store.PeekPending(h.ctx, root)
 				return err == nil && row.Attributes["process_id"] == process.ID
 			})
-			select {
-			case <-observer.observed:
-			case <-time.After(5 * time.Second):
-				t.Fatal("inbox wake did not inspect the parked session")
-			}
+			require.True(t, closedInTime(observer.observed), "inbox wake did not inspect the parked session")
 			assert.Never(t, func() bool {
 				return h.mgr.HasActiveLoop(root) || calls.Load() != 0 || len(collector.snapshot()) != 0
 			}, 100*time.Millisecond, 5*time.Millisecond, "a consumed process wake must leave the session parked")
@@ -827,8 +730,7 @@ func TestProcessCompletionRetainsInputWithoutWakingStoppedOrErroredSession(t *te
 			assert.Equal(t, sessionstore.InputSourceProcess, pending.Source)
 			assert.Equal(t, process.ID, pending.Attributes["process_id"])
 			if status == sessionstore.SessionStatusStopped {
-				h.startInboxWake()
-				require.NoError(t, h.mgr.sendToSession(h.ctx, root, "/help"))
+				h.say(root, "/help")
 				assert.False(t, h.mgr.HasActiveLoop(root))
 				head, peekErr := h.mgr.store.PeekPending(h.ctx, root)
 				require.NoError(t, peekErr)
@@ -899,21 +801,14 @@ func TestPublishRoutingModel_ManagerOwnershipSurvivesTransitions(t *testing.T) {
 
 func TestSpawnedChildProducesNoPubSubEvents(t *testing.T) {
 	h := newHarness(t, harnessOptions{})
-	collector := collectEvents(t, h.mgr.bus.SubscribeAll())
-	defer collector.stop()
-	h.startInboxWake()
-	parentID, err := h.mgr.Send(h.ctx, h.projectID, "spawn a child", "fake-model", nil)
-	require.NoError(t, err)
+	collector := h.collect()
+	parentID := h.send("spawn a child", nil)
 
 	// Wait for the child to reach a terminal state: its loop — and with it
 	// announceSession — must actually have run, or the assertion below is vacuous.
-	h.waitUntil("child link", func() bool { return h.linkByCall(parentID, taskCallID) != nil })
-	link := *h.linkByCall(parentID, taskCallID)
-	h.waitUntil(
-		"child delivery",
-		func() bool { link := h.link(link.ChildID); return link != nil && link.DeliveredAt != 0 },
-	)
-	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(parentID) })
+	link := h.waitLink(parentID, taskCallID)
+	h.waitDelivered(link.ChildID)
+	h.waitAnswer(parentID, "")
 	var parentEvents int
 	for _, sn := range collector.snapshot() {
 		assert.NotEqual(t, link.ChildID, sn.SessionID, "child session events must never reach subscribers")
@@ -944,13 +839,8 @@ func TestIdleIsSuppressedByReplacementRunner(t *testing.T) {
 
 func TestHarnessScenario_LengthAttemptIsDiscardedBeforeToolExecution(t *testing.T) {
 	h := newHarness(t, harnessOptions{respond: lengthRecoveryResponder(t)})
-	collector := collectEvents(t, h.mgr.bus.SubscribeAll())
-	defer collector.stop()
-	h.startInboxWake()
-	sessionID, err := h.mgr.Send(
-		h.ctx, h.projectID, "exercise response recovery", "fake-model", managerAttrs(scenarioManagerID),
-	)
-	require.NoError(t, err)
+	collector := h.collect()
+	sessionID := h.send("exercise response recovery", managerAttrs(scenarioManagerID))
 	collector.waitMessage(sessionID, "recovered complete answer")
 	collector.waitIdleAfter(sessionID, "recovered complete answer")
 	messages := transcriptOf(h, sessionID)
@@ -997,11 +887,8 @@ func TestHarnessScenario_RejectedFinishPublishesCanonicalError(t *testing.T) {
 			h := newHarness(t, harnessOptions{respond: func(string, []llmwire.Message) *llmwire.Response {
 				return &tt.response
 			}})
-			collector := collectEvents(t, h.mgr.bus.SubscribeAll())
-			defer collector.stop()
-			h.startInboxWake()
-			sessionID, err := h.mgr.Send(h.ctx, h.projectID, tt.prompt, "fake-model", managerAttrs(scenarioManagerID))
-			require.NoError(t, err)
+			collector := h.collect()
+			sessionID := h.send(tt.prompt, managerAttrs(scenarioManagerID))
 			want := sessionstore.IntegrityErrorNotice(tt.error)
 			collector.waitMessage(sessionID, want)
 			collector.waitIdleAfter(sessionID, want)
@@ -1038,28 +925,26 @@ func TestScenario_StartFailureParksWithoutConsumingInput(t *testing.T) {
 		}
 		return replyCount == 2
 	})
-	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(id) })
+	h.waitAnswer(id, "")
 	h.mgr.build.Config.UnifiedConfig.Models = h.mgr.build.Config.UnifiedConfig.Models[1:]
-	h.startInboxWake()
-	require.NoError(t, h.mgr.sendToSession(h.ctx, id, "keep this input"))
+	h.say(id, "keep this input")
 	h.waitUntil("failure observed", func() bool {
 		record, err := h.store.GetSession(h.ctx, id)
 		return err == nil && record.Status == sessionstore.SessionStatusError
 	})
-	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(id) })
+	h.waitAnswer(id, "")
 	record := h.session(id)
 	assert.Equal(t, sessionstore.SessionStatusError, record.Status)
 	pending, err := h.store.PeekPending(h.ctx, id)
 	require.NoError(t, err)
 	assert.Equal(t, "keep this input", pending.RawContent)
 	require.NoError(t, h.mgr.SetModel(h.ctx, id, "working-model", ""))
-	h.startInboxWake()
-	require.NoError(t, h.mgr.sendToSession(h.ctx, id, "retry now"))
+	h.say(id, "retry now")
 	h.waitUntil("retry consumes preserved work", func() bool {
 		_, err := h.store.PeekPending(h.ctx, id)
 		return errors.Is(err, sessionstore.ErrNoPendingInput)
 	})
-	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(id) })
+	h.waitAnswer(id, "")
 	assert.True(t, hasUserContaining(h.messages(id), "keep this input"))
 }
 
@@ -1106,7 +991,7 @@ func TestScenario_StartFailureRestartKeepsOneReceipt(t *testing.T) {
 			clientFor: knownModelClient([]string{"working-model"}, respond),
 		},
 	)
-	t.Cleanup(first.shutdown)
+
 	root, err := first.store.CreateSession(
 		first.ctx, first.projectID, "removed-model", "", managerAttrs("test-manager"),
 	)
@@ -1119,16 +1004,9 @@ func TestScenario_StartFailureRestartKeepsOneReceipt(t *testing.T) {
 	first.shutdown()
 
 	for range 2 {
-		h := newHarness(
-			t, harnessOptions{
-				dbPath:    dbPath,
-				configure: withKnownModels([]string{"working-model"}),
-				clientFor: knownModelClient([]string{"working-model"}, respond),
-			},
-		)
-		t.Cleanup(h.shutdown)
-		h.startInboxWake()
-		h.mgr.resumeAfterRestart(h.ctx)
+		h := first.restart(nil)
+
+		h.resume()
 		h.waitUntil("failed recovery parked", func() bool {
 			record, err := h.store.GetSession(h.ctx, root.ID)
 			return err == nil && record.Status == sessionstore.SessionStatusError && !h.mgr.HasActiveLoop(root.ID)
@@ -1158,25 +1036,11 @@ func TestHarnessScenario_StatusMidActivationDoesNotStrandJustExecutedToolResults
 		return callReply("ls-call-1", "ls", `{"path":"."}`)
 	}
 	h := newHarness(t, harnessOptions{respond: respond})
-	collector := collectEvents(t, h.mgr.bus.SubscribeAll())
-	released := false
-	defer func() {
-		if !released {
-			close(release)
-		}
-		collector.stop()
-		h.shutdown()
-	}()
-	h.startInboxWake()
-	sessionID, err := h.mgr.Send(h.ctx, h.projectID, "list the workdir", "fake-model", nil)
-	require.NoError(t, err)
-	select {
-	case <-entered:
-	case <-time.After(5 * time.Second):
-		t.Fatal("the model was never asked for the first turn")
-	}
-	h.startInboxWake()
-	require.NoError(t, h.mgr.sendToSession(h.ctx, sessionID, "/status"))
+	collector := h.collect()
+	defer closeOnce(release)
+	sessionID := h.send("list the workdir", nil)
+	require.True(t, closedInTime(entered), "the model was never asked for the first turn")
+	h.say(sessionID, "/status")
 	collector.waitFor(
 		t,
 		"status answers while the model call is still in flight",
@@ -1185,11 +1049,10 @@ func TestHarnessScenario_StatusMidActivationDoesNotStrandJustExecutedToolResults
 		},
 	)
 	close(release)
-	released = true
 	collector.waitFor(t, "the interrupted work is still answered", func(e []controllerapi.SessionNotification) bool {
 		return countPublishedMessage(e, sessionID, "work done") == 1
 	})
-	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(sessionID) })
+	h.waitAnswer(sessionID, "")
 	events := collector.snapshot()
 	assert.Len(t, statusReports(events, sessionID), 1, "exactly one status report")
 	assert.Equal(t, 1, countPublishedMessage(events, sessionID, "work done"), "the answer reaches the human once")
@@ -1206,15 +1069,12 @@ func TestHarnessScenario_StatusMidActivationDoesNotStrandJustExecutedToolResults
 func TestHarnessScenario_StatusOnAFreshSessionCostsNoModelTurn(t *testing.T) {
 	rec := &skillRecorder{}
 	h := newHarness(t, harnessOptions{respond: rec.wrap(plainRespond)})
-	collector := collectEvents(t, h.mgr.bus.SubscribeAll())
-	defer collector.stop()
-	h.startInboxWake()
-	sessionID, err := h.mgr.Send(h.ctx, h.projectID, "/status", "fake-model", nil)
-	require.NoError(t, err)
+	collector := h.collect()
+	sessionID := h.send("/status", nil)
 	collector.waitFor(t, "status report reaches the controller", func(e []controllerapi.SessionNotification) bool {
 		return len(statusReports(e, sessionID)) == 1
 	})
-	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(sessionID) })
+	h.waitAnswer(sessionID, "")
 	assert.Len(t, statusReports(collector.snapshot(), sessionID), 1, "exactly one status report")
 	assert.Empty(t, rec.snapshot(), "a conversation that asks nothing is never sent to the provider")
 	assert.Empty(t, h.messages(sessionID), "the status command writes nothing")
@@ -1226,24 +1086,13 @@ func TestHarnessScenario_StatusOnAFreshSessionCostsNoModelTurn(t *testing.T) {
 func TestHarnessScenario_StatusIsAnsweredWhileABlockingChildIsOut(t *testing.T) {
 	release := make(chan struct{})
 	h := newHarness(t, harnessOptions{respond: blockingCompactRespond(release)})
-	collector := collectEvents(t, h.mgr.bus.SubscribeAll())
-	released := false
-	defer func() {
-		if !released {
-			close(release)
-		}
-		collector.stop()
-		h.shutdown()
-	}()
-	h.startInboxWake()
-	parentID, err := h.mgr.Send(h.ctx, h.projectID, "do work then spawn", "fake-model", nil)
-	require.NoError(t, err)
-	h.waitUntil("child link", func() bool { return h.linkByCall(parentID, taskCallID) != nil })
-	link := *h.linkByCall(parentID, taskCallID)
+	collector := h.collect()
+	defer closeOnce(release)
+	parentID := h.send("do work then spawn", nil)
+	link := h.waitLink(parentID, taskCallID)
 	require.True(t, link.Blocking)
 	h.waitUntil("parent suspended", func() bool { return !h.mgr.HasActiveLoop(parentID) })
-	h.startInboxWake()
-	require.NoError(t, h.mgr.sendToSession(h.ctx, parentID, "/status"))
+	h.say(parentID, "/status")
 	collector.waitFor(t, "status answered while the child is out", func(e []controllerapi.SessionNotification) bool {
 		return len(statusReports(e, parentID)) == 1
 	})
@@ -1252,12 +1101,8 @@ func TestHarnessScenario_StatusIsAnsweredWhileABlockingChildIsOut(t *testing.T) 
 	assert.Equal(t, 1, countAssistantToolCallsFor(waiting, "task"))
 	assert.Equal(t, 0, countToolResultsFor(waiting, "task"), "the join must still be owed to the child")
 	close(release)
-	released = true
-	h.waitUntil(
-		"child delivery",
-		func() bool { link := h.link(link.ChildID); return link != nil && link.DeliveredAt != 0 },
-	)
-	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(parentID) })
+	h.waitDelivered(link.ChildID)
+	h.waitAnswer(parentID, "")
 	collector.waitFor(t, "the parent answers once the child returns", func(e []controllerapi.SessionNotification) bool {
 		return countPublishedMessage(e, parentID, "parent got the child result") == 1
 	})
@@ -1271,12 +1116,9 @@ func TestHarnessScenario_StatusIsAnsweredWhileABlockingChildIsOut(t *testing.T) 
 // legend.
 func TestHarnessScenario_StatusFullTodoListOrderingAndIcons(t *testing.T) {
 	h := newHarness(t, harnessOptions{respond: trivialRespond})
-	collector := collectEvents(t, h.mgr.bus.SubscribeAll())
-	defer collector.stop()
-	h.startInboxWake()
-	root, err := h.mgr.Send(h.ctx, h.projectID, "plan the work", "fake-model", managerAttrs(scenarioManagerID))
-	require.NoError(t, err)
-	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(root) })
+	collector := h.collect()
+	root := h.send("plan the work", managerAttrs(scenarioManagerID))
+	h.waitAnswer(root, "")
 	base := time.Now().UTC().Add(-time.Hour)
 	stamp := func(d time.Duration) string { return base.Add(d).Format(time.RFC3339Nano) }
 	todos := `[` +
@@ -1288,16 +1130,15 @@ func TestHarnessScenario_StatusFullTodoListOrderingAndIcons(t *testing.T) {
 		`{"id":"legacy","content":"legacy item","status":"pending","priority":"medium"}` +
 		`]`
 	raw := json.RawMessage(todos)
-	_, err = h.store.Commit(
+	_, err := h.store.Commit(
 		h.ctx, sessionstore.Commit{SessionID: root, State: sessionstore.StatePatch{TodoItems: &raw}},
 	)
 	require.NoError(t, err)
-	h.startInboxWake()
-	require.NoError(t, h.mgr.sendToSession(h.ctx, root, "/status"))
+	h.say(root, "/status")
 	collector.waitFor(t, "full /status TODO list", func(e []controllerapi.SessionNotification) bool {
 		return len(statusReports(e, root)) > 0
 	})
-	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(root) })
+	h.waitAnswer(root, "")
 	reports := statusReports(collector.snapshot(), root)
 	report := reports[len(reports)-1]
 	assert.Contains(t, report, "- TODO: 1 active · 4 remaining · 1 done · 1 cancelled")
@@ -1333,11 +1174,8 @@ func TestScenario_StoppedRootAnswersStatusWithoutReactivating(t *testing.T) {
 		return callReply("long-bash", "bash", `{"command":"sleep 30"}`)
 	}
 	h := newHarness(t, harnessOptions{respond: respond})
-	collector := collectEvents(t, h.mgr.bus.SubscribeAll())
-	defer collector.stop()
-	h.startInboxWake()
-	sessionID, err := h.mgr.Send(h.ctx, h.projectID, "watch checks", "fake-model", nil)
-	require.NoError(t, err)
+	collector := h.collect()
+	sessionID := h.send("watch checks", nil)
 	h.waitUntil("ordinary bash started", func() bool {
 		return countAssistantToolCallsFor(h.messages(sessionID), "bash") == 1 &&
 			h.mgr.HasActiveLoop(sessionID)
@@ -1347,8 +1185,7 @@ func TestScenario_StoppedRootAnswersStatusWithoutReactivating(t *testing.T) {
 		rec, getErr := h.store.GetSession(h.ctx, sessionID)
 		return getErr == nil && rec.Status == sessionstore.SessionStatusStopped
 	})
-	h.startInboxWake()
-	require.NoError(t, h.mgr.sendToSession(h.ctx, sessionID, "/status"))
+	h.say(sessionID, "/status")
 	collector.waitFor(t, "status report reaches the controller", func(e []controllerapi.SessionNotification) bool {
 		return len(statusReports(e, sessionID)) == 1
 	})
@@ -1360,7 +1197,7 @@ func TestScenario_StoppedRootAnswersStatusWithoutReactivating(t *testing.T) {
 				event.Notification.Reason == ""
 		})
 	})
-	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(sessionID) })
+	h.waitAnswer(sessionID, "")
 	assert.Len(t, statusReports(collector.snapshot(), sessionID), 1, "the stopped root answers /status")
 	rec := h.session(sessionID)
 	assert.Equal(t, sessionstore.SessionStatusStopped, rec.Status,

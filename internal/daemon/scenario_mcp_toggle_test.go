@@ -8,7 +8,6 @@ import (
 	"sync"
 	"syscall"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -88,7 +87,7 @@ func TestScenario_MCPToggleRestartsAllSessionServersInTheNextRun(t *testing.T) {
 			toggle: func(t *testing.T, f *toggleFixture, holder int64) {
 				f.holdThroughDisable(t, holder)
 				f.waitAnswer(holder, "held run done")
-				f.say(t, holder, "ENABLE_IT again", "enabled")
+				f.reply(holder, "ENABLE_IT again", "enabled")
 			},
 		},
 		{
@@ -104,20 +103,20 @@ func TestScenario_MCPToggleRestartsAllSessionServersInTheNextRun(t *testing.T) {
 		{
 			name: "another session toggles while this one is idle", wantRestart: true,
 			toggle: func(t *testing.T, f *toggleFixture, _ int64) {
-				other := f.start(t, "DISABLE_IT now", "disabled")
-				f.say(t, other, "ENABLE_IT again", "enabled")
+				other := f.ask("DISABLE_IT now", "disabled")
+				f.reply(other, "ENABLE_IT again", "enabled")
 			},
 		},
 		{
 			name: "one run switches it off and on", wantRestart: true,
 			toggle: func(t *testing.T, f *toggleFixture, holder int64) {
-				f.say(t, holder, "BOUNCE_IT", "bounced")
+				f.reply(holder, "BOUNCE_IT", "bounced")
 			},
 		},
 		{
 			name: "enabling an enabled server changes nothing",
 			toggle: func(t *testing.T, f *toggleFixture, holder int64) {
-				f.say(t, holder, "ENABLE_IT again", "enabled")
+				f.reply(holder, "ENABLE_IT again", "enabled")
 			},
 		},
 		{name: "nobody toggles", toggle: func(*testing.T, *toggleFixture, int64) {}},
@@ -125,18 +124,18 @@ func TestScenario_MCPToggleRestartsAllSessionServersInTheNextRun(t *testing.T) {
 	for _, tt := range flows {
 		t.Run(tt.name, func(t *testing.T) {
 			f := newToggleFixture(t, tt.held, tt.gated)
-			holder := f.start(t, "REGISTER both servers", "registered")
+			holder := f.ask("REGISTER both servers", "registered")
 			if tt.held {
-				f.say(t, holder, "USE_NEIGHBOUR now", "used neighbour")
+				f.reply(holder, "USE_NEIGHBOUR now", "used neighbour")
 			} else {
-				f.say(t, holder, "USE_BEFORE now", "used before")
+				f.reply(holder, "USE_BEFORE now", "used before")
 			}
 			neighbourBefore := f.pidOf(t, holder, "before-neighbour")
 
 			tt.toggle(t, f, holder)
 
 			toggledBefore := f.pidOf(t, holder, "before-toggled")
-			f.say(t, holder, "USE_AFTER now", "used after")
+			f.reply(holder, "USE_AFTER now", "used after")
 			msgs := f.messages(holder)
 			require.NoError(t, llmtest.ValidateToolPairing(msgs))
 			assert.Contains(t, toolResultForCallID(msgs, "before-toggled").Content, "pong from toggled",
@@ -174,16 +173,6 @@ func newToggleFixture(t *testing.T, held, gated bool) *toggleFixture {
 }
 
 func (f *toggleFixture) release() { f.released.Do(func() { close(f.proceed) }) }
-
-// closedInTime keeps a broken flow from stranding the test or the session's goroutine.
-func closedInTime(ch <-chan struct{}) bool {
-	select {
-	case <-ch:
-		return true
-	case <-time.After(5 * time.Second):
-		return false
-	}
-}
 
 func newIdentityMCPServer(t *testing.T, pong string, held bool) *fakeMCPServer {
 	t.Helper()
@@ -243,26 +232,6 @@ func (f *toggleFixture) respond(_ string, msgs []llmwire.Message) *llmwire.Respo
 	return textReply("unscripted")
 }
 
-func (f *toggleFixture) start(t *testing.T, prompt, answer string) int64 {
-	t.Helper()
-	id, err := f.mgr.Send(f.ctx, f.projectID, prompt, "fake-model", nil)
-	require.NoError(t, err)
-	f.waitAnswer(id, answer)
-	return id
-}
-
-func (f *toggleFixture) say(t *testing.T, id int64, prompt, answer string) {
-	t.Helper()
-	require.NoError(t, f.mgr.sendToSession(f.ctx, id, prompt))
-	f.waitAnswer(id, answer)
-}
-
-func (f *toggleFixture) waitAnswer(id int64, answer string) {
-	f.t.Helper()
-	f.waitUntil(answer, func() bool { return lastAssistantTextDTO(f.messages(id)) == answer })
-	f.waitUntil("session idle", func() bool { return !f.mgr.HasActiveLoop(id) })
-}
-
 func (f *toggleFixture) pidOf(t *testing.T, id int64, callID string) int {
 	t.Helper()
 	result := toolResultForCallID(f.messages(id), callID)
@@ -278,7 +247,7 @@ func (f *toggleFixture) holdThroughDisable(t *testing.T, holder int64) {
 	t.Helper()
 	require.NoError(t, f.mgr.sendToSession(f.ctx, holder, "HOLD_IT while I reconfigure"))
 	f.waitUntil("the held call reaches the server", func() bool { return f.toggled.count(t, "call") == 1 })
-	f.start(t, "DISABLE_IT now", "disabled")
+	f.ask("DISABLE_IT now", "disabled")
 	assert.True(t, f.mgr.HasActiveLoop(holder), "a registry change must not tear down the active call")
 	release, err := os.OpenFile(f.toggled.release, os.O_RDWR, 0o600)
 	require.NoError(t, err)

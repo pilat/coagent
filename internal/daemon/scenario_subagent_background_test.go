@@ -124,8 +124,7 @@ func (h *harness) parentDeliveries(parentID, childID int64) int {
 
 func (h *harness) waitChildYield(parentID int64) *subagent.Link {
 	h.t.Helper()
-	h.waitUntil("child link", func() bool { return h.linkByCall(parentID, taskCallID) != nil })
-	childID := h.linkByCall(parentID, taskCallID).ChildID
+	childID := h.waitLink(parentID, taskCallID).ChildID
 	h.waitUntil("child yield", func() bool {
 		return lastAssistantTextDTO(h.messages(childID)) == "waiting for the search" && !h.mgr.HasActiveLoop(childID)
 	})

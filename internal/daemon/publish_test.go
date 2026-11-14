@@ -15,77 +15,67 @@ import (
 
 func TestPublishGate_RootPasses(t *testing.T) {
 	h := newHarness(t, harnessOptions{configure: withTestModels, clientFor: (&mockFactory{}).client})
-	mgr, store := h.mgr, h.store
+	mgr := h.mgr
 	ch := mgr.bus.SubscribeAll()
-	pid := testProject(t, store, "/tmp/publish-root")
-	rec, err := mgr.store.CreateSession(context.Background(), pid, "fake-model", "", nil)
-	require.NoError(t, err)
-	mgr.NotifySession(rec.ID, sessionevent.Notification{Type: sessionevent.NotifyMessage, Message: "hi"})
+	rec := h.createRoot(nil)
+	mgr.NotifySession(rec, sessionevent.Notification{Type: sessionevent.NotifyMessage, Message: "hi"})
 	sn := requireNotification(t, ch)
-	assert.Equal(t, rec.ID, sn.SessionID)
+	assert.Equal(t, rec, sn.SessionID)
 	assert.Equal(t, "hi", sn.Notification.Message)
 }
 
 func TestPublishGate_RoutesRootOnlyToOwningManager(t *testing.T) {
 	h := newHarness(t, harnessOptions{configure: withTestModels, clientFor: (&mockFactory{}).client})
-	mgr, store := h.mgr, h.store
+	mgr := h.mgr
 	alpha := mgr.bus.SubscribeManager("alpha")
 	beta := mgr.bus.SubscribeManager("beta")
-	pid := testProject(t, store, "/tmp/publish-owned-root")
-	rec, err := mgr.store.CreateSession(context.Background(), pid, "fake-model", "", managerAttrs("alpha"))
-	require.NoError(t, err)
-	mgr.NotifySession(rec.ID, sessionevent.Notification{Type: sessionevent.NotifyMessage, Message: "private"})
-	assert.Equal(t, rec.ID, requireManagerNotification(t, alpha).SessionID)
+	rec := h.createRoot(managerAttrs("alpha"))
+	mgr.NotifySession(rec, sessionevent.Notification{Type: sessionevent.NotifyMessage, Message: "private"})
+	assert.Equal(t, rec, requireManagerNotification(t, alpha).SessionID)
 	requireNoManagerNotification(t, beta)
 }
 
 func TestPublishGate_OwnerlessRootReachesNoManager(t *testing.T) {
 	h := newHarness(t, harnessOptions{configure: withTestModels, clientFor: (&mockFactory{}).client})
-	mgr, store := h.mgr, h.store
+	mgr := h.mgr
 	alpha := mgr.bus.SubscribeManager("alpha")
-	pid := testProject(t, store, "/tmp/publish-ownerless-root")
-	rec, err := mgr.store.CreateSession(context.Background(), pid, "fake-model", "", nil)
-	require.NoError(t, err)
-	mgr.NotifySession(rec.ID, sessionevent.Notification{Type: sessionevent.NotifyMessage, Message: "unowned"})
+	rec := h.createRoot(nil)
+	mgr.NotifySession(rec, sessionevent.Notification{Type: sessionevent.NotifyMessage, Message: "unowned"})
 	requireNoManagerNotification(t, alpha)
 }
 
 func TestPublishGate_ClaimingOwnerUpdatesTheWarmRoute(t *testing.T) {
 	h := newHarness(t, harnessOptions{configure: withTestModels, clientFor: (&mockFactory{}).client})
-	mgr, store := h.mgr, h.store
+	mgr := h.mgr
 	alpha := mgr.bus.SubscribeManager("alpha")
-	pid := testProject(t, store, "/tmp/publish-claimed-root")
-	rec, err := mgr.store.CreateSession(context.Background(), pid, "fake-model", "", nil)
-	require.NoError(t, err)
-	mgr.NotifySession(rec.ID, sessionevent.Notification{Type: sessionevent.NotifyMessage, Message: "before"})
+	rec := h.createRoot(nil)
+	mgr.NotifySession(rec, sessionevent.Notification{Type: sessionevent.NotifyMessage, Message: "before"})
 	requireNoManagerNotification(t, alpha)
-	require.NoError(t, mgr.SetAttributes(context.Background(), rec.ID, managerAttrs("alpha")))
-	mgr.NotifySession(rec.ID, sessionevent.Notification{Type: sessionevent.NotifyMessage, Message: "after"})
+	require.NoError(t, mgr.SetAttributes(context.Background(), rec, managerAttrs("alpha")))
+	mgr.NotifySession(rec, sessionevent.Notification{Type: sessionevent.NotifyMessage, Message: "after"})
 	assert.Equal(t, "after", requireManagerNotification(t, alpha).Notification.Message)
 }
 
 func TestPublishGate_ConcurrentClaimWinsOverAStaleRouteRead(t *testing.T) {
 	h := newHarness(t, harnessOptions{configure: withTestModels, clientFor: (&mockFactory{}).client})
-	mgr, store := h.mgr, h.store
+	mgr := h.mgr
 	alpha := mgr.bus.SubscribeManager("alpha")
-	pid := testProject(t, store, "/tmp/publish-concurrent-claim")
-	rec, err := mgr.store.CreateSession(context.Background(), pid, "fake-model", "", nil)
-	require.NoError(t, err)
+	rec := h.createRoot(nil)
 	stale := &staleReadSessionStore{
 		Store:  mgr.store,
-		target: rec.ID,
+		target: rec,
 		read:   make(chan struct{}), release: make(chan struct{}),
 	}
 	mgr.store = stale
 	published := make(chan struct{})
 	go func() {
 		defer close(published)
-		mgr.NotifySession(rec.ID, sessionevent.Notification{
+		mgr.NotifySession(rec, sessionevent.Notification{
 			Type: sessionevent.NotifyMessage, Message: "claimed while lookup was stale",
 		})
 	}()
 	requireSignal(t, stale.read)
-	require.NoError(t, mgr.SetAttributes(context.Background(), rec.ID, managerAttrs("alpha")))
+	require.NoError(t, mgr.SetAttributes(context.Background(), rec, managerAttrs("alpha")))
 	close(stale.release)
 	requireSignal(t, published)
 	assert.Equal(t, "claimed while lookup was stale", requireManagerNotification(t, alpha).Notification.Message)
@@ -106,7 +96,7 @@ func TestPublishGate_ChildDropped(t *testing.T) {
 	h := newHarness(t, harnessOptions{configure: withTestModels, clientFor: (&mockFactory{}).client})
 	mgr := h.mgr
 	ch := mgr.bus.SubscribeAll()
-	childID := newTestChild(t, h, "/tmp/publish-child")
+	childID := h.createUnlinkedChild(h.createRoot(nil))
 	mgr.NotifySession(childID, sessionevent.Notification{Type: sessionevent.NotifyMessage, Message: "hi"})
 	requireNoNotification(t, ch)
 }
@@ -114,7 +104,7 @@ func TestPublishGate_ChildDropped(t *testing.T) {
 func TestPublishGate_CachesChildVerdict(t *testing.T) {
 	h := newHarness(t, harnessOptions{configure: withTestModels, clientFor: (&mockFactory{}).client})
 	mgr := h.mgr
-	childID := newTestChild(t, h, "/tmp/publish-cache")
+	childID := h.createUnlinkedChild(h.createRoot(nil))
 	counting := &countingSessionStore{Store: mgr.store}
 	mgr.store = counting
 	for range 2 {
@@ -128,7 +118,7 @@ func TestPublishGate_FailOpenDoesNotPoisonCache(t *testing.T) {
 	h := newHarness(t, harnessOptions{configure: withTestModels, clientFor: (&mockFactory{}).client})
 	mgr := h.mgr
 	ch := mgr.bus.SubscribeAll()
-	childID := newTestChild(t, h, "/tmp/publish-failopen")
+	childID := h.createUnlinkedChild(h.createRoot(nil))
 	counting := &countingSessionStore{Store: mgr.store, failNth: 1}
 	mgr.store = counting
 	mgr.NotifySession(childID, sessionevent.Notification{Type: sessionevent.NotifyMessage, Message: "first"})
@@ -195,14 +185,3 @@ func (s *staleReadSessionStore) GetSession(
 
 // errSessionRead is the sentinel the fail-open publish test asserts against.
 var errSessionRead = errors.New("session store unavailable")
-
-// newTestChild creates a root session and returns the ID of a subagent child of it.
-func newTestChild(t *testing.T, h *harness, workDir string) int64 {
-	t.Helper()
-	ctx := context.Background()
-	pid := testProject(t, h.store, workDir)
-	parent, err := h.store.CreateSession(ctx, pid, "fake-model", "", nil)
-	require.NoError(t, err)
-	childID := h.createUnlinkedChild(parent.ID)
-	return childID
-}

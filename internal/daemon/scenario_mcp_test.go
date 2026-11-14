@@ -2,7 +2,6 @@ package daemon
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -11,12 +10,10 @@ import (
 	"strconv"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/pilat/coagent/internal/config"
 	"github.com/pilat/coagent/internal/llm/llmtest"
 	"github.com/pilat/coagent/internal/llmwire"
 	"github.com/pilat/coagent/internal/mcp"
@@ -52,29 +49,13 @@ func TestScenario_NextMCPStackReusesProcessAndRefreshesTools(t *testing.T) {
 		}
 	}
 	h := newHarness(t, harnessOptions{respond: respond})
-	h.startInboxWake()
-	sessionID, err := h.mgr.Send(h.ctx, h.projectID, "register the fake mcp server", "fake-model", nil)
-	require.NoError(t, err)
-	h.waitUntil("registration lands", func() bool {
-		return lastAssistantTextDTO(h.messages(sessionID)) == "registered"
-	})
-	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(sessionID) })
-	h.startInboxWake()
-	require.NoError(t, h.mgr.sendToSession(h.ctx, sessionID, "USE_FIRST now"))
-	h.waitUntil("first call finishes", func() bool {
-		return lastAssistantTextDTO(h.messages(sessionID)) == "used first"
-	})
-	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(sessionID) })
+	sessionID := h.ask("register the fake mcp server", "registered")
+	h.reply(sessionID, "USE_FIRST now", "used first")
 	firstSpawns := fake.count(t, "spawn")
 	assert.GreaterOrEqual(t, firstSpawns, 1)
 	assert.Equal(t, 1, fake.count(t, "call"))
 	require.NoError(t, os.WriteFile(fake.log+".extra", nil, 0o600))
-	h.startInboxWake()
-	require.NoError(t, h.mgr.sendToSession(h.ctx, sessionID, "USE_SECOND now"))
-	h.waitUntil("second call finishes", func() bool {
-		return lastAssistantTextDTO(h.messages(sessionID)) == "used second"
-	})
-	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(sessionID) })
+	h.reply(sessionID, "USE_SECOND now", "used second")
 	msgs := h.messages(sessionID)
 	require.NoError(t, llmtest.ValidateToolPairing(msgs))
 	assert.Contains(t, toolResultForCallID(msgs, "ping2-new").Content, "pong from fake")
@@ -87,12 +68,7 @@ func TestScenario_NextMCPStackReusesProcessAndRefreshesTools(t *testing.T) {
 	process, err := os.FindProcess(pid)
 	require.NoError(t, err)
 	require.NoError(t, process.Kill())
-	h.startInboxWake()
-	require.NoError(t, h.mgr.sendToSession(h.ctx, sessionID, "AFTER_CRASH now"))
-	h.waitUntil("replacement client answers", func() bool {
-		return lastAssistantTextDTO(h.messages(sessionID)) == "recovered"
-	})
-	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(sessionID) })
+	h.reply(sessionID, "AFTER_CRASH now", "recovered")
 	assert.Greater(t, fake.count(t, "spawn"), firstSpawns)
 	assert.Contains(t, toolResultForCallID(h.messages(sessionID), "after-crash").Content, "pong from fake")
 	spawnsBeforeStop := fake.count(t, "spawn")
@@ -141,27 +117,15 @@ func TestScenario_MCPDisableDoesNotBreakAnInFlightStack(t *testing.T) {
 		}
 	}
 	h := newHarness(t, harnessOptions{respond: respond})
-	h.startInboxWake()
-	holder, err := h.mgr.Send(h.ctx, h.projectID, "register the fake mcp server", "fake-model", nil)
-	require.NoError(t, err)
-	h.waitUntil("registration lands", func() bool {
-		return lastAssistantTextDTO(h.messages(holder)) == "registered"
-	})
-	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(holder) })
+	holder := h.ask("register the fake mcp server", "registered")
 
 	// The holder's next run parks inside tools/call.
-	h.startInboxWake()
-	require.NoError(t, h.mgr.sendToSession(h.ctx, holder, "HOLD_IT while I reconfigure"))
+	h.say(holder, "HOLD_IT while I reconfigure")
 	h.waitUntil("the held call reaches the server", func() bool { return fake.count(t, "call") == 1 })
 	require.GreaterOrEqual(t, fake.count(t, "spawn"), 1)
 
 	// A second session disables the server while the holder is mid-call.
-	h.startInboxWake()
-	disabler, err := h.mgr.Send(h.ctx, h.projectID, "DISABLE_IT now", "fake-model", nil)
-	require.NoError(t, err)
-	h.waitUntil("the disabling run finishes", func() bool {
-		return lastAssistantTextDTO(h.messages(disabler)) == "disabled"
-	})
+	disabler := h.ask("DISABLE_IT now", "disabled")
 	assert.True(t, h.mgr.HasActiveLoop(holder), "the registry change must not tear down the active call")
 	fake.unblock(t)
 	h.waitUntil("the held run completes", func() bool {
@@ -173,18 +137,8 @@ func TestScenario_MCPDisableDoesNotBreakAnInFlightStack(t *testing.T) {
 		"the in-flight call answers normally despite the registry change")
 	require.NoError(t, llmtest.ValidateToolPairing(h.messages(disabler)))
 	spawnsBeforeResume := fake.count(t, "spawn")
-	h.startInboxWake()
-	require.NoError(t, h.mgr.sendToSession(h.ctx, holder, "ENABLE_IT again"))
-	h.waitUntil("re-enable lands", func() bool {
-		return lastAssistantTextDTO(h.messages(holder)) == "enabled"
-	})
-	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(holder) })
-	h.startInboxWake()
-	require.NoError(t, h.mgr.sendToSession(h.ctx, holder, "USE_AGAIN please"))
-	h.waitUntil("the server answers again", func() bool {
-		return lastAssistantTextDTO(h.messages(holder)) == "used again"
-	})
-	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(holder) })
+	h.reply(holder, "ENABLE_IT again", "enabled")
+	h.reply(holder, "USE_AGAIN please", "used again")
 	msgs := h.messages(holder)
 	require.NoError(t, llmtest.ValidateToolPairing(msgs))
 	assert.Contains(t, toolResultForCallID(msgs, "ping-again").Content, "pong from held run")
@@ -217,27 +171,16 @@ func TestScenario_MCPDisableRemovesTheToolFromTheNextRun(t *testing.T) {
 		}
 	}
 	h := newHarness(t, harnessOptions{respond: respond})
-	h.startInboxWake()
-	sessionID, err := h.mgr.Send(h.ctx, h.projectID, "register the fake mcp server", "fake-model", nil)
-	require.NoError(t, err)
+	sessionID := h.send("register the fake mcp server", nil)
 	h.waitUntil("registration lands", func() bool {
 		return lastAssistantTextDTO(h.messages(sessionID)) == "registered"
 	})
-	h.startInboxWake()
 	require.NoError(t, h.mgr.sendToSession(h.ctx, sessionID, "DISABLE_IT now"))
-	h.waitUntil("the disable lands", func() bool {
-		return lastAssistantTextDTO(h.messages(sessionID)) == "disabled"
-	})
-	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(sessionID) })
+	h.waitAnswer(sessionID, "disabled")
 
 	// The disabling run still had the server, so it spawned one; the next one must not.
 	spawnsBefore := fake.count(t, "spawn")
-	h.startInboxWake()
-	require.NoError(t, h.mgr.sendToSession(h.ctx, sessionID, "USE_IT anyway"))
-	h.waitUntil("the run finishes", func() bool {
-		return lastAssistantTextDTO(h.messages(sessionID)) == "tried it"
-	})
-	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(sessionID) })
+	h.reply(sessionID, "USE_IT anyway", "tried it")
 	msgs := h.messages(sessionID)
 	require.NoError(t, llmtest.ValidateToolPairing(msgs))
 	assert.Contains(t, toolResultForCallID(msgs, "ping-after-disable").Content, "unknown tool",
@@ -294,13 +237,7 @@ func TestScenario_MCPAddReachesTheNextRunOnly(t *testing.T) {
 		return mcpToolCall("add-1", tool.IDMCPAdd, fake.addParams("fake", "project"))
 	}
 	h := newHarness(t, harnessOptions{respond: respond})
-	h.startInboxWake()
-	sessionID, err := h.mgr.Send(h.ctx, h.projectID, "register the fake mcp server", "fake-model", nil)
-	require.NoError(t, err)
-	h.waitUntil("registering run finishes", func() bool {
-		return lastAssistantTextDTO(h.messages(sessionID)) == "registered"
-	})
-	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(sessionID) })
+	sessionID := h.ask("register the fake mcp server", "registered")
 	msgs := h.messages(sessionID)
 	require.NoError(t, llmtest.ValidateToolPairing(msgs))
 	toolOutput := ""
@@ -314,12 +251,7 @@ func TestScenario_MCPAddReachesTheNextRunOnly(t *testing.T) {
 	assert.Contains(t, toolResultForCallID(msgs, "ping-same-run").Content, "unknown tool",
 		"the run that registered the server must not gain its tools")
 	assert.Equal(t, 0, fake.count(t, "call"), "a mid-run registration executes nothing")
-	h.startInboxWake()
-	require.NoError(t, h.mgr.sendToSession(h.ctx, sessionID, "USE_IT now"))
-	h.waitUntil("next run uses the server", func() bool {
-		return lastAssistantTextDTO(h.messages(sessionID)) == "used it"
-	})
-	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(sessionID) })
+	h.reply(sessionID, "USE_IT now", "used it")
 	msgs = h.messages(sessionID)
 	require.NoError(t, llmtest.ValidateToolPairing(msgs))
 	assert.Contains(t, toolResultForCallID(msgs, "ping-next-run").Content, "pong from fake",
@@ -347,19 +279,8 @@ func TestScenario_ProjectMCPServerOverridesTheGlobalOfTheSameName(t *testing.T) 
 		return mcpToolCall("add-global", tool.IDMCPAdd, global.addParams("fake", "global"))
 	}
 	h := newHarness(t, harnessOptions{respond: respond})
-	h.startInboxWake()
-	sessionID, err := h.mgr.Send(h.ctx, h.projectID, "register both scopes", "fake-model", nil)
-	require.NoError(t, err)
-	h.waitUntil("both registrations land", func() bool {
-		return lastAssistantTextDTO(h.messages(sessionID)) == "registered both"
-	})
-	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(sessionID) })
-	h.startInboxWake()
-	require.NoError(t, h.mgr.sendToSession(h.ctx, sessionID, "USE_IT now"))
-	h.waitUntil("next run uses the server", func() bool {
-		return lastAssistantTextDTO(h.messages(sessionID)) == "used it"
-	})
-	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(sessionID) })
+	sessionID := h.ask("register both scopes", "registered both")
+	h.reply(sessionID, "USE_IT now", "used it")
 	msgs := h.messages(sessionID)
 	require.NoError(t, llmtest.ValidateToolPairing(msgs))
 	assert.Contains(t, toolResultForCallID(msgs, "ping-override").Content, "pong from project")
@@ -372,41 +293,21 @@ func TestScenario_MCPDisablePersistsAcrossDaemonRestart(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "mcp-restart.db")
 	workDir := t.TempDir()
 	respond := disableScenarioResponder(fake)
-	first := newMCPRestartHarness(t, dbPath, workDir, respond)
-	first.startInboxWake()
-	sessionID, err := first.mgr.Send(first.ctx, first.projectID, "register the fake server", "fake-model", nil)
-	require.NoError(t, err)
+	first := newScheduleRestartHarness(t, dbPath, workDir, respond)
+	sessionID := first.send("register the fake server", nil)
 	// Wait for teardown: candidate and confirmation texts match, so visible text alone can race the check.
-	first.waitUntil("registration finishes", func() bool {
-		return lastAssistantTextDTO(first.messages(sessionID)) == "registered"
-	})
-	first.waitUntil("session idle", func() bool { return !first.mgr.HasActiveLoop(sessionID) })
-	first.startInboxWake()
-	require.NoError(t, first.mgr.sendToSession(first.ctx, sessionID, "USE_IT now"))
-	first.waitUntil("MCP call finishes", func() bool {
-		return lastAssistantTextDTO(first.messages(sessionID)) == "used before restart"
-	})
-	first.waitUntil("session idle", func() bool { return !first.mgr.HasActiveLoop(sessionID) })
+	first.waitAnswer(sessionID, "registered")
+	first.reply(sessionID, "USE_IT now", "used before restart")
 	assert.GreaterOrEqual(t, fake.count(t, "spawn"), 1)
-	first.startInboxWake()
-	require.NoError(t, first.mgr.sendToSession(first.ctx, sessionID, "DISABLE_IT now"))
-	first.waitUntil("disable finishes", func() bool {
-		return lastAssistantTextDTO(first.messages(sessionID)) == "disabled"
-	})
-	first.waitUntil("session idle", func() bool { return !first.mgr.HasActiveLoop(sessionID) })
-	defs, err := first.registry.ListForProject(first.ctx, first.projectID)
+	first.reply(sessionID, "DISABLE_IT now", "disabled")
+	defs, err := first.mgr.mcpStore.ListForProject(first.ctx, first.projectID)
 	require.NoError(t, err)
 	assert.Empty(t, defs, "the disabled row is absent from the session's enabled projection")
 	spawnsBeforeRestart := fake.count(t, "spawn")
-	first.close()
-	second := newMCPRestartHarness(t, dbPath, workDir, respond)
+	require.NoError(t, first.close())
+	second := newScheduleRestartHarness(t, dbPath, workDir, respond)
 	require.NoError(t, second.mgr.Start(second.ctx))
-	second.startInboxWake()
-	require.NoError(t, second.mgr.sendToSession(second.ctx, sessionID, "USE_AFTER_RESTART now"))
-	second.waitUntil("post-restart run finishes", func() bool {
-		return lastAssistantTextDTO(second.messages(sessionID)) == "used after restart"
-	})
-	second.waitUntil("session idle", func() bool { return !second.mgr.HasActiveLoop(sessionID) })
+	second.reply(sessionID, "USE_AFTER_RESTART now", "used after restart")
 	messages := second.messages(sessionID)
 	require.NoError(t, llmtest.ValidateToolPairing(messages))
 	assert.Contains(t, toolResultForCallID(messages, "ping-after-restart").Content, "unknown tool",
@@ -419,35 +320,14 @@ func TestScenario_MCPRemoveClosesStackProcessBeforeTheNextRun(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "mcp-remove.db")
 	workDir := t.TempDir()
 	respond := removeScenarioResponder(t, fake)
-	h := newMCPRestartHarness(t, dbPath, workDir, respond)
-	h.startInboxWake()
-	sessionID, err := h.mgr.Send(h.ctx, h.projectID, "register the fake server", "fake-model", nil)
-	require.NoError(t, err)
-	h.waitUntil("registration finishes", func() bool {
-		return lastAssistantTextDTO(h.messages(sessionID)) == "registered"
-	})
-	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(sessionID) })
-	h.startInboxWake()
-	require.NoError(t, h.mgr.sendToSession(h.ctx, sessionID, "USE_IT now"))
-	h.waitUntil("MCP call finishes", func() bool {
-		return lastAssistantTextDTO(h.messages(sessionID)) == "used before remove"
-	})
-	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(sessionID) })
+	h := newScheduleRestartHarness(t, dbPath, workDir, respond)
+	sessionID := h.ask("register the fake server", "registered")
+	h.reply(sessionID, "USE_IT now", "used before remove")
 	assert.GreaterOrEqual(t, fake.count(t, "spawn"), 1)
-	h.startInboxWake()
-	require.NoError(t, h.mgr.sendToSession(h.ctx, sessionID, "REMOVE_IT now"))
-	h.waitUntil("removal finishes", func() bool {
-		return lastAssistantTextDTO(h.messages(sessionID)) == "removed"
-	})
-	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(sessionID) })
+	h.reply(sessionID, "REMOVE_IT now", "removed")
 	h.waitUntil("MCP process exit", func() bool { return fake.count(t, "exit") >= 1 })
 	spawnsAfterRemove := fake.count(t, "spawn")
-	h.startInboxWake()
-	require.NoError(t, h.mgr.sendToSession(h.ctx, sessionID, "USE_AFTER_REMOVE now"))
-	h.waitUntil("post-removal run finishes", func() bool {
-		return lastAssistantTextDTO(h.messages(sessionID)) == "used after remove"
-	})
-	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(sessionID) })
+	h.reply(sessionID, "USE_AFTER_REMOVE now", "used after remove")
 	messages := h.messages(sessionID)
 	require.NoError(t, llmtest.ValidateToolPairing(messages))
 	assert.Contains(t, toolResultForCallID(messages, "ping-after-remove").Content, "unknown tool",
@@ -606,32 +486,6 @@ func (h *registryModelHarness) close() {
 	if h.service != nil {
 		h.service.Stop()
 	}
-	_ = h.db.Close()
-}
-
-type mcpRestartHarness struct {
-	*harness
-	db       *sql.DB
-	registry mcpstore.Store
-}
-
-func newMCPRestartHarness(
-	t *testing.T,
-	dbPath, workDir string,
-	respond func(string, []llmwire.Message) *llmwire.Response,
-) *mcpRestartHarness {
-	t.Helper()
-	h := newHarness(
-		t,
-		harnessOptions{dbPath: dbPath, respond: respond, configure: func(cfg *config.Config) { cfg.WorkDir = workDir }},
-	)
-	out := &mcpRestartHarness{harness: h, db: h.db, registry: h.mgr.mcpStore}
-	t.Cleanup(out.close)
-	return out
-}
-
-func (h *mcpRestartHarness) close() {
-	h.mgr.Shutdown(h.ctx, 5*time.Second)
 	_ = h.db.Close()
 }
 

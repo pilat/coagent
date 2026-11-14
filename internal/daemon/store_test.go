@@ -2,15 +2,12 @@ package daemon
 
 import (
 	"context"
-	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/pilat/coagent/internal/controllerapi"
-	"github.com/pilat/coagent/internal/migrate"
-	"github.com/pilat/coagent/internal/schedule"
 	"github.com/pilat/coagent/internal/sessionstore"
 )
 
@@ -24,7 +21,7 @@ func TestOutputTypeVocabularyMatchesStore(t *testing.T) {
 
 func TestStore_GetOrCreateProject(t *testing.T) {
 	t.Run("creates and returns stable ID", func(t *testing.T) {
-		s := newTestStore(t)
+		s := newHarness(t, harnessOptions{}).store
 		id1, err := s.GetOrCreateProject(context.Background(), "/tmp/project")
 		require.NoError(t, err)
 		assert.Positive(t, id1)
@@ -33,7 +30,7 @@ func TestStore_GetOrCreateProject(t *testing.T) {
 		assert.Equal(t, id1, id2, "same workdir should return same project ID")
 	})
 	t.Run("different workdirs get different IDs", func(t *testing.T) {
-		s := newTestStore(t)
+		s := newHarness(t, harnessOptions{}).store
 		id1, err := s.GetOrCreateProject(context.Background(), "/tmp/a")
 		require.NoError(t, err)
 		id2, err := s.GetOrCreateProject(context.Background(), "/tmp/b")
@@ -41,31 +38,11 @@ func TestStore_GetOrCreateProject(t *testing.T) {
 		assert.NotEqual(t, id1, id2)
 	})
 	t.Run("GetProjectWorkDir reverse lookup", func(t *testing.T) {
-		s := newTestStore(t)
+		s := newHarness(t, harnessOptions{}).store
 		pid, err := s.GetOrCreateProject(context.Background(), "/tmp/project")
 		require.NoError(t, err)
 		workDir, err := s.GetProjectWorkDir(context.Background(), pid)
 		require.NoError(t, err)
 		assert.Contains(t, workDir, "/tmp/project")
 	})
-}
-
-func newTestStore(t *testing.T) *sessionstore.Store {
-	t.Helper()
-	s, _ := newTestStoreWithSchedule(t)
-	return s
-}
-
-func newTestStoreWithSchedule(t *testing.T) (*sessionstore.Store, schedule.Store) {
-	t.Helper()
-	dbPath := filepath.Join(t.TempDir(), "test.db")
-	db, err := migrate.OpenDB(context.Background(), dbPath)
-	require.NoError(t, err)
-	t.Cleanup(func() { db.Close() })
-
-	provider, err := migrate.NewProvider(db)
-	require.NoError(t, err)
-	_, err = provider.Up(context.Background())
-	require.NoError(t, err)
-	return sessionstore.NewStore(db), schedule.NewStore(db, sessionstore.NewStore(db))
 }

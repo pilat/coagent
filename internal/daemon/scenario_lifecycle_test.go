@@ -1,7 +1,6 @@
 package daemon
 
 import (
-	"context"
 	"database/sql"
 	"path/filepath"
 	"testing"
@@ -36,10 +35,7 @@ func TestCascadeKill_BackgroundDescendant(t *testing.T) {
 		return textReply("idle")
 	}
 	h := newHarness(t, harnessOptions{respond: respond})
-	defer func() {
-		closeOnce(release)
-		h.shutdown()
-	}()
+	defer closeOnce(release)
 	ctx := h.ctx
 	root := h.createRoot(nil)
 	h.startInboxWake()
@@ -49,7 +45,6 @@ func TestCascadeKill_BackgroundDescendant(t *testing.T) {
 	require.NoError(t, err)
 	h.waitUntil("background child running", func() bool { return h.mgr.HasActiveLoop(child.ChildID) })
 	h.waitUntil("child model entered", func() bool { return len(entered) >= 1 })
-	h.startInboxWake()
 	grandchild, err := h.mgr.Spawn(ctx, subagent.SpawnRequest{
 		ParentID: child.ChildID, AgentType: "general", Prompt: "HANG", Blocking: false,
 	})
@@ -108,10 +103,7 @@ func TestCascadeKill_RemovesChildSchedules(t *testing.T) {
 		return textReply("idle")
 	}
 	h := newHarness(t, harnessOptions{respond: respond})
-	defer func() {
-		closeOnce(release)
-		h.shutdown()
-	}()
+	defer closeOnce(release)
 	ctx := h.ctx
 	root := h.createRoot(nil)
 	h.startInboxWake()
@@ -195,27 +187,16 @@ func TestHarnessScenario_LiveStopChain(t *testing.T) {
 
 	collector := collectEvents(t, h.mgr.bus.SubscribeAll())
 	defer collector.stop()
-	h.startInboxWake()
-	root, err := h.mgr.Send(h.ctx, h.projectID, "long work", "fake-model", managerAttrs(scenarioManagerID))
-	require.NoError(t, err)
+	root := h.send("long work", managerAttrs(scenarioManagerID))
 	waitForScenarioSignal(t, entered, "model call")
 	service := installScenarioProcessService(t, h)
 	process := startScenarioProcess(t, service, root, root, "sleep 30")
-	h.startInboxWake()
-	require.NoError(t, h.mgr.sendToSession(h.ctx, root, "/stop"))
+	h.say(root, "/stop")
 	h.waitUntil("root stopped", func() bool {
 		record, loadErr := h.store.GetSession(h.ctx, root)
 		return loadErr == nil && record.Status == sessionstore.SessionStatusStopped
 	})
-	stoppedProcess := func() backgroundprocess.Process {
-		var record backgroundprocess.Process
-		h.waitUntil("process state", func() bool {
-			var err error
-			record, err = h.mgr.processStore.GetProcess(context.Background(), process.ID)
-			return err == nil && record.State == backgroundprocess.StateCancelled
-		})
-		return record
-	}()
+	stoppedProcess := h.waitProcess(process.ID, backgroundprocess.StateCancelled)
 	require.Equal(t, backgroundprocess.IntentSessionStopped, stoppedProcess.HostIntent)
 	collector.waitFor(
 		t, "stopped without output acknowledgement", func(events []controllerapi.SessionNotification) bool {
@@ -245,9 +226,8 @@ func TestHarnessScenario_InterruptedStopChain(t *testing.T) {
 		modelCalls++
 		return textReply("must not run")
 	}
-	h2 := newHarness(t, harnessOptions{dbPath: dbPath, respond: respond2})
-	collector := collectEvents(t, h2.mgr.bus.SubscribeAll())
-	defer collector.stop()
+	h2 := h1.restart(respond2)
+	collector := h2.collect()
 	require.NoError(t, h2.mgr.Start(h2.ctx))
 	record := h2.session(root)
 	require.Equal(t, sessionstore.SessionStatusStopped, record.Status)
@@ -275,21 +255,16 @@ func TestHarnessScenario_LaterFreshTurnAfterStop(t *testing.T) {
 	}
 	h := newHarness(t, harnessOptions{respond: respond})
 
-	collector := collectEvents(t, h.mgr.bus.SubscribeAll())
-	defer collector.stop()
-	h.startInboxWake()
-	root, err := h.mgr.Send(h.ctx, h.projectID, "long work", "fake-model", managerAttrs(scenarioManagerID))
-	require.NoError(t, err)
+	collector := h.collect()
+	root := h.send("long work", managerAttrs(scenarioManagerID))
 	collector.waitMessage(root, "Working on it, done for now.")
 	h.waitUntil("first runner gone", func() bool { return !h.mgr.HasActiveLoop(root) })
-	h.startInboxWake()
-	require.NoError(t, h.mgr.sendToSession(h.ctx, root, "/stop"))
+	h.say(root, "/stop")
 	h.waitUntil("root stopped", func() bool {
 		record, loadErr := h.store.GetSession(h.ctx, root)
 		return loadErr == nil && record.Status == sessionstore.SessionStatusStopped
 	})
-	h.startInboxWake()
-	require.NoError(t, h.mgr.sendToSession(h.ctx, root, "continue please"))
+	h.say(root, "continue please")
 	collector.waitMessage(root, "Resumed and done.")
 	collector.waitIdleAfter(root, "Resumed and done.")
 	assertHarnessTrace(t, h, "stop_then_fresh_turn.json", collector.snapshot(), root)

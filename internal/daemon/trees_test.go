@@ -48,11 +48,8 @@ func TestStopTreeCleanupKeepsInputAcceptedAfterFinish(t *testing.T) {
 }
 
 func TestManager_GracefulKill(t *testing.T) {
-	factory := &mockFactory{}
-	h := newHarness(t, harnessOptions{configure: withTestModels, clientFor: factory.client})
+	h, factory, ch := newMockHarness(t)
 	mgr, s := h.mgr, h.store
-	ch := collectEvents(t, mgr.bus.SubscribeAll())
-	t.Cleanup(ch.stop)
 
 	// Session completes after 200ms — Kill sets killed flag, session finishes naturally
 	sess := &mockSession{completeAfter: 200 * time.Millisecond}
@@ -61,25 +58,18 @@ func TestManager_GracefulKill(t *testing.T) {
 	pid := testProject(t, s, t.TempDir())
 	id, err := mgr.Send(ctx, pid, "init", "", nil)
 	require.NoError(t, err)
-	ch.waitFor(t, "session state", func(events []controllerapi.SessionNotification) bool {
-		return hasStateEvent(events, id, controllerapi.StateRunning)
-	})
+	ch.waitState(id, controllerapi.StateRunning)
 
 	// Kill sets killed flag — does NOT cancel context
 	err = mgr.sendToSession(context.Background(), id, "/kill")
 	require.NoError(t, err)
-	ch.waitFor(t, "session state", func(events []controllerapi.SessionNotification) bool {
-		return hasStateEvent(events, id, controllerapi.StateIdle)
-	})
+	ch.waitState(id, controllerapi.StateIdle)
 	assert.False(t, mgr.HasActiveLoop(id))
 }
 
 func TestManager_Kill_GracefulRunningSession(t *testing.T) {
-	factory := &mockFactory{}
-	h := newHarness(t, harnessOptions{configure: withTestModels, clientFor: factory.client})
+	h, factory, ch := newMockHarness(t)
 	mgr, s := h.mgr, h.store
-	ch := collectEvents(t, mgr.bus.SubscribeAll())
-	t.Cleanup(ch.stop)
 
 	// Session that blocks until context cancelled (Kill calls stop → cancel)
 	factory.nextSess = &mockSession{}
@@ -87,16 +77,12 @@ func TestManager_Kill_GracefulRunningSession(t *testing.T) {
 	pid := testProject(t, s, t.TempDir())
 	id, err := mgr.Send(ctx, pid, "init", "", nil)
 	require.NoError(t, err)
-	ch.waitFor(t, "session state", func(events []controllerapi.SessionNotification) bool {
-		return hasStateEvent(events, id, controllerapi.StateRunning)
-	})
+	ch.waitState(id, controllerapi.StateRunning)
 
 	// Kill is blocking: stop() + mark killed.
 	err = mgr.sendToSession(context.Background(), id, "/kill")
 	require.NoError(t, err)
-	ch.waitFor(t, "session state", func(events []controllerapi.SessionNotification) bool {
-		return hasStateEvent(events, id, controllerapi.StateIdle)
-	})
+	ch.waitState(id, controllerapi.StateIdle)
 
 	// Session must be soft-deleted (killed_at set, but still in DB)
 	rec := h.session(id)
@@ -107,19 +93,14 @@ func TestManager_Kill_GracefulRunningSession(t *testing.T) {
 }
 
 func TestManager_Kill_NonRunningSession(t *testing.T) {
-	factory := &mockFactory{}
-	h := newHarness(t, harnessOptions{configure: withTestModels, clientFor: factory.client})
+	h, factory, ch := newMockHarness(t)
 	mgr, s := h.mgr, h.store
-	ch := collectEvents(t, mgr.bus.SubscribeAll())
-	t.Cleanup(ch.stop)
 	factory.nextSess = &mockSession{completeAfter: 50 * time.Millisecond}
 	ctx := context.Background()
 	pid := testProject(t, s, t.TempDir())
 	id, err := mgr.Send(ctx, pid, "init", "", nil)
 	require.NoError(t, err)
-	ch.waitFor(t, "session state", func(events []controllerapi.SessionNotification) bool {
-		return hasStateEvent(events, id, controllerapi.StateIdle)
-	})
+	ch.waitState(id, controllerapi.StateIdle)
 
 	// Session is now idle (not in-memory). Kill should mark it killed.
 	err = mgr.sendToSession(context.Background(), id, "/kill")
@@ -130,19 +111,14 @@ func TestManager_Kill_NonRunningSession(t *testing.T) {
 
 // Kill removes both schedule kinds for its session while preserving schedules owned by other sessions.
 func TestManager_Kill_RemovesSchedules(t *testing.T) {
-	factory := &mockFactory{}
-	h := newHarness(t, harnessOptions{configure: withTestModels, clientFor: factory.client})
+	h, factory, ch := newMockHarness(t)
 	mgr, s, schedStore := h.mgr, h.store, h.schedules
-	ch := collectEvents(t, mgr.bus.SubscribeAll())
-	t.Cleanup(ch.stop)
 	factory.nextSess = &mockSession{completeAfter: 50 * time.Millisecond}
 	ctx := context.Background()
 	pid := testProject(t, s, t.TempDir())
 	id, err := mgr.Send(ctx, pid, "init", "", nil)
 	require.NoError(t, err)
-	ch.waitFor(t, "session state", func(events []controllerapi.SessionNotification) bool {
-		return hasStateEvent(events, id, controllerapi.StateIdle)
-	})
+	ch.waitState(id, controllerapi.StateIdle)
 	oneShot := time.Now().Add(time.Hour).UTC()
 	_, err = schedStore.AddSchedule(ctx, id, "", &oneShot, "one-shot", false, schedule.ScheduleMetadata{})
 	require.NoError(t, err)
@@ -151,9 +127,7 @@ func TestManager_Kill_RemovesSchedules(t *testing.T) {
 	factory.nextSess = &mockSession{completeAfter: 50 * time.Millisecond}
 	otherID, err := mgr.Send(ctx, pid, "other", "", nil)
 	require.NoError(t, err)
-	ch.waitFor(t, "session state", func(events []controllerapi.SessionNotification) bool {
-		return hasStateEvent(events, otherID, controllerapi.StateIdle)
-	})
+	ch.waitState(otherID, controllerapi.StateIdle)
 	otherOneShot := time.Now().Add(time.Hour).UTC()
 	_, err = schedStore.AddSchedule(ctx, otherID, "", &otherOneShot, "untouched", false, schedule.ScheduleMetadata{})
 	require.NoError(t, err)
@@ -168,19 +142,14 @@ func TestManager_Kill_RemovesSchedules(t *testing.T) {
 }
 
 func TestManager_StopCancelsPendingSleepButPreservesScheduledWork(t *testing.T) {
-	factory := &mockFactory{}
-	h := newHarness(t, harnessOptions{configure: withTestModels, clientFor: factory.client})
+	h, factory, events := newMockHarness(t)
 	mgr, projects, schedStore := h.mgr, h.store, h.schedules
-	events := collectEvents(t, mgr.bus.SubscribeAll())
-	t.Cleanup(events.stop)
 	factory.nextSess = &mockSession{completeAfter: 50 * time.Millisecond}
 	ctx := context.Background()
 	projectID := testProject(t, projects, t.TempDir())
 	sessionID, err := mgr.Send(ctx, projectID, "init", "", nil)
 	require.NoError(t, err)
-	events.waitFor(t, "session state", func(events []controllerapi.SessionNotification) bool {
-		return hasStateEvent(events, sessionID, controllerapi.StateIdle)
-	})
+	events.waitState(sessionID, controllerapi.StateIdle)
 	oneShot := time.Now().Add(time.Hour).UTC()
 	_, err = schedStore.AddSchedule(ctx, sessionID, "", &oneShot, "scheduled work", false, schedule.ScheduleMetadata{})
 	require.NoError(t, err)
@@ -213,11 +182,8 @@ func TestManager_StopCancelsPendingSleepButPreservesScheduledWork(t *testing.T) 
 }
 
 func TestManager_Clear(t *testing.T) {
-	factory := &mockFactory{}
-	h := newHarness(t, harnessOptions{configure: withTestModels, clientFor: factory.client})
+	h, factory, ch := newMockHarness(t)
 	mgr, s := h.mgr, h.store
-	ch := collectEvents(t, mgr.bus.SubscribeAll())
-	t.Cleanup(ch.stop)
 
 	// Session completes quickly → loop exits → session is idle
 	factory.nextSess = &mockSession{completeAfter: 50 * time.Millisecond}
@@ -313,11 +279,8 @@ func TestManager_ClearRejectsAConcurrentLateOwnerClaim(t *testing.T) {
 }
 
 func TestManager_ClearWhileRunning(t *testing.T) {
-	factory := &mockFactory{}
-	h := newHarness(t, harnessOptions{configure: withTestModels, clientFor: factory.client})
+	h, factory, ch := newMockHarness(t)
 	mgr, s := h.mgr, h.store
-	ch := collectEvents(t, mgr.bus.SubscribeAll())
-	t.Cleanup(ch.stop)
 
 	// Session that blocks until context cancelled
 	factory.nextSess = &mockSession{}
@@ -325,9 +288,7 @@ func TestManager_ClearWhileRunning(t *testing.T) {
 	pid := testProject(t, s, t.TempDir())
 	id, err := mgr.Send(ctx, pid, "init", "my-model", map[string]any{"lang": "en"})
 	require.NoError(t, err)
-	ch.waitFor(t, "session state", func(events []controllerapi.SessionNotification) bool {
-		return hasStateEvent(events, id, controllerapi.StateRunning)
-	})
+	ch.waitState(id, controllerapi.StateRunning)
 
 	// Clear: notifies immediately (via pubsub buffer), then kills old session synchronously
 	newID, err := mgr.clear(context.Background(), lifecycleInput(context.Background(), t, mgr, id, "/clear"))
@@ -406,16 +367,15 @@ func TestKillLockedKeepsLoadError(t *testing.T) {
 }
 
 func TestStopParksWholeTreeAndExplicitFollowUpResumesOnlyChild(t *testing.T) {
-	ctx := context.Background()
 	h := newHarness(t, harnessOptions{configure: withTestModels, clientFor: (&mockFactory{}).client})
-	mgr, projects := h.mgr, h.store
-	projectID := testProject(t, projects, "/tmp/stop-tree")
-	parent, err := mgr.store.CreateSession(ctx, projectID, "fake-model", "", nil)
-	require.NoError(t, err)
+	ctx := h.ctx
+	mgr := h.mgr
+	projectID := h.projectID
+	parent := h.createRoot(nil)
 	childID, err := mgr.links.Create(ctx, subagent.Create{
 		ProjectID:  projectID,
-		ParentID:   parent.ID,
-		RootID:     parent.ID,
+		ParentID:   parent,
+		RootID:     parent,
 		Model:      "fake-model",
 		TaskCallID: "blocking-task",
 		Blocking:   true,
@@ -426,8 +386,8 @@ func TestStopParksWholeTreeAndExplicitFollowUpResumesOnlyChild(t *testing.T) {
 		ctx, sessionstore.Input{SessionID: childID, Source: sessionstore.InputSourceAgent, Content: "not consumed"},
 	)
 	require.NoError(t, err)
-	require.NoError(t, mgr.sendToSession(ctx, parent.ID, "/stop"))
-	for _, id := range []int64{parent.ID, childID} {
+	require.NoError(t, mgr.sendToSession(ctx, parent, "/stop"))
+	for _, id := range []int64{parent, childID} {
 		rec := h.session(id)
 		assert.Equal(t, sessionstore.SessionStatusStopped, rec.Status)
 		_, pendingErr := mgr.store.PeekPending(ctx, id)
@@ -445,26 +405,25 @@ func TestStopParksWholeTreeAndExplicitFollowUpResumesOnlyChild(t *testing.T) {
 		resumed, getErr := mgr.links.GetLink(ctx, childID)
 		return getErr == nil && resumed != nil && resumed.State == subagent.StateRunning
 	})
-	parentRec := h.session(parent.ID)
+	parentRec := h.session(parent)
 	assert.Equal(t, sessionstore.SessionStatusStopped, parentRec.Status)
 	mgr.Shutdown(t.Context(), 3*time.Second)
 }
 
 func TestStopParksActiveDescendantBelowCompletedChild(t *testing.T) {
-	ctx := context.Background()
 	h := newHarness(t, harnessOptions{configure: withTestModels, clientFor: (&mockFactory{}).client})
-	mgr, projects := h.mgr, h.store
-	projectID := testProject(t, projects, "/tmp/stop-terminal-ancestor")
-	root, err := mgr.store.CreateSession(ctx, projectID, "fake-model", "", nil)
-	require.NoError(t, err)
-	completedID := createBackgroundChild(t, mgr, projectID, root.ID)
+	ctx := h.ctx
+	mgr := h.mgr
+	projectID := h.projectID
+	root := h.createRoot(nil)
+	completedID := createBackgroundChild(t, mgr, projectID, root)
 	require.NoError(t, mgr.store.UpdateSessionStatus(ctx, completedID, sessionstore.SessionStatusCompleted))
 	// A completed session with an open link is a yield (ADR-0071), so the ancestor's activation is terminal too.
-	_, err = h.db.ExecContext(ctx, `UPDATE subagent_links SET state = 'completed', outcome = 'completed'
+	_, err := h.db.ExecContext(ctx, `UPDATE subagent_links SET state = 'completed', outcome = 'completed'
 		WHERE child_id = ?`, completedID)
 	require.NoError(t, err)
 	activeID := createBackgroundChild(t, mgr, projectID, completedID)
-	require.NoError(t, mgr.sendToSession(ctx, root.ID, "/stop"))
+	require.NoError(t, mgr.sendToSession(ctx, root, "/stop"))
 	completed := h.session(completedID)
 	assert.Equal(t, sessionstore.SessionStatusCompleted, completed.Status)
 	active := h.session(activeID)
@@ -472,19 +431,18 @@ func TestStopParksActiveDescendantBelowCompletedChild(t *testing.T) {
 }
 
 func TestStopDirectChildParksItsOwnLinkWithoutStoppingParent(t *testing.T) {
-	ctx := context.Background()
 	h := newHarness(t, harnessOptions{configure: withTestModels, clientFor: (&mockFactory{}).client})
-	mgr, projects := h.mgr, h.store
-	projectID := testProject(t, projects, "/tmp/stop-direct-child")
-	parent, err := mgr.store.CreateSession(ctx, projectID, "fake-model", "", nil)
-	require.NoError(t, err)
+	ctx := h.ctx
+	mgr := h.mgr
+	projectID := h.projectID
+	parent := h.createRoot(nil)
 	childID, err := mgr.links.Create(ctx, subagent.Create{
-		ProjectID: projectID, ParentID: parent.ID, RootID: parent.ID,
+		ProjectID: projectID, ParentID: parent, RootID: parent,
 		Model: "fake-model", TaskCallID: "background", State: subagent.StateRunning,
 	})
 	require.NoError(t, err)
 	require.NoError(t, mgr.sendToSession(ctx, childID, "/stop"))
-	parentRec := h.session(parent.ID)
+	parentRec := h.session(parent)
 	assert.Equal(t, sessionstore.SessionStatusActive, parentRec.Status)
 	childRec := h.session(childID)
 	assert.Equal(t, sessionstore.SessionStatusStopped, childRec.Status)
@@ -495,22 +453,20 @@ func TestStopDirectChildParksItsOwnLinkWithoutStoppingParent(t *testing.T) {
 }
 
 func TestStopTreeCleanupPreservesBackgroundProcessesForBudgetPark(t *testing.T) {
-	ctx := context.Background()
 	h := newHarness(t, harnessOptions{configure: withTestModels, clientFor: (&mockFactory{}).client})
-	mgr, projects := h.mgr, h.store
-	projectID := testProject(t, projects, "/tmp/budget-process")
-	root, err := mgr.store.CreateSession(ctx, projectID, "fake-model", "", nil)
-	require.NoError(t, err)
+	ctx := h.ctx
+	mgr := h.mgr
+	root := h.createRoot(nil)
 	service := backgroundprocess.NewService(mgr.processStore, backgroundprocess.Options{OutputDir: t.TempDir()})
 	mgr.processes = service
 	process, err := service.Start(ctx, backgroundprocess.Spec{
-		ProjectDir: "project-test", SessionID: root.ID, RootSessionID: root.ID, ToolCallID: "budget-process",
+		ProjectDir: "project-test", SessionID: root, RootSessionID: root, ToolCallID: "budget-process",
 		Deadline: time.Minute, Advertise: true,
 	}, func(ctx context.Context) (*exec.Cmd, error) {
 		return exec.CommandContext(ctx, "sleep", "30"), nil
 	})
 	require.NoError(t, err)
-	require.NoError(t, mgr.stopTreeCleanup(ctx, root.ID, stopTreeOptions{preserveBackgroundProcesses: true}))
+	require.NoError(t, mgr.stopTreeCleanup(ctx, root, stopTreeOptions{preserveBackgroundProcesses: true}))
 	record, err := mgr.processStore.GetProcess(ctx, process.ID)
 	require.NoError(t, err)
 	assert.Equal(t, backgroundprocess.StateRunning, record.State)

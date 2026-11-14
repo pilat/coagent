@@ -16,31 +16,23 @@ import (
 )
 
 func TestManager_NormalCompletion(t *testing.T) {
-	factory := &mockFactory{}
-	h := newHarness(t, harnessOptions{configure: withTestModels, clientFor: factory.client})
+	h, factory, ch := newMockHarness(t)
 	mgr, s := h.mgr, h.store
-	ch := collectEvents(t, mgr.bus.SubscribeAll())
-	t.Cleanup(ch.stop)
 	sess := &mockSession{completeAfter: 50 * time.Millisecond}
 	factory.nextSess = sess
 	ctx := context.Background()
 	pid := testProject(t, s, t.TempDir())
 	id, err := mgr.Send(ctx, pid, "hi", "", nil)
 	require.NoError(t, err)
-	ch.waitFor(t, "session state", func(events []controllerapi.SessionNotification) bool {
-		return hasStateEvent(events, id, controllerapi.StateIdle)
-	})
+	ch.waitState(id, controllerapi.StateIdle)
 
 	// Verify session removed from in-memory map
 	assert.False(t, mgr.HasActiveLoop(id))
 }
 
 func TestManager_ErrorPath(t *testing.T) {
-	factory := &mockFactory{}
-	h := newHarness(t, harnessOptions{configure: withTestModels, clientFor: factory.client})
+	h, factory, ch := newMockHarness(t)
 	mgr, s := h.mgr, h.store
-	ch := collectEvents(t, mgr.bus.SubscribeAll())
-	t.Cleanup(ch.stop)
 	sess := &mockSession{completeAfter: 50 * time.Millisecond, runErr: fmt.Errorf("something went wrong")}
 	factory.nextSess = sess
 	ctx := context.Background()
@@ -102,11 +94,7 @@ func TestFinishRunnerCancellationEscapesContendedTreeFence(t *testing.T) {
 	default:
 	}
 	unlock()
-	select {
-	case <-done:
-	case <-time.After(time.Second):
-		t.Fatal("runner finalization did not resume after the tree fence")
-	}
+	requireBarrierSignal(t, done, "runner finalization did not resume after the tree fence")
 }
 
 func TestTeardownOnStoreFailureDoesNotPublishIdle(t *testing.T) {

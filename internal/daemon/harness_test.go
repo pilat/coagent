@@ -337,6 +337,13 @@ type contextInfo struct {
 	hasDeadline bool
 }
 
+type scheduleRestartHarness struct {
+	*harness
+	db        *sql.DB
+	closeOnce sync.Once
+	closeErr  error
+}
+
 // harness wires a real sessionbuild.BuildInput (fake LLM) + daemon svc over a temp SQLite DB.
 type harness struct {
 	t         *testing.T
@@ -347,6 +354,7 @@ type harness struct {
 	schedules schedule.Store
 	projectID int64
 	ctx       context.Context
+	opts      harnessOptions
 
 	llmMu        sync.Mutex
 	llmRefs      []*scriptedLLM // every client the session factory created
@@ -356,6 +364,89 @@ type harness struct {
 
 func (h *harness) startInboxWake() {
 	h.wakeOnce.Do(func() { h.mgr.startWake() })
+}
+
+func (h *harness) restart(respond func(string, []llmwire.Message) *llmwire.Response) *harness {
+	h.t.Helper()
+	h.shutdown()
+	o := h.opts
+	if respond != nil {
+		o.respond = respond
+	}
+	return newHarness(h.t, o)
+}
+
+func (h *harness) resume() {
+	h.t.Helper()
+	h.startInboxWake()
+	h.mgr.resumeAfterRestart(h.ctx)
+}
+
+func (h *harness) send(prompt string, attrs map[string]any) int64 {
+	h.t.Helper()
+	h.startInboxWake()
+	id, err := h.mgr.Send(h.ctx, h.projectID, prompt, "fake-model", attrs)
+	require.NoError(h.t, err)
+	return id
+}
+
+func (h *harness) say(id int64, prompt string) {
+	h.t.Helper()
+	h.startInboxWake()
+	require.NoError(h.t, h.mgr.sendToSession(h.ctx, id, prompt))
+}
+
+func (h *harness) waitAnswer(id int64, answer string) {
+	h.t.Helper()
+	if answer != "" {
+		h.waitUntil(answer, func() bool { return lastAssistantTextDTO(h.messages(id)) == answer })
+	}
+	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(id) })
+}
+
+func (h *harness) ask(prompt, answer string) int64 {
+	h.t.Helper()
+	id := h.send(prompt, nil)
+	h.waitAnswer(id, answer)
+	return id
+}
+
+func (h *harness) reply(id int64, prompt, answer string) {
+	h.t.Helper()
+	h.say(id, prompt)
+	h.waitAnswer(id, answer)
+}
+
+func (h *harness) waitDelivered(childID int64) {
+	h.t.Helper()
+	h.waitUntil("child delivery", func() bool {
+		link := h.link(childID)
+		return link != nil && link.DeliveredAt != 0
+	})
+}
+
+func (h *harness) waitLink(parentID int64, callID string) subagent.Link {
+	h.t.Helper()
+	h.waitUntil("child link", func() bool { return h.linkByCall(parentID, callID) != nil })
+	return *h.linkByCall(parentID, callID)
+}
+
+func (h *harness) collect() *eventCollector {
+	h.t.Helper()
+	c := collectEvents(h.t, h.mgr.bus.SubscribeAll())
+	h.t.Cleanup(c.stop)
+	return c
+}
+
+func (h *harness) waitProcess(id string, state backgroundprocess.State) backgroundprocess.Process {
+	h.t.Helper()
+	var record backgroundprocess.Process
+	h.waitUntil("process state", func() bool {
+		var err error
+		record, err = h.mgr.processStore.GetProcess(context.Background(), id)
+		return err == nil && record.State == state
+	})
+	return record
 }
 
 const taskCallID = "task-call-1"
@@ -418,7 +509,7 @@ func newHarness(t *testing.T, o harnessOptions) *harness {
 	if o.configure != nil {
 		o.configure(cfg)
 	}
-	h := &harness{t: t, ctx: ctx, db: db, store: store, links: links, schedules: schedules}
+	h := &harness{t: t, ctx: ctx, db: db, store: store, links: links, schedules: schedules, opts: o}
 	h.projectID, err = store.GetOrCreateProject(ctx, cfg.WorkDir)
 	require.NoError(t, err)
 	if o.respond == nil {
@@ -864,6 +955,13 @@ func (c *eventCollector) waitMessage(sessionID int64, message string) {
 	})
 }
 
+func (c *eventCollector) waitState(sessionID int64, state controllerapi.State) {
+	c.t.Helper()
+	c.waitFor(c.t, "session state", func(events []controllerapi.SessionNotification) bool {
+		return hasStateEvent(events, sessionID, state)
+	})
+}
+
 // waitIdleAfter returns the trace through the turn's own idle; a late wake may re-activate the session after it.
 func (c *eventCollector) waitIdleAfter(sessionID int64, message string) []controllerapi.SessionNotification {
 	c.t.Helper()
@@ -1231,4 +1329,92 @@ func (h *harness) createRoot(attrs map[string]any) int64 {
 	require.NoError(h.t, err)
 	require.NotNil(h.t, root)
 	return root.ID
+}
+
+func newMockHarness(t *testing.T) (*harness, *mockFactory, *eventCollector) {
+	t.Helper()
+	factory := &mockFactory{}
+	h := newHarness(t, harnessOptions{configure: withTestModels, clientFor: factory.client})
+	return h, factory, h.collect()
+}
+
+func newFlakyLinkHarness(
+	t *testing.T,
+	respond func(string, []llmwire.Message) *llmwire.Response,
+) (*harness, *flakyLinkStore) {
+	t.Helper()
+	var flaky *flakyLinkStore
+	h := newHarness(t, harnessOptions{respond: respond, links: func(inner subagent.Store) subagent.Store {
+		flaky = newFlakyLinkStore(inner)
+		return flaky
+	}})
+	return h, flaky
+}
+
+func (h *harness) acceptUserInput(sessionID int64, raw, accepted string) int64 {
+	h.t.Helper()
+	input, err := h.store.Enqueue(
+		h.ctx, sessionstore.Input{SessionID: sessionID, Source: sessionstore.InputSourceUser, Content: raw},
+	)
+	require.NoError(h.t, err)
+	_, err = h.store.Commit(h.ctx, sessionstore.Commit{
+		SessionID: input.Input.SessionID,
+		Accept: []sessionstore.Accept{{
+			InputID: input.Input.ID, State: sessionstore.InputStateAccepted,
+			Content: accepted, LinkRef: -1, ModelBound: true,
+		}},
+	})
+	require.NoError(h.t, err)
+	return input.Input.ID
+}
+
+func (h *harness) addOneShot(sessionID int64, due time.Time, content string, fresh bool) *schedule.Schedule {
+	h.t.Helper()
+	entry, err := h.schedules.AddSchedule(h.ctx, sessionID, "", &due, content, fresh, schedule.ScheduleMetadata{})
+	require.NoError(h.t, err)
+	return entry
+}
+
+func (h *harness) countOutbox(sessionID int64, match func(string) bool) int {
+	h.t.Helper()
+	count := 0
+	for _, row := range h.outbox(sessionID) {
+		if match(row.Content) {
+			count++
+		}
+	}
+	return count
+}
+
+// closedInTime keeps a broken flow from stranding the test or the session's goroutine.
+func closedInTime(ch <-chan struct{}) bool {
+	select {
+	case <-ch:
+		return true
+	case <-time.After(5 * time.Second):
+		return false
+	}
+}
+
+func newScheduleRestartHarness(
+	t *testing.T,
+	dbPath, workDir string,
+	respond func(string, []llmwire.Message) *llmwire.Response,
+) *scheduleRestartHarness {
+	t.Helper()
+	base := newHarness(
+		t,
+		harnessOptions{dbPath: dbPath, respond: respond, configure: func(cfg *config.Config) { cfg.WorkDir = workDir }},
+	)
+	h := &scheduleRestartHarness{harness: base, db: base.db}
+	t.Cleanup(func() { require.NoError(t, h.close()) })
+	return h
+}
+
+func (h *scheduleRestartHarness) close() error {
+	h.closeOnce.Do(func() {
+		h.shutdown()
+		h.closeErr = h.db.Close()
+	})
+	return h.closeErr
 }

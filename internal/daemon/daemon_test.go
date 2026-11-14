@@ -39,32 +39,20 @@ func TestShutdownCancelsBackgroundRecovery(t *testing.T) {
 	}
 	h.mgr.links = links
 	require.NoError(t, h.mgr.Start(h.ctx))
-	select {
-	case <-links.entered:
-	case <-time.After(time.Second):
-		t.Fatal("background recovery did not reach the cancellation boundary")
-	}
+	requireBarrierSignal(t, links.entered, "background recovery did not reach the cancellation boundary")
 	shutdownDone := make(chan struct{})
 	go func() {
 		h.mgr.Shutdown(t.Context(), time.Second)
 		close(shutdownDone)
 	}()
-	select {
-	case <-links.cancelled:
-	case <-time.After(time.Second):
-		t.Fatal("shutdown did not cancel background recovery")
-	}
+	requireBarrierSignal(t, links.cancelled, "shutdown did not cancel background recovery")
 	select {
 	case <-shutdownDone:
 		t.Fatal("shutdown returned before background recovery exited")
 	default:
 	}
 	close(links.allowReturn)
-	select {
-	case <-shutdownDone:
-	case <-time.After(time.Second):
-		t.Fatal("shutdown did not wait for background recovery")
-	}
+	requireBarrierSignal(t, shutdownDone, "shutdown did not wait for background recovery")
 }
 
 // Runner cancellation must not wait for an unrelated background owner to join:

@@ -1,7 +1,6 @@
 package daemon
 
 import (
-	"context"
 	"testing"
 	"time"
 
@@ -13,13 +12,12 @@ import (
 )
 
 func TestProcessInputRearmsCompletedChildAfterPriorOutcomeHandoff(t *testing.T) {
-	ctx := context.Background()
 	h := newHarness(t, harnessOptions{configure: withTestModels, clientFor: (&mockFactory{}).client})
+	ctx := h.ctx
 	mgr, projects := h.mgr, h.store
-	projectID := testProject(t, projects, t.TempDir())
-	parent, err := mgr.store.CreateSession(ctx, projectID, "fake-model", "", nil)
-	require.NoError(t, err)
-	childID := createBackgroundChild(t, mgr, projectID, parent.ID)
+	projectID := h.projectID
+	parent := h.createRoot(nil)
+	childID := createBackgroundChild(t, mgr, projectID, parent)
 	for i := range maxChildren {
 		require.True(t, mgr.runners.tryAdmit(true, int64(20_000+i)))
 		defer mgr.runners.release(true, int64(20_000+i))
@@ -52,7 +50,7 @@ func TestProcessInputRearmsCompletedChildAfterPriorOutcomeHandoff(t *testing.T) 
 	assert.Equal(t, processInput.Input.ID, pending.ID)
 	assert.Equal(t, sessionstore.InputSourceProcess, pending.Source)
 	h.waitUntil("child rearmed", func() bool {
-		messages, msgErr := mgr.store.LoadActiveMessages(ctx, parent.ID)
+		messages, msgErr := mgr.store.LoadActiveMessages(ctx, parent)
 		if msgErr != nil {
 			return false
 		}
@@ -84,13 +82,12 @@ func TestProcessInputDoesNotRearmCompletedChildAfterStop(t *testing.T) {
 
 func assertProcessInputDoesNotRearmAfterStop(t *testing.T, stopChild bool) {
 	t.Helper()
-	ctx := context.Background()
 	h := newHarness(t, harnessOptions{configure: withTestModels, clientFor: (&mockFactory{}).client})
+	ctx := h.ctx
 	mgr, projects := h.mgr, h.store
-	projectID := testProject(t, projects, "/tmp/process-stop-rearm")
-	root, err := mgr.store.CreateSession(ctx, projectID, "fake-model", "", nil)
-	require.NoError(t, err)
-	childID := createBackgroundChild(t, mgr, projectID, root.ID)
+	projectID := h.projectID
+	root := h.createRoot(nil)
+	childID := createBackgroundChild(t, mgr, projectID, root)
 	require.NoError(
 		t,
 		seedTerminalChild(ctx, projects, childID, subagent.StateCompleted, "first outcome", subagent.OutcomeCompleted),
@@ -111,11 +108,11 @@ func assertProcessInputDoesNotRearmAfterStop(t *testing.T, stopChild bool) {
 		},
 	)
 	require.NoError(t, err)
-	unlock, err := mgr.lockSessionTree(ctx, root.ID)
+	unlock, err := mgr.lockSessionTree(ctx, root)
 	require.NoError(t, err)
 	ready := make(chan error, 1)
 	go func() { ready <- mgr.inputReady(ctx, childID) }()
-	stopID := root.ID
+	stopID := root
 	if stopChild {
 		stopID = childID
 	}
