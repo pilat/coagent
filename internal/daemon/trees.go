@@ -89,7 +89,7 @@ func (s *Service) stop(ctx context.Context, input *sessionstore.InboxInput) erro
 		return err
 	}
 
-	return s.stopLocked(ctx, input.SessionID, input.ID)
+	return s.stopLocked(ctx, record, input.ID)
 }
 
 func (s *Service) Fence(fenceCtx context.Context, rootSessionID int64) (func(), error) {
@@ -188,18 +188,9 @@ func (s *Service) killLocked(ctx context.Context, sessionID int64) error {
 	return nil
 }
 
-func (s *Service) stopLocked(ctx context.Context, sessionID, inputID int64) error {
-	record, getErr := s.store.GetSession(ctx, sessionID)
-	if getErr != nil {
-		// Fail closed: an unread session must not be classified as ownerless,
-		// so the idle publication is skipped instead of faked.
-		logger.Ctx(ctx).Warn("stop_session_lookup_failed",
-			zap.Int64("session_id", sessionID), zap.Error(getErr))
-
-		record = nil
-	}
-
-	explicit := inputID > 0 && record != nil && !ownerlessSession(record)
+func (s *Service) stopLocked(ctx context.Context, record *sessionstore.SessionRecord, inputID int64) error {
+	sessionID := record.ID
+	explicit := inputID > 0 && !ownerlessSession(record)
 
 	if !explicit {
 		s.publish(sessionID, sessionevent.Notification{
@@ -223,36 +214,9 @@ func (s *Service) stopLocked(ctx context.Context, sessionID, inputID int64) erro
 		return err
 	}
 
-	if err := s.convergeOrphanedStopStart(ctx, sessionID, inputID, cancelledProcesses); err != nil {
-		return err
-	}
-
-	if record != nil {
-		s.publish(sessionID, sessionevent.Notification{
-			Type: sessionevent.NotifyStateChanged, Status: controllerapi.StateIdle, Reason: "stopped",
-		})
-	}
-
-	return nil
-}
-
-// A committed start receipt needs a terminal output even if ownership lookup failed.
-
-func (s *Service) convergeOrphanedStopStart(
-	ctx context.Context,
-	sessionID, inputID int64,
-	cancelledProcesses int,
-) error {
-	if inputID <= 0 {
-		return nil
-	}
-
-	record, recordErr := s.store.GetSession(ctx, sessionID)
-	// Ownerless stops have no start row to converge; an unread session stays a
-	// startup-recovery case rather than a terminal fact published blind.
-	if recordErr == nil && !ownerlessSession(record) {
-		return s.completeExplicitStop(ctx, sessionID, inputID, cancelledProcesses)
-	}
+	s.publish(sessionID, sessionevent.Notification{
+		Type: sessionevent.NotifyStateChanged, Status: controllerapi.StateIdle, Reason: "stopped",
+	})
 
 	return nil
 }

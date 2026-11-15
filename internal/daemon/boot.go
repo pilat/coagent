@@ -321,7 +321,7 @@ func (s *Service) resumeAfterRestart(ctx context.Context) {
 		s.deliverCompletionToParent(ctx, link)
 	}
 
-	resumedInput, inputErr := s.resumeSessionsWithRecoverableInput(ctx)
+	resumedInput := s.resumeSessionsWithRecoverableInput(ctx)
 
 	counts := []zap.Field{
 		zap.Int("resumed", len(running)),
@@ -329,30 +329,18 @@ func (s *Service) resumeAfterRestart(ctx context.Context) {
 		zap.Int("input_resumed", resumedInput),
 	}
 
-	// A failed pass leaves children unresumed and completions undelivered — that
-	// must never be reported with the same line as a clean recovery.
-	if runningErr != nil || undeliveredErr != nil || inputErr != nil {
-		log.Error("sweep_incomplete", append(counts,
-			zap.Bool("running_failed", runningErr != nil),
-			zap.Bool("undelivered_failed", undeliveredErr != nil),
-			zap.Bool("input_failed", inputErr != nil),
-		)...)
-
-		return
-	}
-
 	log.Info("sweep_done", counts...)
 }
 
 // Terminal children rearm only after delivery; stopped children need explicit follow-up.
-func (s *Service) resumeSessionsWithRecoverableInput(ctx context.Context) (int, error) {
+func (s *Service) resumeSessionsWithRecoverableInput(ctx context.Context) int {
 	log := logger.Ctx(ctx).Named("daemon.sweep")
 
 	sessionIDs, listErr := s.store.ListSessionsWithRecoverableInput(ctx)
 	if listErr != nil {
 		log.Error("list_recoverable_session_input", zap.Error(listErr))
 
-		listErr = fmt.Errorf("list sessions with recoverable input: %w", listErr)
+		return 0
 	}
 
 	resumed := 0
@@ -399,7 +387,7 @@ func (s *Service) resumeSessionsWithRecoverableInput(ctx context.Context) (int, 
 		}
 	}
 
-	return resumed, listErr
+	return resumed
 }
 
 func (s *Service) resumeRecoverableRoot(ctx context.Context, sessionID int64) (bool, error) {

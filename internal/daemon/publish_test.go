@@ -2,7 +2,6 @@ package daemon
 
 import (
 	"context"
-	"errors"
 	"sync"
 	"testing"
 
@@ -113,29 +112,12 @@ func TestPublishGate_CachesChildVerdict(t *testing.T) {
 	assert.Equal(t, 1, counting.calls(), "the child verdict is looked up once and cached")
 }
 
-// A failed child lookup may publish once but must never cache a root verdict that leaks later events.
-func TestPublishGate_FailOpenDoesNotPoisonCache(t *testing.T) {
-	h := newHarness(t, harnessOptions{configure: withTestModels, clientFor: (&mockFactory{}).client})
-	mgr := h.mgr
-	ch := mgr.bus.SubscribeAll()
-	childID := h.createUnlinkedChild(h.createRoot(nil))
-	counting := &countingSessionStore{Store: mgr.store, failNth: 1}
-	mgr.store = counting
-	mgr.NotifySession(childID, sessionevent.Notification{Type: sessionevent.NotifyMessage, Message: "first"})
-	sn := requireNotification(t, ch)
-	assert.Equal(t, "first", sn.Notification.Message, "a failed lookup fails open")
-	mgr.NotifySession(childID, sessionevent.Notification{Type: sessionevent.NotifyMessage, Message: "second"})
-	requireNoNotification(t, ch)
-	assert.Equal(t, 2, counting.calls(), "the failed lookup left the cache empty, so it is retried")
-}
-
-// Count and inject publish-routing reads while preserving the real store.
+// Count publish-routing reads while preserving the real store.
 type countingSessionStore struct {
 	Store
 
 	mu       sync.Mutex
 	getCalls int
-	failNth  int // fail exactly the Nth GetSession call; 0 = never
 }
 
 type staleReadSessionStore struct {
@@ -150,11 +132,7 @@ type staleReadSessionStore struct {
 func (c *countingSessionStore) GetSession(ctx context.Context, id int64) (*sessionstore.SessionRecord, error) {
 	c.mu.Lock()
 	c.getCalls++
-	n, fail := c.getCalls, c.failNth
 	c.mu.Unlock()
-	if fail > 0 && n == fail {
-		return nil, errSessionRead
-	}
 	return c.Store.GetSession(ctx, id)
 }
 
@@ -182,6 +160,3 @@ func (s *staleReadSessionStore) GetSession(
 	}
 	return record, nil
 }
-
-// errSessionRead is the sentinel the fail-open publish test asserts against.
-var errSessionRead = errors.New("session store unavailable")

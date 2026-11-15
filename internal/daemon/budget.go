@@ -336,7 +336,7 @@ func (s *Service) parkBudgetTree(ctx context.Context, rootID int64) {
 	unlock, err := s.awaitParkTree(ctx, rootID)
 	if err != nil {
 		if errors.Is(err, errParkSuperseded) {
-			s.publishIdle(ctx, rootID)
+			s.publishIdle(rootID)
 		} else if ctx.Err() == nil {
 			logger.Ctx(ctx).Named("daemon.budget").Warn("lock_park_tree_failed", zap.Error(err))
 		}
@@ -359,7 +359,7 @@ func (s *Service) parkBudgetTree(ctx context.Context, rootID int64) {
 		return
 	}
 
-	s.publishIdle(ctx, rootID)
+	s.publishIdle(rootID)
 }
 
 func (s *Service) startPark(rootID int64) {

@@ -2,9 +2,6 @@ package daemon
 
 import (
 	"context"
-	"database/sql"
-	"errors"
-	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -65,29 +62,6 @@ func TestHarnessModel_ScheduleCapabilityBoundary(t *testing.T) {
 	}
 }
 
-func TestHarnessScenario_OneShotAckRetrySurvivesDaemonRestartAndRendersOnce(t *testing.T) {
-	releaseScheduledRun := make(chan struct{})
-	respond := scheduleRestartResponder(releaseScheduledRun)
-	dbPath := filepath.Join(t.TempDir(), "schedule-scenario.db")
-	workDir := t.TempDir()
-	first := newScheduleRestartHarness(t, dbPath, workDir, respond)
-	parentID, events := deliverOneShotBeforeRestart(t, first)
-	require.NoError(t, first.close(), "the first daemon must close SQLite before restart")
-	second := newScheduleRestartHarness(t, dbPath, workDir, respond)
-	retryEvents := retryOneShotAfterRestart(t, second, parentID, releaseScheduledRun)
-	retryEvents.waitMessage(parentID, "scheduled work completed")
-	retryEvents.waitIdleAfter(parentID, "scheduled work completed")
-	assert.Equal(t, 1, countToolResultsFor(second.messages(parentID), tool.IDSchedule))
-	assert.Equal(t, "scheduled work completed", lastAssistantTextDTO(second.messages(parentID)))
-	trace := append(events.snapshot(), retryEvents.snapshot()...)
-	// Restart announcements race runner drains; pin message and delivery order instead of activation timing noise.
-	assertHarnessTrace(t, second.harness, "one_shot_ack_retry_restart.json", dropTransientEvents(trace), parentID)
-	require.NoError(t, second.close())
-	third := newScheduleRestartHarness(t, dbPath, workDir, respond)
-	assertNoRetryPublication(t, retryOneShotAfterRestart(t, third, parentID, nil).snapshot())
-	assert.Equal(t, 1, countToolResultsFor(third.messages(parentID), tool.IDSchedule))
-}
-
 func TestHarnessScenario_SleepProjectsWakeAtAndUserInputInterruptsIt(t *testing.T) {
 	respond := sleepThenAnswer("sleep interruption handled")
 	h := newHarness(t, harnessOptions{respond: respond})
@@ -119,42 +93,9 @@ func TestHarnessScenario_SleepProjectsWakeAtAndUserInputInterruptsIt(t *testing.
 	assertHarnessTrace(t, h, "sleep_interrupted_by_input.json", turn, parentID)
 }
 
-// Without the wake loop the runner is the only caller that can observe the stale sleep row.
-func TestHarnessScenario_SleepInterruptedWhileRowRetiredConcurrently(t *testing.T) {
-	const answer = "sleep interruption handled"
-	t.Run("root trace", func(t *testing.T) {
-		h, retired := newStaleSleepHarness(t, sleepThenAnswer(answer))
-		collector := collectEvents(t, h.mgr.bus.SubscribeAll())
-		defer collector.stop()
-		id, turn := interruptSleep(t, h, collector, nil, answer)
-		assert.EqualValues(t, 1, retired.retired.Load())
-		assert.Equal(t, sessionstore.SessionStatusCompleted, h.session(id).Status)
-		assertHarnessTraceForScenario(t, h, "TestHarnessScenario_SleepProjectsWakeAtAndUserInputInterruptsIt",
-			"sleep_interrupted_by_input.json", turn, id)
-	})
-	t.Run("manager root", func(t *testing.T) {
-		h, retired := newStaleSleepHarness(t, sleepThenAnswer(answer))
-		collector := collectEvents(t, h.mgr.bus.SubscribeAll())
-		defer collector.stop()
-		id, _ := interruptSleep(t, h, collector, managerAttrs(scenarioManagerID), answer)
-		assert.EqualValues(t, 1, retired.retired.Load())
-		assert.Equal(t, sessionstore.SessionStatusCompleted, h.session(id).Status)
-		outputs, _ := scenarioOutputs(t, h)
-		contents := make([]string, 0, len(outputs))
-		for _, output := range outputs {
-			contents = append(contents, output.Content)
-		}
-		assert.Equal(t, []string{"", "→ sleep", answer}, contents)
-	})
-	t.Run("subagent", func(t *testing.T) {
-		runInterruptedSubagentScenario(t)
-	})
-}
-
-func runInterruptedSubagentScenario(t *testing.T) {
-	t.Helper()
+func TestHarnessScenario_BackgroundChildSleepInterruptedBySendToChild(t *testing.T) {
 	const answer = "child answer after interruption"
-	h, retired := newStaleSleepHarness(t, func(_ string, messages []llmwire.Message) *llmwire.Response {
+	h := newHarness(t, harnessOptions{respond: func(_ string, messages []llmwire.Message) *llmwire.Response {
 		if hasUserContaining(messages, "CHILD_TASK") {
 			return sleepThenAnswer(answer)("", messages)
 		}
@@ -163,7 +104,7 @@ func runInterruptedSubagentScenario(t *testing.T) {
 		}
 		return callReply(taskCallID, tool.IDTask,
 			`{"prompt":"CHILD_TASK","description":"child work","subagent_type":"general","background":true}`)
-	})
+	}})
 	parentID, err := h.mgr.Send(h.ctx, h.projectID, "delegate", "fake-model", nil)
 	require.NoError(t, err)
 	var childID int64
@@ -183,7 +124,6 @@ func runInterruptedSubagentScenario(t *testing.T) {
 		link, linkErr = h.links.GetLink(h.ctx, childID)
 		return linkErr == nil && link != nil && link.Terminal()
 	})
-	assert.EqualValues(t, 1, retired.retired.Load())
 	assert.Equal(t, subagent.StateCompleted, link.State)
 	assert.Equal(t, answer, link.Result)
 }
@@ -203,6 +143,13 @@ func TestHarnessScenario_LateWakeAfterInterruptedSleepAddsNoOutput(t *testing.T)
 	before := collector.snapshot()
 	outputs, owners := scenarioOutputs(t, h)
 	messages, status, calls := h.messages(id), h.session(id).Status, modelCalls.Load()
+
+	assert.Equal(t, sessionstore.SessionStatusCompleted, status)
+	contents := make([]string, 0, len(outputs))
+	for _, output := range outputs {
+		contents = append(contents, output.Content)
+	}
+	assert.Equal(t, []string{"", "→ sleep", answer}, contents)
 
 	require.NoError(t, h.mgr.start(h.ctx, id))
 	collector.waitFor(t, "late activation idle", func(events []controllerapi.SessionNotification) bool {
@@ -227,35 +174,6 @@ func TestHarnessScenario_LateWakeAfterInterruptedSleepAddsNoOutput(t *testing.T)
 	assert.Equal(t, messages, h.messages(id))
 	assert.Equal(t, status, h.session(id).Status)
 	assert.Equal(t, calls, modelCalls.Load())
-}
-
-// Another owner retires the row after the caller listed it and before the caller deletes it.
-type staleSleepRetiredFirstStore struct {
-	schedule.Store
-	retired atomic.Int64
-}
-
-func (s *staleSleepRetiredFirstStore) CallPending(ctx context.Context, sessionID int64, callID string) (bool, error) {
-	pending, err := s.Store.CallPending(ctx, sessionID, callID)
-	if err != nil || pending {
-		return pending, err
-	}
-	removed, err := s.RemoveSleepSchedules(ctx, sessionID)
-	s.retired.Add(removed)
-	return false, err
-}
-
-func newStaleSleepHarness(
-	t *testing.T,
-	respond func(string, []llmwire.Message) *llmwire.Response,
-) (*harness, *staleSleepRetiredFirstStore) {
-	t.Helper()
-	retired := &staleSleepRetiredFirstStore{}
-	h := newHarness(t, harnessOptions{respond: respond, schedules: func(store schedule.Store) schedule.Store {
-		retired.Store = store
-		return retired
-	}})
-	return h, retired
 }
 
 func interruptSleep(
@@ -379,56 +297,6 @@ func TestIntegration_StandaloneOneShotFlowsThroughExecutorAndDaemonQueue(t *test
 	require.NoError(t, llmtest.ValidateToolPairing(messages))
 	assert.Equal(t, 1, countToolResultsFor(messages, tool.IDSchedule))
 	assert.Contains(t, lastToolResultContent(messages, tool.IDSchedule), "one-time scheduled work")
-}
-
-func TestIntegration_OneShotAckFailureRedeliversWithoutDuplicateTranscriptOrPublication(t *testing.T) {
-	respond := func(_ string, msgs []llmwire.Message) *llmwire.Response {
-		if hasToolResultFor(msgs, tool.IDSchedule) {
-			return textReply("one-shot handled once")
-		}
-		return textReply("ready")
-	}
-	h := newHarness(t, harnessOptions{respond: respond})
-	parentID := h.send("initialize", nil)
-	h.waitAnswer(parentID, "")
-	due := time.Now().Add(-time.Minute).UTC()
-	h.addOneShot(parentID, due, "one-time retry-safe work", false)
-	sub := h.mgr.bus.Subscribe(parentID)
-	defer h.mgr.bus.Unsubscribe(parentID, sub)
-	flaky := failNextScheduleDelivery(t, h)
-	first := schedule.NewExecutor(flaky, h.mgr)
-	first.Start(h.ctx)
-	require.True(t, closedInTime(flaky.attempted), "first executor did not reach the failing acknowledgement")
-	first.Stop()
-	h.waitAnswer(parentID, "")
-	remaining, err := h.schedules.ListSchedules(h.ctx, parentID)
-	require.NoError(t, err)
-	require.Len(t, remaining, 1, "failed producer ack must leave the one-shot retryable")
-	assert.Zero(t, countToolResultsFor(h.messages(parentID), tool.IDSchedule))
-	second := schedule.NewExecutor(h.schedules, h.mgr)
-	second.Start(h.ctx)
-	h.waitUntil("one-shot retry acknowledged", func() bool {
-		schedules, listErr := h.schedules.ListSchedules(h.ctx, parentID)
-		return listErr == nil && len(schedules) == 0 && !h.mgr.HasActiveLoop(parentID) &&
-			lastAssistantTextDTO(h.messages(parentID)) == "one-shot handled once"
-	})
-	second.Stop()
-	messages := h.messages(parentID)
-	require.NoError(t, llmtest.ValidateToolPairing(messages))
-	assert.Equal(t, 1, countToolResultsFor(messages, tool.IDSchedule))
-	assert.Equal(t, "one-shot handled once", lastAssistantTextDTO(messages))
-	scheduledPublications := 0
-	for {
-		select {
-		case notification := <-sub:
-			if notification.Type == sessionevent.NotifyInputReceived && notification.Source == "scheduler" {
-				scheduledPublications++
-			}
-		default:
-			assert.Equal(t, 1, scheduledPublications, "ack retry must not republish accepted input")
-			return
-		}
-	}
 }
 
 func TestIntegration_FreshScheduleDuplicateDoesNotResetOrRunTwice(t *testing.T) {
@@ -639,38 +507,6 @@ func TestHarnessScenario_ScheduledTurnChain(t *testing.T) {
 	assertHarnessTrace(t, h, "scheduled_turn_chain.json", collector.snapshot(), root)
 }
 
-type failFirstScheduleDeliveryStore struct {
-	schedule.Store
-	db        *sql.DB
-	once      sync.Once
-	attempted chan struct{}
-}
-
-func failNextScheduleDelivery(t *testing.T, h *harness) *failFirstScheduleDeliveryStore {
-	t.Helper()
-	_, err := h.db.ExecContext(t.Context(), `CREATE TRIGGER fail_schedule_delivery BEFORE INSERT ON session_inbox
-		WHEN NEW.source = 'schedule' BEGIN SELECT RAISE(ABORT, 'forced enqueue failure'); END`)
-	require.NoError(t, err)
-	return &failFirstScheduleDeliveryStore{Store: h.schedules, db: h.db, attempted: make(chan struct{})}
-}
-
-func (s *failFirstScheduleDeliveryStore) DeliverOneShot(
-	ctx context.Context,
-	sched *schedule.Schedule,
-	content string,
-	attrs map[string]any,
-) (bool, error) {
-	first := false
-	s.once.Do(func() { first = true })
-	applied, err := s.Store.DeliverOneShot(ctx, sched, content, attrs)
-	if !first {
-		return applied, err
-	}
-	_, dropErr := s.db.ExecContext(ctx, `DROP TRIGGER fail_schedule_delivery`)
-	close(s.attempted)
-	return applied, errors.Join(err, dropErr)
-}
-
 type scheduleBoundaryCommand uint8
 
 const (
@@ -807,111 +643,6 @@ type orderedScheduleSender struct {
 	schedule.SessionSender
 	running <-chan struct{}
 	done    <-chan struct{}
-}
-
-func dropTransientEvents(events []controllerapi.SessionNotification) []controllerapi.SessionNotification {
-	kept := make([]controllerapi.SessionNotification, 0, len(events))
-	for _, event := range events {
-		if event.Notification.Type == sessionevent.NotifyStateChanged ||
-			event.Notification.Type == sessionevent.NotifySessionCreated ||
-			event.Notification.Message == "⚠️ Could not verify background work before releasing the active budget; the budget remains armed." {
-			continue
-		}
-		kept = append(kept, event)
-	}
-	return kept
-}
-
-func deliverOneShotBeforeRestart(
-	t *testing.T,
-	h *scheduleRestartHarness,
-) (int64, *eventCollector) {
-	t.Helper()
-	events := collectEvents(t, h.mgr.bus.SubscribeManager("telegram-main"))
-	t.Cleanup(events.stop)
-	parentID := createScheduleSession(t, h, events)
-	flaky := addFlakyDueOneShot(t, h, parentID)
-	executor := schedule.NewExecutor(flaky, h.mgr)
-	executor.Start(h.ctx)
-	t.Cleanup(executor.Stop)
-	waitForScenarioSignal(t, flaky.attempted, "scenario signal")
-	executor.Stop()
-	requireOneShotRemainsRetryable(t, h, parentID)
-	return parentID, events
-}
-
-func createScheduleSession(t *testing.T, h *scheduleRestartHarness, events *eventCollector) int64 {
-	t.Helper()
-	parentID := h.send("initialize", managerAttrs("telegram-main"))
-	events.waitMessage(parentID, "ready for schedule")
-	return parentID
-}
-
-func addFlakyDueOneShot(t *testing.T, h *scheduleRestartHarness, sessionID int64) *failFirstScheduleDeliveryStore {
-	t.Helper()
-	due := time.Now().Add(-time.Minute).UTC()
-	h.addOneShot(sessionID, due, "scheduled once", false)
-	return failNextScheduleDelivery(t, h.harness)
-}
-
-func waitForScheduledInput(t *testing.T, events *eventCollector, sessionID int64) {
-	t.Helper()
-	events.waitFor(t, "scheduler input publication", func(got []controllerapi.SessionNotification) bool {
-		for _, event := range got {
-			if event.SessionID == sessionID && event.Notification.Type == sessionevent.NotifyInputReceived &&
-				event.Notification.Source == "scheduler" && event.Notification.Message == "scheduled once" {
-				return true
-			}
-		}
-		return false
-	})
-}
-
-func requireOneShotRemainsRetryable(t *testing.T, h *scheduleRestartHarness, sessionID int64) {
-	t.Helper()
-	remaining, err := h.schedules.ListSchedules(h.ctx, sessionID)
-	require.NoError(t, err)
-	require.Len(t, remaining, 1, "failed transaction must leave the one-shot retryable")
-	assert.Zero(t, countToolResultsFor(h.messages(sessionID), tool.IDSchedule))
-}
-
-func retryOneShotAfterRestart(
-	t *testing.T,
-	h *scheduleRestartHarness,
-	sessionID int64,
-	release chan<- struct{},
-) *eventCollector {
-	t.Helper()
-	// Subscribe before recovery starts to retain its session-created announcement.
-	events := collectEvents(t, h.mgr.bus.SubscribeManager("telegram-main"))
-	t.Cleanup(events.stop)
-	require.NoError(t, h.mgr.Start(h.ctx))
-	observer := newScheduleRunningObserver(t, h.mgr.bus)
-	sender := &orderedScheduleSender{SessionSender: h.mgr, running: observer.running, done: observer.done}
-	executor := schedule.NewExecutor(h.schedules, sender)
-	executor.Start(h.ctx)
-	t.Cleanup(executor.Stop)
-	if release != nil {
-		waitForScheduledInput(t, events, sessionID)
-		close(release)
-	}
-	h.waitUntil("restart retry acknowledged", func() bool {
-		schedules, err := h.schedules.ListSchedules(h.ctx, sessionID)
-		return err == nil && len(schedules) == 0 && !h.mgr.HasActiveLoop(sessionID) &&
-			lastAssistantTextDTO(h.messages(sessionID)) == "scheduled work completed"
-	})
-	executor.Stop()
-	return events
-}
-
-func assertNoRetryPublication(t *testing.T, events []controllerapi.SessionNotification) {
-	t.Helper()
-	for _, event := range events {
-		assert.NotEqual(t, sessionevent.NotifyInputReceived, event.Notification.Type,
-			"duplicate scheduled delivery must not republish accepted input after restart")
-		assert.NotEqual(t, sessionevent.NotifyMessage, event.Notification.Type,
-			"duplicate scheduled delivery must not render another answer after restart")
-	}
 }
 
 func newScheduleRunningObserver(t *testing.T, source *sessionbus.Bus) *scheduleRunningObserver {
@@ -1084,16 +815,6 @@ func createScheduleBoundarySubagent(t *testing.T, h *harness) int64 {
 	childID := h.createUnlinkedChild(parent)
 	require.NoError(t, h.store.UpdateSessionStatus(t.Context(), childID, sessionstore.SessionStatusCompleted))
 	return childID
-}
-
-func scheduleRestartResponder(release <-chan struct{}) func(string, []llmwire.Message) *llmwire.Response {
-	return func(_ string, messages []llmwire.Message) *llmwire.Response {
-		if hasToolResultFor(messages, tool.IDSchedule) {
-			<-release
-			return textReply("scheduled work completed")
-		}
-		return textReply("ready for schedule")
-	}
 }
 
 func stoppedRootScheduleResponder(

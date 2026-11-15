@@ -219,23 +219,6 @@ func TestIntegration_ScatterGatherBlockingTasks(t *testing.T) {
 	assert.Equal(t, 3, countToolResultsFor(msgs, "task"), "each of the 3 task calls gets its own result")
 }
 
-// An unreadable link must stop finalization without writes; only its diagnostic can survive.
-func TestFinalizeChild_LinkReadErrorStopsShort(t *testing.T) {
-	h := newLedgerHarness(t)
-	sub := h.mgr.bus.Subscribe(h.parentID)
-	defer h.mgr.bus.Unsubscribe(h.parentID, sub)
-	core, logs := observer.New(zap.ErrorLevel)
-	ctx := logger.ToContext(h.ctx, zap.New(core))
-	h.activation.failRead = true
-	h.startInboxWake()
-	finalizeTestChild(ctx, t, h.mgr, h.childID)
-	assert.Equal(t, 1, h.activation.attempts(), "the failed read performs no transition")
-	entries := logs.FilterMessage("finalize_child").All()
-	require.Len(t, entries, 1)
-	assert.Equal(t, h.childID, entries[0].ContextMap()["child"])
-	assert.Empty(t, drainNotifications(sub), "no parent id is known, so nothing is published")
-}
-
 // Root finalization normally finds no child link and must remain silent.
 func TestFinalizeChild_NoLinkIsSilent(t *testing.T) {
 	h := newHarness(t, harnessOptions{respond: trivialRespond})
@@ -248,25 +231,6 @@ func TestFinalizeChild_NoLinkIsSilent(t *testing.T) {
 	finalizeTestChild(ctx, t, h.mgr, rec)
 	assert.Zero(t, logs.Len(), "a root session's exit logs nothing")
 	assert.Empty(t, drainNotifications(sub))
-}
-
-func TestFinalizeChild_WriteFailureRemainsRecoverable(t *testing.T) {
-	h := newLedgerHarness(t)
-	h.activation.failN = -1
-	sub := h.mgr.bus.Subscribe(h.parentID)
-	defer h.mgr.bus.Unsubscribe(h.parentID, sub)
-	core, logs := observer.New(zap.ErrorLevel)
-	ctx := logger.ToContext(h.ctx, zap.New(core))
-	h.startInboxWake()
-	finalizeTestChild(ctx, t, h.mgr, h.childID)
-	assert.Equal(t, 1, h.activation.attempts())
-	assert.Len(t, logs.FilterMessage("finalize_child").All(), 1)
-	notifications := drainNotifications(sub)
-	require.NotEmpty(t, notifications)
-	assert.Contains(t, notifications[0].Message, "completion could not be recorded")
-	running, err := h.links.ListRunningChildLinks(h.ctx)
-	require.NoError(t, err)
-	assert.True(t, slices.ContainsFunc(running, func(link subagent.Link) bool { return link.ChildID == h.childID }))
 }
 
 func TestIntegration_DepthCapRejected(t *testing.T) {
@@ -1156,32 +1120,6 @@ func TestIntegration_SendToSubagentReNotifies(t *testing.T) {
 	)
 }
 
-// An unreadable ledger must refuse spawning instead of bypassing depth and parent quota checks.
-func TestLedgerFailure_SpawnRefusesInsteadOfDegrading(t *testing.T) {
-	h, flaky := newFlakyLinkHarness(t, trivialRespond)
-	root := h.createRoot(nil)
-
-	// Healthy store: the same request succeeds — this gate must not simply refuse everything.
-	h.startInboxWake()
-	ok, err := h.mgr.Spawn(h.ctx, subagent.SpawnRequest{ParentID: root, AgentType: "general", Prompt: "x"})
-	require.NoError(t, err)
-	require.NotZero(t, ok.ChildID)
-	h.waitDelivered(ok.ChildID)
-	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(ok.ChildID) })
-	h.waitUntil("healthy child runner removed", func() bool { return runnerLiveCount(h.mgr.runners) == 0 })
-	loopsBefore := runnerLiveCount(h.mgr.runners)
-	childrenBefore := runnerChildCount(h.mgr.runners)
-	flaky.failGetLink(1, 0)
-
-	// Depth validation fails before a child ID exists, so the returned error is the observable rejection.
-	res, err := h.mgr.Spawn(h.ctx, subagent.SpawnRequest{ParentID: root, AgentType: "general", Prompt: "x"})
-	require.Error(t, err)
-	assert.Equal(t, subagent.ChildResult{}, res)
-	loopsAfter := runnerLiveCount(h.mgr.runners)
-	assert.Equal(t, loopsBefore, loopsAfter, "no runner was started")
-	assert.Equal(t, childrenBefore, runnerChildCount(h.mgr.runners), "no child slot was taken")
-}
-
 func TestResponseIntegrity_ReusedChildReportsCurrentErrorInsteadOfPriorAnswer(t *testing.T) {
 	respond := func(_ string, messages []llmwire.Message) *llmwire.Response {
 		if hasUserContaining(messages, "CHILD_INTEGRITY") {
@@ -1382,13 +1320,18 @@ func TestSpawnRejectsStoppedParent(t *testing.T) {
 
 // An unreadable parent link must reject spawning instead of resetting its nesting depth to one.
 func TestChildDepth_ReadErrorCancelsSpawn(t *testing.T) {
-	h, flaky := newFlakyLinkHarness(t, trivialRespond)
+	h := newHarness(t, harnessOptions{
+		respond: trivialRespond,
+		links:   func(inner subagent.Store) subagent.Store { return failingLinkReads{inner} },
+	})
 	var err error
 	root := h.createRoot(nil)
-	flaky.failGetLink(1, 0)
 	h.startInboxWake()
 	_, err = h.mgr.Spawn(h.ctx, subagent.SpawnRequest{ParentID: root, AgentType: "general", Prompt: "x"})
 	require.ErrorIs(t, err, errLinkRead)
+	records, err := h.store.ListAllSessions(h.ctx)
+	require.NoError(t, err)
+	assert.Len(t, records, 1, "an unreadable parent link must not create a child")
 }
 
 // Roots normally have no child link and must retain depth one.

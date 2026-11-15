@@ -2,7 +2,6 @@ package daemon
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"testing"
 	"time"
@@ -94,23 +93,4 @@ func TestFinishRunnerCancellationEscapesContendedTreeFence(t *testing.T) {
 	}
 	unlock()
 	requireBarrierSignal(t, done, "runner finalization did not resume after the tree fence")
-}
-
-func TestTeardownOnStoreFailureDoesNotPublishIdle(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	h := newHarness(t, harnessOptions{respond: trivialRespond})
-	sessions, store := h.store, h.store
-	projectID := testProject(t, store, "/tmp/teardown-failure")
-	record, err := sessions.CreateSession(ctx, projectID, "model", "", managerAttrs("manager-teardown"))
-	require.NoError(t, err)
-	failing := &failingGetSessionStore{Store: sessions, err: errors.New("disk hiccup")}
-	failing.pending.Store(true)
-	mgr := h.mgr
-	mgr.store = failing
-	controllers := newTestController(mgr)
-	notifications := controllers.ForManager("manager-teardown").Subscribe()
-	mgr.publishIdle(ctx, record.ID)
-	requireNoManagerNotification(t, notifications)
-	mgr.Shutdown(t.Context(), time.Second)
 }

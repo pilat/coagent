@@ -802,7 +802,7 @@ func TestIdleIsSuppressedByReplacementRunner(t *testing.T) {
 	replacement := newRunner(func() {}, "", record, waitingRunner{sessionID: record.ID}, false)
 	_, registered := registerTestRunner(ctx, mgr, replacement)
 	require.True(t, registered)
-	mgr.publishIdle(ctx, record.ID)
+	mgr.publishIdle(record.ID)
 	requireNoNotification(t, notifications)
 	mgr.removeRunner(ctx, replacement)
 	replacement.Complete()
