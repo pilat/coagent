@@ -334,6 +334,9 @@ NIGHTLY_MUTATION_WORKERS ?= 4
 # coefficient gives each mutant several package-suite runtimes without turning
 # one survivor into a multi-hour timeout.
 NIGHTLY_MUTATION_TIMEOUT_COEFFICIENT ?= 3
+# Per-process data limit in KiB: a mutant that allocates without bound fails
+# its own test run instead of taking the hosted runner down with it.
+NIGHTLY_MUTATION_DATA_LIMIT_KB ?= 4194304
 NIGHTLY_MUTATION_FLAGS ?=
 
 mutation.nightly:
@@ -346,6 +349,7 @@ mutation.nightly:
 	@go version -m "$$(command -v gremlins)" 2>/dev/null | grep -q "github.com/go-gremlins/gremlins[[:space:]]*$(GREMLINS_VERSION)" || { echo "✋ gremlins $(GREMLINS_VERSION) required; run make tools"; exit 1; }
 	@mkdir -p "$(NIGHTLY_MUTATION_REPORT_DIR)"
 	@set -eu; \
+	ulimit -d $(NIGHTLY_MUTATION_DATA_LIMIT_KB); \
 	for mutation_path in $(NIGHTLY_MUTATION_PATHS); do \
 		set --; \
 		if [ -n "$(strip $(NIGHTLY_MUTATION_FILES))" ]; then \
