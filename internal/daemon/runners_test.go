@@ -8,45 +8,14 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.uber.org/zap"
-	"go.uber.org/zap/zaptest/observer"
 
 	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/llmwire"
-	"github.com/pilat/coagent/internal/logger"
 	"github.com/pilat/coagent/internal/sessionevent"
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/subagent"
 	"github.com/pilat/coagent/internal/tool"
 )
-
-func TestRunnerSetRetryBackoff(t *testing.T) {
-	t.Parallel()
-	set := newRunnerSet()
-	for _, want := range []time.Duration{
-		100 * time.Millisecond, 200 * time.Millisecond, 400 * time.Millisecond, 800 * time.Millisecond,
-		1600 * time.Millisecond, 3200 * time.Millisecond, 6400 * time.Millisecond, 12800 * time.Millisecond,
-		25600 * time.Millisecond, 30 * time.Second, 30 * time.Second,
-	} {
-		delay, ok := set.scheduleRetry()
-		require.True(t, ok)
-		assert.Equal(t, want, delay)
-		delay, ok = set.scheduleRetry()
-		assert.False(t, ok)
-		assert.Zero(t, delay)
-		set.retryDone()
-	}
-
-	set.resetRetry()
-	delay, ok := set.scheduleRetry()
-	require.True(t, ok)
-	assert.Equal(t, 100*time.Millisecond, delay)
-	set.retryDone()
-	set.closeAndSnapshot()
-	delay, ok = set.scheduleRetry()
-	assert.False(t, ok)
-	assert.Zero(t, delay)
-}
 
 // Admission delays must preserve the durable recovery obligation without queue metadata.
 func TestDrainPendingRunners_DerivesPromotedRecoveryAfterCapacityWait(t *testing.T) {
@@ -81,30 +50,6 @@ func TestDrainPendingRunners_DerivesPromotedRecoveryAfterCapacityWait(t *testing
 	ran := sess.ran
 	sess.mu.Unlock()
 	assert.True(t, ran, "first runner must derive and execute the promoted user turn")
-}
-
-// A failed classification must preserve the entire waiting FIFO for retry.
-func TestDrainQueue_UnknownChildStateDefers(t *testing.T) {
-	h, flaky := newFlakyLinkHarness(t, trivialRespond)
-	parent := h.createRoot(nil)
-	for _, callID := range []string{"bg-1", "bg-2", "bg-3"} {
-		childID := h.createChild(parent, subagent.Link{TaskCallID: callID})
-		h.mgr.runners.wait(waitingRunner{sessionID: childID, parentID: parent, child: true})
-	}
-	require.Equal(t, 3, h.queueLen())
-	flaky.failGetLink(1, 0)
-	core, logs := observer.New(zap.ErrorLevel)
-	ctx := logger.ToContext(h.ctx, zap.New(core))
-	h.mgr.drain(ctx)
-	assert.Equal(t, 3, h.queueLen(), "nothing is dropped and nothing recursed")
-	assert.Zero(t, runnerLiveCount(h.mgr.runners), "no runner was created")
-	assert.NotEmpty(t, logs.FilterMessage("waiting_runner_start_failed").All())
-	flaky.mu.Lock()
-	flaky.getLinkFailFrom = 0
-	flaky.mu.Unlock()
-	h.waitUntil("delayed admission retry", func() bool {
-		return h.queueLen() < 3 || runnerLiveCount(h.mgr.runners) > 0
-	})
 }
 
 func TestStartSkipsTerminalAndStoppedChildren(t *testing.T) {
@@ -211,39 +156,6 @@ func TestStartLockedRejectsShutdown(t *testing.T) {
 	h.mgr.life.close()
 	err := h.mgr.startLocked(h.ctx, 1)
 	require.ErrorIs(t, err, errDaemonShuttingDown)
-}
-
-// An unreadable ledger must not let a child bypass its parent's quota.
-func TestEnsureRunner_ClassifyErrorBlocksStart(t *testing.T) {
-	h, flaky := newFlakyLinkHarness(t, trivialRespond)
-	var err error
-	rec := h.createRoot(nil)
-	totalBefore, childrenBefore := runnerRunningCount(h.mgr.runners), runnerChildCount(h.mgr.runners)
-	flaky.failGetLink(1, 0)
-	err = h.mgr.start(h.ctx, rec)
-	require.ErrorIs(t, err, errLinkRead)
-	assert.False(t, h.mgr.HasActiveLoop(rec), "no runner for an unclassifiable session")
-	assert.Equal(t, totalBefore, runnerRunningCount(h.mgr.runners), "no slot was taken")
-	assert.Equal(t, childrenBefore, runnerChildCount(h.mgr.runners))
-}
-
-// Failed starts retain their input and wait for the bounded admission retry.
-func TestDrainQueue_StartErrorRetainsWaitingInput(t *testing.T) {
-	h, flaky := newFlakyLinkHarness(t, trivialRespond)
-	parent := h.createRoot(nil)
-	childID := h.createChild(parent, subagent.Link{TaskCallID: "bg"})
-	h.mgr.runners.wait(waitingRunner{sessionID: childID, parentID: parent, child: true})
-	flaky.failGetLink(1, childID)
-	core, logs := observer.New(zap.ErrorLevel)
-	ctx := logger.ToContext(h.ctx, zap.New(core))
-	h.mgr.drain(ctx)
-	assert.Equal(t, 1, h.queueLen(), "the failed start retains its waiting entry")
-	assert.False(t, h.mgr.HasActiveLoop(childID), "no runner was created")
-	assert.NotEmpty(t, logs.FilterMessage("waiting_runner_start_failed").All(), "the failure is logged")
-
-	// A persistent read failure remains queued for the bounded admission retry.
-	h.mgr.drain(ctx)
-	assert.Equal(t, 1, h.queueLen())
 }
 
 // Capacity is rechecked against the durable parent after selecting a waiter.

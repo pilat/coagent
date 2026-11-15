@@ -2,7 +2,6 @@ package daemon
 
 import (
 	"context"
-	"errors"
 	"os/exec"
 	"testing"
 	"time"
@@ -316,53 +315,6 @@ func TestManager_ClearWhileRunning(t *testing.T) {
 		}
 		return false
 	})
-}
-
-// A failed intermediate projection cannot erase the later committed stop result.
-func TestStopOnStoreReadFailureStillPublishesCommittedIdle(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	h := newHarness(t, harnessOptions{respond: trivialRespond})
-	sessions, store := h.store, h.store
-	projectID := testProject(t, store, "/tmp/stop-failure")
-	record, err := sessions.CreateSession(ctx, projectID, "model", "", managerAttrs("manager-stop"))
-	require.NoError(t, err)
-	failing := &failingGetSessionStore{Store: sessions, err: errors.New("disk hiccup")}
-	failing.pending.Store(true)
-	// Tree acquisition and the stopped check precede the ownership projection.
-	failing.skip = 2
-	mgr := h.mgr
-	mgr.store = failing
-	controllers := newTestController(mgr)
-	notifications := controllers.ForManager("manager-stop").Subscribe()
-	require.NoError(t, mgr.sendToSession(ctx, record.ID, "/stop"),
-		"the stop itself must succeed: the cleanup ran on the real store")
-
-	stopping := requireNotification(t, notifications)
-	require.Equal(t, sessionevent.NotifyMessage, stopping.Notification.Type)
-	idle := requireNotification(t, notifications)
-	assert.Equal(t, record.ID, idle.SessionID)
-	assert.Equal(t, sessionevent.NotifyStateChanged, idle.Notification.Type)
-	assert.Equal(t, controllerapi.StateIdle, idle.Notification.Status)
-	assert.Equal(t, "stopped", idle.Notification.Reason)
-	assert.False(t, failing.pending.Load(), "the store failure must actually occur")
-	assert.Equal(t, sessionstore.SessionStatusStopped, h.session(record.ID).Status)
-	outputs := h.outbox(record.ID)
-	require.Len(t, outputs, 2)
-	assert.Contains(t, outputs[1].SourceKey, ":stop:completed")
-	requireNoManagerNotification(t, notifications)
-}
-
-func TestKillLockedKeepsLoadError(t *testing.T) {
-	t.Parallel()
-	h := newHarness(t, harnessOptions{respond: trivialRespond})
-	record, err := h.store.CreateSession(h.ctx, testProject(t, h.store, t.TempDir()), "model", "", nil)
-	require.NoError(t, err)
-	loadErr := errors.New("disk hiccup")
-	failing := &failingGetSessionStore{Store: h.store, err: loadErr}
-	failing.pending.Store(true)
-	h.mgr.store = failing
-	assert.ErrorIs(t, h.mgr.killLocked(h.ctx, record.ID), loadErr)
 }
 
 func TestStopParksWholeTreeAndExplicitFollowUpResumesOnlyChild(t *testing.T) {

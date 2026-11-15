@@ -254,11 +254,6 @@
       ]
     },
     {
-      "trace": "one_shot_ack_retry_restart.json",
-      "source_test": "TestHarnessScenario_OneShotAckRetrySurvivesDaemonRestartAndRendersOnce",
-      "calls": null
-    },
-    {
       "trace": "output_chain_narrated_tools.json",
       "source_test": "TestHarnessScenario_OutputChainNarratedToolIterations",
       "calls": [

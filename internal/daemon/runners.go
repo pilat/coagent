@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"slices"
 	"sync"
-	"time"
 
 	"go.uber.org/zap"
 
@@ -22,9 +21,6 @@ const (
 	maxChildren  = 12
 	maxPerParent = 8
 	maxDepth     = 3
-
-	retryBaseDelay = 100 * time.Millisecond
-	retryMaxDelay  = 30 * time.Second
 )
 
 var (
@@ -41,16 +37,14 @@ type waitingRunner struct {
 }
 
 type runnerSet struct {
-	mu            sync.Mutex
-	byID          map[int64]*runner
-	closed        bool
-	running       int
-	children      int
-	perParent     map[int64]int
-	waiting       []waitingRunner
-	retrying      bool
-	retryFailures int
-	deferred      map[int64]bool
+	mu        sync.Mutex
+	byID      map[int64]*runner
+	closed    bool
+	running   int
+	children  int
+	perParent map[int64]int
+	waiting   []waitingRunner
+	deferred  map[int64]bool
 }
 
 type runner struct {
@@ -203,24 +197,6 @@ func (s *runnerSet) forget(ids []int64) {
 	s.waiting = slices.DeleteFunc(s.waiting, func(w waitingRunner) bool { return slices.Contains(ids, w.sessionID) })
 }
 
-func (s *runnerSet) scheduleRetry() (time.Duration, bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if s.closed || s.retrying {
-		return 0, false
-	}
-
-	s.retrying = true
-
-	delay := min(retryBaseDelay<<min(s.retryFailures, 9), retryMaxDelay)
-	s.retryFailures++
-
-	return delay, true
-}
-
-func (s *runnerSet) resetRetry() { s.mu.Lock(); defer s.mu.Unlock(); s.retryFailures = 0 }
-func (s *runnerSet) retryDone()  { s.mu.Lock(); defer s.mu.Unlock(); s.retrying = false }
 func (s *runnerSet) deferAnnounced(id int64) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -380,7 +356,6 @@ func (s *Service) drain(ctx context.Context) {
 
 		err := s.start(ctx, w.sessionID)
 		if err == nil {
-			s.runners.resetRetry()
 			continue
 		}
 
@@ -396,26 +371,8 @@ func (s *Service) drain(ctx context.Context) {
 			continue
 		}
 
-		s.runners.wait(w)
 		logger.Ctx(ctx).Named("daemon.admission").
 			Error("waiting_runner_start_failed", zap.Int64("session_id", w.sessionID), zap.Error(err))
-
-		if delay, scheduled := s.runners.scheduleRetry(); scheduled {
-			s.life.Go("daemon.admission", func(retryCtx context.Context) {
-				timer := time.NewTimer(delay)
-				defer timer.Stop()
-
-				select {
-				case <-retryCtx.Done():
-					s.runners.retryDone()
-				case <-timer.C:
-					s.runners.retryDone()
-					s.drain(retryCtx)
-				}
-			})
-		}
-
-		return
 	}
 }
 

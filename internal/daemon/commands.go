@@ -319,16 +319,6 @@ func (s *Service) handleLifecycleInput(ctx context.Context, input *sessionstore.
 	return nil
 }
 
-func (s *Service) enqueuePersistentOutput(ctx context.Context, sessionID int64, content string) error {
-	if _, err := s.store.EnqueueOutput(ctx, sessionstore.OutputDraft{
-		SessionID: sessionID, Type: sessionstore.OutputMessage, Content: content,
-	}); err != nil {
-		return fmt.Errorf("enqueue persistent output: %w", err)
-	}
-
-	return nil
-}
-
 func (s *Service) prepareStoppedSessionInput(
 	ctx context.Context,
 	record *sessionstore.SessionRecord,

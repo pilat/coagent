@@ -8,7 +8,6 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/pilat/coagent/internal/logger"
-	"github.com/pilat/coagent/internal/sessionevent"
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/subagent"
 )
@@ -300,10 +299,6 @@ func (s *Service) finalizeChildLocked(ctx context.Context, childID int64, errore
 	if err != nil {
 		logger.Ctx(ctx).Named("daemon.completion").Error("finalize_child", zap.Int64("child", childID), zap.Error(err))
 
-		if link != nil {
-			s.notifyChildFailure(ctx, link.ParentID, childID, "completion could not be recorded", err)
-		}
-
 		return nil
 	}
 
@@ -429,48 +424,6 @@ func (s *Service) completionContent(ctx context.Context, link subagent.Link) str
 	}
 
 	return subagent.FormatChildResult(res)
-}
-
-// A child is never a chat-selectable root, so its failures go to its parent.
-func (s *Service) notifyChildFailure(ctx context.Context, parentID, childID int64, what string, err error) {
-	if parentID == 0 {
-		return
-	}
-
-	message := fmt.Sprintf("⚠️ Subagent %d: %s — %s", childID, what, logger.Redact(err.Error()))
-	if outputErr := s.enqueueChildFailureOutput(ctx, parentID, childID, message); outputErr != nil {
-		logger.Named("daemon.finalize").Warn("enqueue_child_failure_output", zap.Error(outputErr))
-	}
-
-	s.publish(parentID, sessionevent.Notification{Type: sessionevent.NotifyMessage, Message: message})
-}
-
-func (s *Service) enqueueChildFailureOutput(ctx context.Context, parentID, childID int64, message string) error {
-	outputs := s.store
-
-	link, err := s.links.GetLink(ctx, childID)
-	if err != nil || link == nil || link.ParentID != parentID || link.ActivationSeq <= 0 {
-		return s.enqueuePersistentOutput(ctx, parentID, message)
-	}
-
-	attributes := map[string]any{"source": "agent"}
-
-	_, err = outputs.EnqueueOutput(ctx, sessionstore.OutputDraft{
-		SessionID:  parentID,
-		Type:       sessionstore.OutputMessage,
-		Content:    message,
-		Attributes: attributes,
-		SourceKey:  fmt.Sprintf("child:%d:%d:outcome", childID, link.ActivationSeq),
-	})
-	if errors.Is(err, sessionstore.ErrOutputOwner) {
-		return nil
-	}
-
-	if err != nil {
-		return fmt.Errorf("enqueue child failure output: %w", err)
-	}
-
-	return nil
 }
 
 func (s *Service) killDescendants(ctx context.Context, parentID int64, depth int) {

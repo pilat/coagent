@@ -478,7 +478,6 @@ type harnessOptions struct {
 	clientFor      func(*config.Config) (llm.Client, error)
 	configure      func(*config.Config)
 	links          func(subagent.Store) subagent.Store
-	schedules      func(schedule.Store) schedule.Store
 	observeRequest func(providerRequest)
 }
 
@@ -502,9 +501,6 @@ func newHarness(t *testing.T, o harnessOptions) *harness {
 		links = o.links(links)
 	}
 	schedules := schedule.NewStore(db, store)
-	if o.schedules != nil {
-		schedules = o.schedules(schedules)
-	}
 	cfg := &config.Config{WorkDir: t.TempDir(), Model: "fake-model"}
 	if o.configure != nil {
 		o.configure(cfg)
@@ -1054,12 +1050,6 @@ func runnerWaitingCount(runners *runnerSet) int {
 	return len(runners.waiting)
 }
 
-func runnerLiveCount(runners *runnerSet) int {
-	runners.mu.Lock()
-	defer runners.mu.Unlock()
-	return len(runners.byID)
-}
-
 func runnerRunningCount(runners *runnerSet) int {
 	runners.mu.Lock()
 	defer runners.mu.Unlock()
@@ -1310,19 +1300,6 @@ func newMockHarness(t *testing.T) (*harness, *mockFactory, *eventCollector) {
 	factory := &mockFactory{}
 	h := newHarness(t, harnessOptions{configure: withTestModels, clientFor: factory.client})
 	return h, factory, h.collect()
-}
-
-func newFlakyLinkHarness(
-	t *testing.T,
-	respond func(string, []llmwire.Message) *llmwire.Response,
-) (*harness, *flakyLinkStore) {
-	t.Helper()
-	var flaky *flakyLinkStore
-	h := newHarness(t, harnessOptions{respond: respond, links: func(inner subagent.Store) subagent.Store {
-		flaky = newFlakyLinkStore(inner)
-		return flaky
-	}})
-	return h, flaky
 }
 
 func (h *harness) acceptUserInput(sessionID int64, raw, accepted string) int64 {

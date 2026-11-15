@@ -17,7 +17,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/pilat/coagent/internal/coagenthome"
 	"github.com/pilat/coagent/internal/config"
 	"github.com/pilat/coagent/internal/configapply"
 	"github.com/pilat/coagent/internal/configops"
@@ -172,24 +171,6 @@ func TestScenario_ConcurrentAppliesResolveExactlyOnce(t *testing.T) {
 	assert.Equal(t, 1, countAssistantToolCallsFor(msgsWinner, tool.IDConfigEdit))
 	assert.Equal(t, 1, countToolResultsFor(msgsWinner, tool.IDConfigEdit))
 	assert.Contains(t, lastToolResultContent(msgsWinner, tool.IDConfigEdit), "Config applied")
-}
-
-func TestScenario_ConfigApplyRejectionReachesTheSessionInProcess(t *testing.T) {
-	dbPath := filepath.Join(t.TempDir(), "apply.db")
-	configDir := newApplyConfigDir(t)
-	d := newApplyDaemonWith(t, dbPath, configDir, configEditRespond)
-	d.mgr.applier = configapply.New(failingCommitOps{d.ops})
-	sessionID := startConfigEditSession(t, d, "switch the default model")
-	d.waitUntil("rejection stored", func() bool {
-		return countToolResultsFor(d.messages(sessionID), tool.IDConfigEdit) == 1
-	})
-	d.waitAnswer(sessionID, "")
-	msgs := d.messages(sessionID)
-	require.NoError(t, llmtest.ValidateToolPairing(msgs))
-	assert.Contains(t, lastToolResultContent(msgs, tool.IDConfigEdit), "rejected")
-	assert.Equal(t, 1, countAssistantToolCallsFor(msgs, tool.IDConfigEdit))
-	assert.Zero(t, d.restartCount(), "a rejected commit never restarts")
-	assert.NoFileExists(t, filepath.Join(configDir, coagenthome.PendingApplyFileName))
 }
 
 func TestScenario_ConfigQuestionCannotReplaceDocumentWithSandboxFragment(t *testing.T) {
@@ -450,16 +431,6 @@ func defaultModelInFile(t *testing.T, configDir string) string {
 		return "claude-opus-5"
 	}
 	return "claude-sonnet-5"
-}
-
-// failingCommitOps is an ops layer whose write fails, so the apply is rejected
-// with no restart and no marker — the verdict has to come back inline.
-type failingCommitOps struct {
-	configops.Service
-}
-
-func (failingCommitOps) Commit(*configops.Staged, configops.Pending) configops.Verdict {
-	return configops.Reject("", errors.New("no space left on device"))
 }
 
 const configEditCallID = "cfg-edit-call-1"

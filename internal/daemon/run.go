@@ -247,7 +247,7 @@ func (s *Service) finishRunnerDelivery(ctx context.Context, rs *runner, out runO
 	deliver := s.finalizeChildLocked(cleanup, id, errored)
 
 	if out.publishIdle && ctx.Err() == nil {
-		s.publishIdle(cleanup, id)
+		s.publishIdle(id)
 	}
 
 	return deliver
@@ -337,17 +337,8 @@ func (s *Service) reportSessionUnstarted(ctx context.Context, sessionID int64, e
 	})
 }
 
-func (s *Service) publishIdle(ctx context.Context, sessionID int64) {
+func (s *Service) publishIdle(sessionID int64) {
 	if s.HasActiveLoop(sessionID) {
-		return
-	}
-
-	_, err := s.store.GetSession(ctx, sessionID)
-	if err != nil {
-		logger.Ctx(ctx).Named("daemon.runner").Warn(
-			"idle_session_lookup_failed", zap.Int64("session_id", sessionID), zap.Error(err),
-		)
-
 		return
 	}
 
