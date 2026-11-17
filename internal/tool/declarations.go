@@ -9,6 +9,7 @@ const (
 	PromptGroupMemory
 	PromptGroupSkills
 	PromptGroupWeb
+	PromptGroupSessions
 )
 
 // TrailArgument names the call parameter a tool trail line shows.

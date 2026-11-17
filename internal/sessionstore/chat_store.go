@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"time"
 )
 
 const liveChatRootSQL = `s.parent_id = 0 AND s.killed_at IS NULL
@@ -25,6 +26,7 @@ type ChatSession struct {
 	ID        int64
 	Name      string
 	Scheduled bool
+	Activity  time.Time
 }
 
 // BindChat preserves the user's selection across manager restarts.
@@ -250,5 +252,5 @@ func (s *Store) chatOutputName(ctx context.Context, sessionID int64) (string, er
 		return "", fmt.Errorf("load chat output name: %w", err)
 	}
 
-	return chatDisplayName(project, title), nil
+	return ChatDisplayName(project, title), nil
 }

@@ -16,6 +16,7 @@ import (
 	"github.com/pilat/coagent/internal/loader"
 	"github.com/pilat/coagent/internal/logger"
 	"github.com/pilat/coagent/internal/mcpstore"
+	"github.com/pilat/coagent/internal/orchestrator"
 	"github.com/pilat/coagent/internal/schedule"
 	"github.com/pilat/coagent/internal/session"
 	"github.com/pilat/coagent/internal/sessionbuild"
@@ -237,6 +238,10 @@ func (s *Service) ownerTools(rec *sessionstore.SessionRecord, ldr *loader.Servic
 	if rec.ParentID == 0 {
 		tools = append(tools, s.administrationTools(rec, rec.ProjectID)...)
 		if owner, _ := rec.Attributes[controllerapi.SessionAttributeManagerID].(string); owner != "" {
+			if controllerapi.OrchestratorMode(rec.Attributes) {
+				tools = append(tools, orchestrator.NewTools(orchestrator.Host(orchestratorHost{s}), rec.ID)...)
+			}
+
 			tools = append(
 				tools,
 				configapply.NewConfigEdit(rec.ID, s.applier),

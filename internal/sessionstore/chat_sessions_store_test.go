@@ -74,9 +74,10 @@ func TestChatSessions_LiveOwnedRootsInActivityOrder(t *testing.T) {
 	for _, session := range sessions {
 		byID[session.ID] = session
 	}
-	assert.Equal(t, ChatSession{
-		ID: root.ID, Name: "test",
-	}, byID[root.ID])
+	assert.Equal(t, root.ID, byID[root.ID].ID)
+	assert.Equal(t, "test", byID[root.ID].Name)
+	assert.False(t, byID[root.ID].Scheduled)
+	assert.False(t, byID[root.ID].Activity.IsZero())
 	require.Contains(t, byID, stopped.ID)
 	assert.Equal(t, stopped.ID, sessions[0].ID)
 }

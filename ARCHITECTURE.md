@@ -89,6 +89,7 @@ does not imply a tier except where it expresses an implementation variant.
 - `internal/managercontrol` — manager-bound application use cases and controller adaptation.
 - `internal/managerdiscovery` — manager-facing project, model, skill and spawn-favorites discovery.
 - `internal/migrate` — SQLite opening and schema migration with production backup policy.
+- `internal/orchestrator` — orchestrator-mode tools (list, send, spawn) over a daemon-implemented host; schemas, validation and result text only.
 - `internal/progress` — transport-neutral diagnostic status facts and Markdown rendering.
 - `internal/progressruntime` — on-demand status projection and live runner/model/context state.
 - `internal/projectpath` — canonical project-root paths and project-name validation.
@@ -211,6 +212,7 @@ parent does not retain an execution slot; its durable pending work does.
 The daemon owns capacity counters and quota decisions alongside durable
 startability checks, one FIFO waiting queue, classification, runner registration
 and launch.
+Orchestrator spawning requires at least four free runner slots at call time.
 
 Session assembly is the authority that registers gated tools. The daemon supplies
 owner tools before assembly, which applies agent-type filtering.
@@ -277,8 +279,10 @@ durable enqueue path, which wakes runners only after commit. Human `/status` is
 answered at enqueue by the daemon. Only human input and scheduled turns carry
 session commands and slash turn barriers; other sources reach the model as text.
 Queued read-only commands are resolved by the loop without a model call.
-A stopped root may consume a read-only command at the FIFO head without
-reactivating; asynchronous rows ahead of that command remain parked.
+A stopped root may consume a human read-only command at the FIFO head without
+reactivating; process and subagent facts ahead of that command remain parked.
+Agent input to a root starts its manager episode and activates a stopped root
+in the enqueue transaction, unless its budget has fired; it never releases a budget.
 Standalone scheduled work is a root-session capability: the daemon attaches
 `schedule` only to roots, while subagents retain `sleep` to resolve an existing
 call rather than create future work. Schedule delivery and stopped-root
@@ -708,6 +712,19 @@ the control socket carries no event traffic and no server pushes
 
 ## Security and Trust Boundaries
 
+### Orchestrator boundary
+
+Orchestrator mode is a durable attribute on an ordinary manager-owned root,
+granted and revoked only by human `/orchestrate on|off`; it survives restart and `/clear`.
+From its next run, that root alone gets list, send and spawn tools, with mode and
+ownership checked on every call; its subagents and targets receive no new tool.
+Sent messages carry host-authored sender provenance at acceptance and appear in
+the target's chat. Their authority is plain text: no commands, grants, skill
+expansion, budget release or title naming. A send wakes a stopped root but refuses
+a budget-parked target. Spawn uses only existing non-hidden projects in the `/new` picker; optional
+worktrees use guarded no-execution creation. A spawned root takes its title from
+the prompt at creation; it is independent and never moves chat focus ([ADR-0096](docs/adr/0096-orchestrator-mode-is-a-human-granted-capability-on-an-ordinary-root.md)).
+
 ### Credential boundary
 
 Secrets are parsed from the coagent secrets file into an in-memory map, not
@@ -922,7 +939,7 @@ notifications through its sole outward events port. Final answer notifications
 retain the raw answer; durable manager messages carry the same unadorned text.
 Work-step messages and their live notifications include the same tool trail;
 session assembly enables this policy for every manager-owned root.
-Scheduled announcements and tool direct outputs reach managers only through
+Scheduled announcements, sent messages and tool direct outputs reach managers only through
 the outbox; their commit metadata excludes them from live message events.
 Ownerless sessions publish live answers without creating manager outbox rows.
 Initial and replacement model clients share agent-policy preparation in session
@@ -940,7 +957,7 @@ after every step commit. Stop commits unresolved-call
 failures without status or output changes, then finishes
 the stop and cancels
 producer obligations. Explicit stop completes the manager-owned root atomically
-with its terminal output; pending scheduled input can then reactivate it.
+with its terminal output; pending schedules or later agent input can then reactivate it.
 Boot finishes interrupted lifecycle operations and process interruptions,
 reconciles armed budgets, parking any that fired while the daemon was down,
 enqueues orphaned external-call cancellations and

@@ -355,8 +355,14 @@ func (s *Session) deferBoundaryCompaction(batch *boundaryBatch, input *sessionst
 
 func (s *Session) interruptBoundarySleeps(batch *boundaryBatch, source sessionstore.InputSource) {
 	notice := sleepInterruptedMessage
-	if source == sessionstore.InputSourceSchedule {
+
+	switch source {
+	case sessionstore.InputSourceSchedule:
 		notice = "Sleep interrupted — a scheduled task became due."
+	case sessionstore.InputSourceAgent:
+		notice = "Sleep interrupted — another session sent a message."
+	case sessionstore.InputSourceUser, sessionstore.InputSourceProcess,
+		sessionstore.InputSourceSubagent, sessionstore.InputSourceCallResult:
 	}
 
 	for _, call := range s.PendingExternalCalls() {
@@ -531,7 +537,7 @@ func (s *Session) acceptBoundaryText(
 	c := &batch.commit
 	content := s.prompt.AppendGitStateDelta(
 		ctx,
-		s.stamper.StampAt(prepared.Content, input.ReceivedAt),
+		s.stamper.StampAt(sentMessageContent(batch, input, prepared.Content), input.ReceivedAt),
 		s.ms.getMessages(),
 	)
 	accept := sessionstore.Accept{

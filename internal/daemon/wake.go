@@ -161,7 +161,7 @@ func (s *Service) commandOnlyStoppedRoot(ctx context.Context, rec *sessionstore.
 		return false, fmt.Errorf("peek stopped root input: %w", err)
 	}
 
-	return isReadOnlyCommand(head.RawContent), nil
+	return head.Source == sessionstore.InputSourceUser && isReadOnlyCommand(head.RawContent), nil
 }
 
 func (s *Service) recoverableRunnable(ctx context.Context, id int64) (bool, error) {

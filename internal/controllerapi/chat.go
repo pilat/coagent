@@ -4,7 +4,7 @@ import "context"
 
 // ChatFocusController binds chat state to one manager without widening Controller.
 //
-//nolint:iface // optional capability asserted by built-in chat managers.
+//nolint:iface,interfacebloat // optional capability asserted by built-in chat managers.
 type ChatFocusController interface {
 	BindChat(ctx context.Context, chatID string) error
 	ChatFocus(ctx context.Context, chatID string) (int64, error)
@@ -14,6 +14,8 @@ type ChatFocusController interface {
 	AdvanceChat(ctx context.Context, chatID string, sessionID, id int64) (bool, error)
 	SetChatFocus(ctx context.Context, chatID string, sessionID int64) error
 	SetSessionTitle(ctx context.Context, chatID string, sessionID int64, title string) error
+	Orchestrator(ctx context.Context, chatID string, sessionID int64) (bool, error)
+	SetOrchestrator(ctx context.Context, chatID string, sessionID int64, on bool) (bool, error)
 	ResetChatFocus(ctx context.Context, chatID string, from int64) (bool, error)
 	ChatOutputs(ctx context.Context, chatID string, sessionID, after int64, limit int) ([]ChatOutput, error)
 	ChatSessions(ctx context.Context, chatID string) ([]ChatSessionInfo, error)

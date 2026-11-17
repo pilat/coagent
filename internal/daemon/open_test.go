@@ -10,6 +10,7 @@ import (
 	"github.com/pilat/coagent/internal/config"
 	"github.com/pilat/coagent/internal/configapply"
 	"github.com/pilat/coagent/internal/mcpstore"
+	"github.com/pilat/coagent/internal/orchestrator"
 	"github.com/pilat/coagent/internal/registry"
 	"github.com/pilat/coagent/internal/schedule"
 	"github.com/pilat/coagent/internal/sessionstore"
@@ -111,6 +112,9 @@ func TestProductionTools_ParallelSafePolicies(t *testing.T) {
 		tools[tl.ID()] = tl
 	}
 	for _, tl := range mcpstore.NewTools(nil, 0) {
+		tools[tl.ID()] = tl
+	}
+	for _, tl := range orchestrator.NewTools(nil, 0) {
 		tools[tl.ID()] = tl
 	}
 	want := make(map[string]bool, len(tools))

@@ -25,6 +25,7 @@ var publishedCommands = []map[string]string{
 	{tgKeyCommand: "sessions", tgKeyDescription: "List sessions, optionally filtered by word"},
 	{tgKeyCommand: "switch", tgKeyDescription: "Switch to a session with /switch N"},
 	{tgKeyCommand: "title", tgKeyDescription: "Rename the current session with /title text"},
+	{tgKeyCommand: "orchestrate", tgKeyDescription: "Let this session manage your sessions: /orchestrate on|off"},
 	{tgKeyCommand: "kill", tgKeyDescription: "End the current session, or /kill N"},
 	{tgKeyCommand: "stop", tgKeyDescription: "Stop the current run, or /stop N"},
 	{tgKeyCommand: "help", tgKeyDescription: "Show commands and current skills"},
@@ -120,6 +121,8 @@ func (m *Manager) handleFocusedText(ctx context.Context, command, text string) {
 	switch command {
 	case "/title":
 		m.handleTitle(ctx, focus, arg)
+	case "/orchestrate":
+		m.handleOrchestrate(ctx, focus, arg)
 	case commandGWT:
 		name, _ := parseGwtCommand(text)
 		m.handleGWT(ctx, focus, name)

@@ -14,6 +14,7 @@ import (
 
 	"github.com/pilat/coagent/internal/budget"
 	"github.com/pilat/coagent/internal/mcpstore"
+	"github.com/pilat/coagent/internal/orchestrator"
 )
 
 const toolLiteralRulePath = "../../.semgrep/coagent.yml"
@@ -34,7 +35,8 @@ func TestToolLiteralRule_CoversRegisteredTools(t *testing.T) {
 	literalRegex := toolLiteralRuleRegex(t)
 	reg, _ := realRegistry(t, true, nil, nil)
 	ids := reg.IDs()
-	for _, owner := range append(mcpstore.NewTools(nil, 0), budget.NewTool(nil, 0, false)) {
+	owners := append(mcpstore.NewTools(nil, 0), budget.NewTool(nil, 0, false))
+	for _, owner := range append(owners, orchestrator.NewTools(nil, 0)...) {
 		ids = append(ids, owner.ID())
 	}
 	coreForever := []string{

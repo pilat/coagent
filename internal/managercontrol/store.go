@@ -22,6 +22,8 @@ type Store interface { //nolint:interfacebloat // Manager reads and chat state s
 	BindChat(context.Context, string, string) error
 	SetChatFocus(context.Context, string, string, int64) error
 	SetSessionTitle(context.Context, string, int64, string) error
+	OrchestratorMode(context.Context, string, int64) (bool, error)
+	SetOrchestrator(context.Context, string, int64, bool) (bool, error)
 	ResetChatFocus(context.Context, string, string, int64) (bool, error)
 	ChatOutputs(context.Context, int64, int64, int) ([]sessionstore.ChatOutput, error)
 	ChatSessions(context.Context, string) ([]sessionstore.ChatSession, error)

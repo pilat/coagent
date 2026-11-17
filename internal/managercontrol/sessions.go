@@ -24,6 +24,10 @@ func (s *service) createSession(
 		return 0, errors.New("repo root is reserved for created worktrees")
 	}
 
+	if _, supplied := data.Attributes[controllerapi.SessionAttributeOrchestrator]; supplied {
+		return 0, errors.New("orchestrator attribute is reserved")
+	}
+
 	if _, supplied := data.Attributes[controllerapi.SessionAttributeTitle]; supplied {
 		return 0, errors.New("title attribute is reserved")
 	}

@@ -156,6 +156,10 @@ func (s *Service) SetModel(ctx context.Context, sessionID int64, model, reasonin
 }
 
 func (s *Service) SetAttributes(ctx context.Context, sessionID int64, attrs map[string]any) error {
+	if _, supplied := attrs[controllerapi.SessionAttributeOrchestrator]; supplied {
+		return errors.New("orchestrator attribute is set only by /orchestrate")
+	}
+
 	s.routes.claim.Lock()
 	defer s.routes.claim.Unlock()
 
