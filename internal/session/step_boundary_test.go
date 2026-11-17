@@ -331,6 +331,78 @@ func TestRunBoundaryScopesHumanInput(t *testing.T) {
 	assert.Contains(t, rows[3].Content, "mid-run event")
 }
 
+func TestBoundaryNonHumanSlashTextReachesTheModelVerbatim(t *testing.T) {
+	for _, source := range []sessionstore.InputSource{
+		sessionstore.InputSourceAgent, sessionstore.InputSourceProcess, sessionstore.InputSourceSubagent,
+	} {
+		for _, content := range []string{
+			"/help", "/status", "/schedules", "/compact keep the todos", "/skill review now", "/skill nosuch", "/stop",
+		} {
+			t.Run(string(source)+content, func(t *testing.T) {
+				db, store, s := newBoundaryFixture(t, []llmwire.Message{usr("history"), asst("answer")})
+				s.loader.RegisterSkill(&loader.Skill{
+					Name: "review", Description: "Review changes", DisableModelInvocation: true,
+					Content: "Review $ARGUMENTS carefully.",
+				})
+				input, err := store.Enqueue(t.Context(), sessionstore.Input{
+					SessionID: s.id, Source: source, Content: content,
+				})
+				require.NoError(t, err)
+				accepted, err := s.boundaryStep(t.Context(), &runState{})
+				require.NoError(t, err)
+				assert.True(t, accepted)
+				var state string
+				var messageID sql.NullInt64
+				require.NoError(t, db.QueryRowContext(t.Context(),
+					`SELECT state, accepted_message_id FROM session_inbox WHERE id = ?`,
+					input.Input.ID).Scan(&state, &messageID))
+				assert.Equal(t, "accepted", state)
+				assert.Positive(t, messageID.Int64)
+				rows, err := store.LoadActiveMessages(t.Context(), s.id)
+				require.NoError(t, err)
+				require.NotEmpty(t, rows)
+				assert.Contains(t, rows[len(rows)-1].Content, content)
+				assert.NotContains(t, rows[len(rows)-1].Content, "<skill>")
+				assert.False(t, s.pendingCompaction)
+				pending, err := store.ListPending(t.Context(), s.id)
+				require.NoError(t, err)
+				assert.Empty(t, pending)
+			})
+		}
+	}
+}
+
+func TestBoundarySlashBarrierIsHumanOnly(t *testing.T) {
+	for _, source := range []sessionstore.InputSource{sessionstore.InputSourceAgent, sessionstore.InputSourceUser} {
+		t.Run(string(source), func(t *testing.T) {
+			db, store, s := newBoundaryFixture(t, []llmwire.Message{usr("history"), asst("answer")})
+			for _, content := range []string{"first note", "/help me"} {
+				_, err := store.Enqueue(t.Context(), sessionstore.Input{
+					SessionID: s.id, Source: source, Content: content,
+				})
+				require.NoError(t, err)
+			}
+			accepted, err := s.boundaryStep(t.Context(), &runState{})
+			require.NoError(t, err)
+			assert.True(t, accepted)
+			var acceptedCount int
+			require.NoError(t, db.QueryRowContext(t.Context(),
+				`SELECT count(*) FROM session_inbox WHERE session_id = ? AND state = 'accepted'`,
+				s.id).Scan(&acceptedCount))
+			pending, err := store.ListPending(t.Context(), s.id)
+			require.NoError(t, err)
+			if source == sessionstore.InputSourceUser {
+				assert.Equal(t, 1, acceptedCount)
+				require.Len(t, pending, 1)
+				assert.Equal(t, "/help me", pending[0].RawContent)
+			} else {
+				assert.Equal(t, 2, acceptedCount)
+				assert.Empty(t, pending)
+			}
+		})
+	}
+}
+
 func newBoundaryFixture(t *testing.T, previous []llmwire.Message) (*sql.DB, *sessionstore.Store, *Session) {
 	t.Helper()
 	db, store, id := newAttachmentsStore(t)

@@ -229,7 +229,7 @@ The unit of ordered scheduling (`internal/tool`): a maximal contiguous run of pa
 _Avoid_: worker pool (there is no shared queue), fan-out (the removed unconditional concurrency).
 
 **skill**:
-A `SKILL.md` instruction bundle loaded from project, global, or marketplace dirs. Two *independent* discovery axes: `disable-model-invocation: true` hides it from the model's available-skills inventory and skill tool; `user-invocable: false` rejects `/skill <name>`. A leading `/skill <name> [args]` expands before the LLM call.
+A `SKILL.md` instruction bundle loaded from project, global, or marketplace dirs. Two *independent* discovery axes: `disable-model-invocation: true` hides it from the model's available-skills inventory and skill tool; `user-invocable: false` rejects `/skill <name>`. A leading `/skill <name> [args]` in **human input** expands before the LLM call.
 The `task` tool may also seed a new subagent from one model-invocable skill: the parent resolves the canonical name and renders the envelope before spawn, so the child receives content rather than rediscovering the skill.
 _Avoid_: plugin (a plugin is a marketplace bundle), command.
 
@@ -370,6 +370,8 @@ _Avoid_: iteration budget, billing limit, permanent ceiling.
 Every session input with `source = 'user'`. Model-bound human input to a root
 can release a fired budget; a matching leading command creates its exact
 tool activation grant.
+Session commands are read only from human input and scheduled turns; other
+sources reach the model as text.
 _Avoid_: real user message (authority follows the source field).
 
 **tool activation grant**:

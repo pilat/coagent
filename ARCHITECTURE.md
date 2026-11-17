@@ -273,9 +273,10 @@ the first matching mutation's receipt spends it. An unspent grant produces a
 releasing unchanged notice at run end; cancellation or restart simply loses it.
 Exact call results are handled before ordinary rows;
 non-sleep external work defers new model input. Every producer uses the same
-durable enqueue path, which wakes runners only after commit. `/status` is
-answered at enqueue by the daemon; queued read-only commands are resolved by
-the loop without a model call.
+durable enqueue path, which wakes runners only after commit. Human `/status` is
+answered at enqueue by the daemon. Only human input and scheduled turns carry
+session commands and slash turn barriers; other sources reach the model as text.
+Queued read-only commands are resolved by the loop without a model call.
 A stopped root may consume a read-only command at the FIFO head without
 reactivating; asynchronous rows ahead of that command remain parked.
 Standalone scheduled work is a root-session capability: the daemon attaches
@@ -872,8 +873,8 @@ skills and subagent definitions can come from project, global or marketplace
 sources. A missing subagent `tools` declaration inherits the inventory, whereas
 an explicit empty list grants none. An unknown subagent model degrades to its
 default instead of making every spawn fail. Skill model visibility and direct
-user invocation are independent controls; a leading `/skill` command is
-expanded before model invocation. Daemon-selected system skills can instead be
+user invocation are independent controls; a leading `/skill` command in human
+input is expanded before model invocation. Daemon-selected system skills can be
 activated directly in the static prompt without being offered to the model for
 invocation. The `task` tool accepts either a free-form prompt or one
 model-invocable skill plus arguments. The parent resolves and renders that skill

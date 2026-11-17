@@ -12,6 +12,7 @@ import (
 
 	"github.com/pilat/coagent/internal/llmwire"
 	"github.com/pilat/coagent/internal/loader"
+	"github.com/pilat/coagent/internal/sessionprompt"
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/tool"
 	"github.com/pilat/coagent/internal/transcript"
@@ -146,8 +147,7 @@ func (s *Session) handleBoundaryInput(
 	batch *boundaryBatch,
 	input *sessionstore.InboxInput,
 ) (boundaryFlow, error) {
-	trimmed := strings.TrimSpace(input.RawContent)
-	command := leadingSlashCommand(input.RawContent)
+	trimmed, command := boundaryCommandText(input)
 
 	sleepsOnly := pendingSleepsOnly(batch.pending)
 	if s.boundaryInputBlocked(batch, input, trimmed, command, sleepsOnly) {
@@ -188,6 +188,14 @@ func (s *Session) handleBoundaryInput(
 	}
 
 	return s.acceptBoundaryText(ctx, r, batch, input, command)
+}
+
+func boundaryCommandText(input *sessionstore.InboxInput) (string, string) {
+	if input.Source == sessionstore.InputSourceUser || input.Source == sessionstore.InputSourceSchedule {
+		return strings.TrimSpace(input.RawContent), leadingSlashCommand(input.RawContent)
+	}
+
+	return "", ""
 }
 
 func (s *Session) boundaryInputBlocked(
@@ -503,7 +511,13 @@ func (s *Session) acceptBoundaryText(
 	input *sessionstore.InboxInput,
 	command string,
 ) (boundaryFlow, error) {
-	prepared, err := s.PrepareUserMessageDetailed(input.RawContent)
+	var err error
+	prepared := sessionprompt.PreparedMessage{Content: input.RawContent}
+
+	if input.Source == sessionstore.InputSourceUser {
+		prepared, err = s.PrepareUserMessageDetailed(input.RawContent)
+	}
+
 	if err != nil {
 		rejectBoundaryInput(batch, input, err)
 

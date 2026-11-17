@@ -206,15 +206,67 @@ func TestScenario_CompactPublishesItsOrderedNoticeTrace(t *testing.T) {
 	)
 }
 
+func TestScenario_ParentSlashTextReachesTheChildAsText(t *testing.T) {
+	h := newHarness(t, harnessOptions{})
+	parentID := h.send("SPAWN_CHILD please", nil)
+	link := h.waitLink(parentID, taskCallID)
+	h.waitDelivered(link.ChildID)
+	h.waitAnswer(parentID, "")
+	before := len(h.messages(link.ChildID))
+	const content = "/compact keep the todos"
+	require.NoError(t, h.mgr.SendToChild(h.ctx, link.ChildID, "/compact keep the todos"))
+	h.waitUntil("child answered the slash text", func() bool {
+		return !h.mgr.HasActiveLoop(link.ChildID) && hasUserContaining(h.messages(link.ChildID), content)
+	})
+	msgs := h.messages(link.ChildID)
+	assert.False(t, hasSummaryRow(msgs))
+	require.GreaterOrEqual(t, len(msgs), before+2)
+	inputAt := -1
+	for i, msg := range msgs {
+		if msg.Role == llmwire.RoleUser && strings.Contains(msg.Content, content) {
+			inputAt = i
+		}
+	}
+	require.GreaterOrEqual(t, inputAt, before)
+	var reply string
+	for _, msg := range msgs[inputAt+1:] {
+		if msg.Role == llmwire.RoleAssistant && msg.Content != "" {
+			reply = msg.Content
+			break
+		}
+	}
+	assert.Equal(t, "child finished: 42", reply)
+}
+
 // Child housekeeping notices must remain inside the tree instead of reaching the human.
 func TestScenario_SubagentCompactionNoticesStayInsideTheTree(t *testing.T) {
-	h := newHarness(t, harnessOptions{})
+	respond := func(_ string, msgs []llmwire.Message) *llmwire.Response {
+		switch {
+		case isCompactionInstruction(msgs):
+			return textReply(autoCompactionBrief)
+		case hasUserContaining(msgs, "CHILD_TASK"):
+			switch {
+			case hasUserContaining(msgs, contextSummaryPrefix), hasToolResultFor(msgs, "read"):
+				return textReply("child finished: 42")
+			case hasToolResultFor(msgs, "ls"):
+				return callReply("read-followup", "read", `{"file_path":"go.mod"}`)
+			default:
+				return scriptedToolCall("ls", `{"path":"."}`)
+			}
+		case hasToolResultFor(msgs, tool.IDTask), hasUserContaining(msgs, "<subagent_completion>"):
+			return textReply("all set, child launched")
+		default:
+			return callReply(taskCallID, tool.IDTask,
+				`{"prompt":"CHILD_TASK do the thing","description":"child work",`+
+					`"subagent_type":"general","background":true}`)
+		}
+	}
+	h := newHarness(t, harnessOptions{respond: respond})
 	collector := h.collect()
 	parentID := h.send("SPAWN_CHILD please", nil)
 	link := h.waitLink(parentID, taskCallID)
 	h.waitDelivered(link.ChildID)
 	h.waitAnswer(parentID, "")
-	require.NoError(t, h.mgr.SendToChild(h.ctx, link.ChildID, "/compact"))
 	h.waitUntil("child compacted", func() bool {
 		stored, loadErr := h.store.LoadActiveMessages(h.ctx, link.ChildID)
 		return loadErr == nil && hasSummaryRow(toDTO(stored))
