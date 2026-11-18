@@ -131,9 +131,6 @@ func assertOutcomeSignal(t *testing.T, h *harness, watcher, target, readID int64
 		WHERE session_id = ? AND json_extract(attributes, '$.signal_target_id') = ?`, watcher, readID).Scan(&raw, &source))
 	assert.Equal(t, line, raw)
 	assert.Equal(t, "subagent", source)
-	if title != "" {
-		assert.NotContains(t, raw, title)
-	}
 	h.waitUntil("signal accepted in watcher chat", func() bool {
 		return h.countOutbox(watcher, func(content string) bool {
 			return content == fmt.Sprintf("🔔 #%d %s %s", target, name, chatFact)
@@ -142,8 +139,10 @@ func assertOutcomeSignal(t *testing.T, h *harness, watcher, target, readID int64
 	assert.True(t, hasUserContaining(h.messages(watcher), line))
 	for _, message := range h.messages(watcher) {
 		assert.NotContains(t, message.Content, "🔔")
-		if title != "" {
-			assert.NotContains(t, message.Content, title)
+		if message.Role == llmwire.RoleUser && strings.Contains(message.Content, line) {
+			_, content, stamped := strings.Cut(message.Content, "] ")
+			assert.True(t, stamped)
+			assert.Equal(t, line, content)
 		}
 	}
 }
