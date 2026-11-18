@@ -11,7 +11,7 @@ The shared vocabulary of coagent — the words that name its concepts, so code, 
 - **orchestrator mode**: A durable capability on one manager-owned root, granted and revoked only by the human with
   `/orchestrate on|off`. It gives that root `list_sessions`, `send_to_session` and `spawn_session` over every live root
   of its manager; its subagents never get them. It is not a session kind, agent type or role
-  ([ADR-0096](adr/0096-orchestrator-mode-is-a-human-granted-capability-on-an-ordinary-root.md)).
+  ([ADR-0097](adr/0097-orchestrator-mode-is-a-human-granted-capability-on-an-ordinary-root.md)).
   _Avoid_: assistant, desk, coordinator, supervisor; "orchestrator" for the daemon.
 - **orchestrator**: A root session with orchestrator mode on. _Avoid_: manager (that is the Telegram-side owner),
   parent (that is the subagent relation).

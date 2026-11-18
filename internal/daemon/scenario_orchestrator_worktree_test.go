@@ -21,7 +21,7 @@ func TestOrchestratorSpawnWorktree(t *testing.T) {
 			worktrees := t.TempDir()
 			clone := orchestratorClone(t)
 			h := newHarness(t, harnessOptions{respond: trivialRespond, configure: func(cfg *config.Config) {
-				cfg.UnifiedConfig = &config.UnifiedConfig{ProjectsRoot: filepath.Dir(clone), WorktreesRoot: worktrees}
+				cfg.UnifiedConfig = &config.UnifiedConfig{ProjectsRoot: t.TempDir(), WorktreesRoot: worktrees}
 			}})
 			h.startInboxWake()
 			caller := modeRoot(t, h)

@@ -721,9 +721,10 @@ ownership checked on every call; its subagents and targets receive no new tool.
 Sent messages carry host-authored sender provenance at acceptance and appear in
 the target's chat. Their authority is plain text: no commands, grants, skill
 expansion, budget release or title naming. A send wakes a stopped root but refuses
-a budget-parked target. Spawn uses only existing non-hidden projects in the `/new` picker; optional
+a budget-parked target. Spawn accepts visible registered projects with existing directories,
+excluding coagent worktrees identified by the configured worktrees-root layout; optional
 worktrees use guarded no-execution creation. A spawned root takes its title from
-the prompt at creation; it is independent and never moves chat focus ([ADR-0096](docs/adr/0096-orchestrator-mode-is-a-human-granted-capability-on-an-ordinary-root.md)).
+the prompt at creation; it is independent and never moves chat focus ([ADR-0097](docs/adr/0097-orchestrator-mode-is-a-human-granted-capability-on-an-ordinary-root.md)).
 
 ### Credential boundary
 

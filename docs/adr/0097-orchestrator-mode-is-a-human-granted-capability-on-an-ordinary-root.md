@@ -1,4 +1,4 @@
-# ADR-0096: Orchestrator mode is a human-granted capability on an ordinary root
+# ADR-0097: Orchestrator mode is a human-granted capability on an ordinary root
 
 - **Status:** Accepted
 - **Date:** 2026-11-17
@@ -22,10 +22,11 @@ Each call re-checks the mode.
 
 The authority ceiling is what the owner could do by typing plain text into a session in Telegram, minus commands. A
 sent message is `source=agent` text: no slash command, activation grant, skill expansion, budget release or title
-naming. It can wake a session the human stopped, but not one parked at a budget checkpoint. `spawn_session` only
-uses existing, non-hidden projects. An optional worktree is created in the guarded no-execution mode. The new root
-is ordinary and independent, its first input is a sent message rather than human input, and the human's chat focus
-does not move.
+naming of an existing session. It can wake a session the human stopped, but not one parked at a budget checkpoint.
+`spawn_session` only uses existing, non-hidden projects whose directory exists, never a coagent-created worktree; an
+optional fresh worktree is created in the guarded no-execution mode. The new root is ordinary and independent and is
+titled from its prompt at creation; its first input is a sent message rather than human input, and the human's chat
+focus does not move.
 
 Provenance is host-authored. The inbox row carries the sender's id and names. When the target accepts it, the
 session prefixes a line saying which session wrote it and that it is not the human. It also writes the message,

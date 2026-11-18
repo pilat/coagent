@@ -11,7 +11,6 @@ import (
 
 type chatSessionActivity struct {
 	ChatSession
-	activity time.Time
 }
 
 // ChatSessions lists live owned roots by their last output or conversational input.
@@ -90,22 +89,20 @@ func scanChatSession(rows *sql.Rows) (chatSessionActivity, error) {
 
 	session.Name = ChatDisplayName(projectName, title)
 
-	session.activity = output.Time
-	if input.Time.After(session.activity) {
-		session.activity = input.Time
+	session.Activity = output.Time
+	if input.Time.After(session.Activity) {
+		session.Activity = input.Time
 	}
 
 	if !output.Valid && !input.Valid {
-		session.activity = created
+		session.Activity = created
 	}
-
-	session.Activity = session.activity
 
 	return session, nil
 }
 
 func compareChatSessions(a, b chatSessionActivity) int {
-	if order := b.activity.Compare(a.activity); order != 0 {
+	if order := b.Activity.Compare(a.Activity); order != 0 {
 		return order
 	}
 

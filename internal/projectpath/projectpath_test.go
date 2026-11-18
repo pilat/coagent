@@ -24,6 +24,27 @@ func TestWorktreePath_Layout(t *testing.T) {
 	assert.Regexp(t, `^coagent-[0-9a-f]{8}$`, filepath.Base(filepath.Dir(got)))
 }
 
+func TestIsWorktreePath(t *testing.T) {
+	t.Parallel()
+
+	root := "/wt"
+	for _, tc := range []struct {
+		name string
+		dir  string
+		want bool
+	}{
+		{"worktree", WorktreePath(root, "/home/u/repo", "fix"), true},
+		{"direct child", filepath.Join(root, "repo"), false},
+		{"deeper path", filepath.Join(root, "repo", "fix", "subdir"), false},
+		{"look-alike outside root", "/wt-other/repo/fix", false},
+		{"root itself", root, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, IsWorktreePath(root, tc.dir))
+		})
+	}
+}
+
 func TestWorktreePath_SeparatesSameBasename(t *testing.T) {
 	a := WorktreePath("/wt", "/home/alice/api", "fix")
 	b := WorktreePath("/wt", "/home/bob/api", "fix")

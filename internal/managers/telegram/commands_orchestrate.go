@@ -18,7 +18,10 @@ func (m *Manager) handleOrchestrate(ctx context.Context, focus int64, arg string
 		var on bool
 		on, err = m.chat.Orchestrator(ctx, chatID, focus)
 
-		state := map[bool]string{true: "on.", false: "off. Use /orchestrate on to enable."}[on]
+		state := "off. Use /orchestrate on to enable."
+		if on {
+			state = "on."
+		}
 
 		text = fmt.Sprintf("#%d: orchestrator %s", focus, state)
 	case "on", "off":
@@ -37,12 +40,14 @@ func (m *Manager) handleOrchestrate(ctx context.Context, focus int64, arg string
 }
 
 func orchestrateChangeText(focus int64, on, changed bool) string {
-	texts := map[[2]bool]string{
-		{true, true}:   "#%d is now an orchestrator: it can list, message and start your sessions.",
-		{true, false}:  "#%d is already an orchestrator.",
-		{false, true}:  "#%d is no longer an orchestrator.",
-		{false, false}: "#%d is not an orchestrator.",
+	switch {
+	case on && changed:
+		return fmt.Sprintf("#%d is now an orchestrator: it can list, message and start your sessions.", focus)
+	case on:
+		return fmt.Sprintf("#%d is already an orchestrator.", focus)
+	case changed:
+		return fmt.Sprintf("#%d is no longer an orchestrator.", focus)
+	default:
+		return fmt.Sprintf("#%d is not an orchestrator.", focus)
 	}
-
-	return fmt.Sprintf(texts[[2]bool{on, changed}], focus)
 }

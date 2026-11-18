@@ -111,7 +111,7 @@ func TestOrchestratorSpawn(t *testing.T) {
 	stale := filepath.Join(t.TempDir(), "stale")
 	_, err = h.store.GetOrCreateNamedProject(h.ctx, stale, "stale")
 	require.NoError(t, err)
-	for _, selection := range []string{"named/existing", worktree, "stale", stale, "missing", "hidden", hiddenPath} {
+	for _, selection := range []string{"missing", "hidden", hiddenPath} {
 		before := orchestratorSessionCount(t, h)
 		_, _, err := (orchestratorHost{h.mgr}).SpawnSession(h.ctx, caller, selection, "", "do work")
 		require.EqualError(
@@ -120,6 +120,16 @@ func TestOrchestratorSpawn(t *testing.T) {
 			fmt.Sprintf("no project named %q; known projects: %s", selection, strings.Join(names, ", ")),
 		)
 		assert.Equal(t, before, orchestratorSessionCount(t, h))
+	}
+	for _, selection := range []string{"named/existing", worktree} {
+		_, _, err := (orchestratorHost{h.mgr}).SpawnSession(h.ctx, caller, selection, "", "do work")
+		require.EqualError(t, err, fmt.Sprintf(
+			"project %q is a worktree; name its base project and pass worktree to create a fresh one", selection))
+	}
+	for _, selection := range []string{"stale", stale} {
+		_, _, err := (orchestratorHost{h.mgr}).SpawnSession(h.ctx, caller, selection, "", "do work")
+		require.EqualError(t, err, fmt.Sprintf(
+			"project %q directory is missing: %s; open an existing project instead", selection, stale))
 	}
 	_, first := orchestratorProject(t, h, "api")
 	_, second := orchestratorProject(t, h, "api")
