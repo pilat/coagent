@@ -282,7 +282,7 @@ func (s *Session) prepareToolResponse(
 
 	if strings.TrimSpace(text) != "" {
 		c.Unfired.Outputs = []sessionstore.Output{
-			{Type: sessionstore.OutputMessage, Content: text, MessageRef: 0, Phase: "reply"},
+			{Type: sessionstore.OutputMessage, Content: text, MessageRef: 0, Phase: sessionstore.OutputPhaseReply},
 		}
 	}
 }
@@ -386,7 +386,7 @@ func (s *Session) finalParts(c *sessionstore.Commit, text string) {
 			Type:          sessionstore.OutputMessage,
 			Content:       text,
 			MessageRef:    0,
-			Phase:         "final",
+			Phase:         sessionstore.OutputPhaseFinal,
 			ReleasesInput: true,
 		},
 	}

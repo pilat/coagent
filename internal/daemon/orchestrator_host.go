@@ -137,26 +137,34 @@ func (h orchestratorHost) caller(ctx context.Context, id int64) (*sessionstore.S
 	return record, owner, nil
 }
 
-func (h orchestratorHost) sendTarget(ctx context.Context, owner string, id int64) (*sessionstore.SessionRecord, error) {
+func (h orchestratorHost) rootTarget(ctx context.Context, owner string, id int64) error {
 	record, err := h.s.store.GetSession(ctx, id)
 	if err != nil || record == nil {
-		return nil, fmt.Errorf("session #%d not found", id)
+		return fmt.Errorf("session #%d not found", id)
 	}
 
 	root := record
 	if record.ParentID != 0 {
 		root, err = h.s.store.GetSession(ctx, record.RootID)
 		if err != nil || root == nil {
-			return nil, fmt.Errorf("session #%d not found", id)
+			return fmt.Errorf("session #%d not found", id)
 		}
 	}
 
 	if root.Attributes[controllerapi.SessionAttributeManagerID] != owner {
-		return nil, fmt.Errorf("session #%d not found", id)
+		return fmt.Errorf("session #%d not found", id)
 	}
 
 	if record.ParentID != 0 {
-		return nil, fmt.Errorf("session #%d is a subagent, not a root session", id)
+		return fmt.Errorf("session #%d is a subagent, not a root session", id)
+	}
+
+	return nil
+}
+
+func (h orchestratorHost) sendTarget(ctx context.Context, owner string, id int64) (*sessionstore.SessionRecord, error) {
+	if err := h.rootTarget(ctx, owner, id); err != nil {
+		return nil, err
 	}
 
 	resolved, err := h.s.store.ResolveReplacement(ctx, id, owner)
@@ -168,7 +176,7 @@ func (h orchestratorHost) sendTarget(ctx context.Context, owner string, id int64
 		return nil, fmt.Errorf("resolve sent message target: %w", err)
 	}
 
-	record, err = h.s.store.GetSession(ctx, resolved)
+	record, err := h.s.store.GetSession(ctx, resolved)
 	if err != nil {
 		return nil, fmt.Errorf("reload sent message target: %w", err)
 	}

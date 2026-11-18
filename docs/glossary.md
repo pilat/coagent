@@ -9,7 +9,7 @@ The shared vocabulary of coagent — the words that name its concepts, so code, 
 ## Actors & entities
 
 - **orchestrator mode**: A durable capability on one manager-owned root, granted and revoked only by the human with
-  `/orchestrate on|off`. It gives that root `list_sessions`, `send_to_session` and `spawn_session` over every live root
+  `/orchestrate on|off`. It gives that root `list_sessions`, `send_to_session`, `spawn_session` and `read_session` over roots
   of its manager; its subagents never get them. It is not a session kind, agent type or role
   ([ADR-0097](adr/0097-orchestrator-mode-is-a-human-granted-capability-on-an-ordinary-root.md)).
   _Avoid_: assistant, desk, coordinator, supervisor; "orchestrator" for the daemon.
@@ -321,7 +321,19 @@ _Avoid_: active session (several sessions may run at once).
 or skipped past by one manager/chat. NULL means **entry** is owed. Numeric
 positions advance only while the same focus remains entered. Selection writes,
 including re-switch and clear, reset it to NULL; restart preserves it.
-_Avoid_: per-session read tracking, transport receipt.
+_Avoid_: per-session read tracking, transport receipt, read position (that is an orchestrator's).
+
+**read position**:
+`session_watches.read_through`, the highest output-log id one orchestrator has read of one root
+lineage. Only `read_session` advances it; it survives restart and compaction and never touches the chat focus.
+Absent means the next read shows the newest rows
+([ADR-0098](adr/0098-an-orchestrator-reads-output-logs-from-its-own-position.md)).
+_Avoid_: chat cursor (that is the human's), offset, bookmark.
+
+**watch**:
+One `session_watches` row: an orchestrator (watcher) and a root (target) with the read position, the place
+later stages keep subscription and signal state.
+_Avoid_: subscription (that is a later, standing intent), follow.
 
 **entry**:
 A selected session's bold `→ #N name` header followed by its last three renderable

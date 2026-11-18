@@ -54,6 +54,8 @@ type Store interface { //nolint:interfacebloat // Lifecycle commands share atomi
 		name, workDir string,
 	) (*sessionstore.SessionRecord, *sessionstore.OutputCommit, error)
 	ResolveReplacement(ctx context.Context, sessionID int64, managerID string) (int64, error)
+	ReplacementChain(ctx context.Context, sessionID int64, managerID string) ([]int64, error)
+	ReadWatch(context.Context, sessionstore.WatchRead) (*sessionstore.WatchPage, error)
 	RecordSessionStartFailure(context.Context, int64, string) (bool, error)
 	BeginLifecycleInput(ctx context.Context, inputID int64, command, content string) (*sessionstore.OutputCommit, error)
 	MarkSessionKilledWithOutput(

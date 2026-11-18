@@ -290,4 +290,4 @@ rules:
               }
       - metavariable-regex:
           metavariable: $LITERAL
-          regex: '(?s)^["`](read|write|edit|apply_patch|glob|grep|ls|lsp|tail|bash|todoread|todowrite|memory_save|memory_delete|skill|webfetch|websearch|set_budget|mcp_add|mcp_remove|mcp_enable|mcp_disable|mcp_list|tavily|brave-search|exa|kagi|searxng|duckduckgo|perplexity|firecrawl|list_sessions|send_to_session|spawn_session|mcp__.*)["`]$'
+          regex: '(?s)^["`](read|write|edit|apply_patch|glob|grep|ls|lsp|tail|bash|todoread|todowrite|memory_save|memory_delete|skill|webfetch|websearch|set_budget|mcp_add|mcp_remove|mcp_enable|mcp_disable|mcp_list|tavily|brave-search|exa|kagi|searxng|duckduckgo|perplexity|firecrawl|list_sessions|send_to_session|spawn_session|read_session|mcp__.*)["`]$'

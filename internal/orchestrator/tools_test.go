@@ -18,6 +18,7 @@ type hostCall struct {
 	caller, target            int64
 	filter, message           string
 	project, worktree, prompt string
+	latest                    bool
 }
 
 type fakeHost struct {
@@ -25,6 +26,7 @@ type fakeHost struct {
 	total   int
 	err     error
 	calls   []hostCall
+	page    Page
 }
 
 func (h *fakeHost) ListSessions(_ context.Context, caller int64, filter string) ([]Entry, int, error) {
@@ -35,6 +37,11 @@ func (h *fakeHost) ListSessions(_ context.Context, caller int64, filter string) 
 func (h *fakeHost) SendToSession(_ context.Context, caller, target int64, message string) (int64, error) {
 	h.calls = append(h.calls, hostCall{caller: caller, target: target, message: message})
 	return 25, h.err
+}
+
+func (h *fakeHost) ReadSession(_ context.Context, caller, target int64, latest bool) (Page, error) {
+	h.calls = append(h.calls, hostCall{caller: caller, target: target, latest: latest})
+	return h.page, h.err
 }
 
 func (h *fakeHost) SpawnSession(
@@ -110,11 +117,12 @@ func TestToolsResultsAndHostArguments(t *testing.T) {
 
 func TestToolsDeclarations(t *testing.T) {
 	tools := NewTools(nil, 12)
-	require.Len(t, tools, 3)
+	require.Len(t, tools, 4)
 	for i, tc := range []struct{ id, trail, prompt string }{
 		{IDListSessions, "filter", "list your root sessions"},
 		{IDSendToSession, "message", "write to a session"},
 		{IDSpawnSession, "prompt", "start a session in a project"},
+		{id: IDReadSession, trail: "", prompt: "read a session's chat"},
 	} {
 		candidate := tools[i]
 		assert.Equal(t, tc.id, candidate.ID())

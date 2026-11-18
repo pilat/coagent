@@ -6,6 +6,9 @@ import (
 )
 
 const (
+	OutputPhaseReply = "reply"
+	OutputPhaseFinal = "final"
+
 	OutputMessage         OutputType = "message"
 	OutputSessionOpened   OutputType = "session_opened"
 	OutputSessionReplaced OutputType = "session_replaced"

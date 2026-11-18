@@ -242,9 +242,13 @@ func (s *Store) AdvanceChat(ctx context.Context, managerID, chatID string, sessi
 }
 
 func (s *Store) chatOutputName(ctx context.Context, sessionID int64) (string, error) {
+	return chatOutputName(ctx, s.db, sessionID)
+}
+
+func chatOutputName(ctx context.Context, q execer, sessionID int64) (string, error) {
 	var project, title string
 
-	err := s.db.QueryRowContext(ctx, `SELECT p.name,
+	err := q.QueryRowContext(ctx, `SELECT p.name,
 		COALESCE(json_extract(s.attributes, '$.title'), '') FROM sessions s
 		JOIN projects p ON p.id = s.project_id WHERE s.id = ?`, sessionID).
 		Scan(&project, &title)

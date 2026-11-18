@@ -43,10 +43,6 @@ var externalCallTools = map[string]bool{
 	IDTask:  true,
 }
 
-// IsExternalCall reports whether a tool's pending call waits on the outside
-// world rather than on the loop.
-func IsExternalCall(name string) bool { return externalCallTools[name] }
-
 // Untrusted marker tokens frame model-visible external tool output. They are a
 // provenance hint for the model, not a sandbox or security boundary.
 const (
@@ -101,6 +97,11 @@ type SkillLoader interface { //nolint:iface // Declared by builtin, consulted by
 type ActivationDeclarer interface {
 	Tool
 	ActivationCommands() []string
+}
+
+// DirectOnly marks tools whose result budget cannot be shared with other calls, so batch refuses them.
+type DirectOnly interface {
+	DirectOnly()
 }
 
 // RegistryBound is implemented by tools that dispatch to other tools through a

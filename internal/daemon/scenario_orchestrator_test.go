@@ -198,7 +198,9 @@ func fireOrchestratorBudget(t *testing.T, h *harness, id int64) {
 
 func assertModeToolSchemas(t *testing.T, ids []string, want bool) {
 	t.Helper()
-	for _, id := range []string{orchestrator.IDListSessions, orchestrator.IDSendToSession, orchestrator.IDSpawnSession} {
+	for _, id := range []string{
+		orchestrator.IDListSessions, orchestrator.IDSendToSession, orchestrator.IDSpawnSession, orchestrator.IDReadSession,
+	} {
 		if want {
 			assert.Contains(t, ids, id)
 		} else {

@@ -90,61 +90,6 @@ func (s *Store) BeginLifecycleInput(
 	return &OutputCommit{OutputID: outputID, OwnerID: owner}, nil
 }
 
-func (s *Store) ResolveReplacement(ctx context.Context, sessionID int64, managerID string) (int64, error) {
-	seen := make(map[int64]struct{})
-	for range 16 {
-		if _, duplicate := seen[sessionID]; duplicate {
-			return 0, errors.New("session replacement cycle")
-		}
-
-		seen[sessionID] = struct{}{}
-
-		record, err := s.GetSession(ctx, sessionID)
-		if err != nil {
-			return 0, err
-		}
-
-		owner, _ := record.Attributes[managerIDAttribute].(string)
-		if owner != managerID {
-			return 0, ErrOutputOwner
-		}
-
-		if record.Status != SessionStatusTerminating && record.KilledAt == nil {
-			return sessionID, nil
-		}
-
-		var replacementID int64
-
-		err = s.db.QueryRowContext(ctx, `
-			SELECT session_id FROM session_outbox
-			WHERE type = 'session_replaced'
-				AND json_extract(attributes, '$.old_session_id') = ?
-				AND json_extract(attributes, '$.manager_id') = ?
-			ORDER BY id DESC LIMIT 1`, sessionID, managerID).Scan(&replacementID)
-		if errors.Is(err, sql.ErrNoRows) {
-			return 0, ErrSessionNotAcceptingInput
-		}
-
-		if err != nil {
-			return 0, fmt.Errorf("load replacement session: %w", err)
-		}
-
-		next, err := s.GetSession(ctx, replacementID)
-		if err != nil {
-			return 0, err
-		}
-
-		nextOwner, _ := next.Attributes[managerIDAttribute].(string)
-		if next.ParentID != 0 || next.ProjectID != record.ProjectID || nextOwner != managerID {
-			return 0, errors.New("invalid replacement session")
-		}
-
-		sessionID = replacementID
-	}
-
-	return 0, errors.New("session replacement chain too deep")
-}
-
 // MarkSessionKilledWithOutput omits a close row for a terminating old root;
 // clear transfers that manager surface to its replacement.
 func (s *Store) MarkSessionKilledWithOutput(

@@ -164,6 +164,13 @@ func (t *BatchTool) validateCalls(calls []BatchCall) error {
 			return fmt.Errorf("call %d: %s requires a user command turn and must be called directly", i+1, call.Tool)
 		}
 
+		if tool.IsDirectOnly(t.registry.Get(call.Tool)) {
+			return fmt.Errorf(
+				"call %d: %s must be called directly, one call per session, not inside batch",
+				i+1, call.Tool,
+			)
+		}
+
 		// A suspending tool answers after the loop stops; batch cannot carry that
 		// through, and would report a result for work still in flight.
 		if tool.IsExternalCall(call.Tool) {
