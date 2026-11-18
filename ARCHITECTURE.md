@@ -89,7 +89,7 @@ does not imply a tier except where it expresses an implementation variant.
 - `internal/managercontrol` — manager-bound application use cases and controller adaptation.
 - `internal/managerdiscovery` — manager-facing project, model, skill and spawn-favorites discovery.
 - `internal/migrate` — SQLite opening and schema migration with production backup policy.
-- `internal/orchestrator` — orchestrator-mode tools (list, send, spawn) over a daemon-implemented host; schemas, validation and result text only.
+- `internal/orchestrator` — orchestrator-mode tools (list, send, spawn, read) over a daemon-implemented host; schemas, validation and result text only.
 - `internal/progress` — transport-neutral diagnostic status facts and Markdown rendering.
 - `internal/progressruntime` — on-demand status projection and live runner/model/context state.
 - `internal/projectpath` — canonical project-root paths and project-name validation.
@@ -109,7 +109,7 @@ does not imply a tier except where it expresses an implementation variant.
 - `internal/sessionprompt` — system and transcript prompt rendering, timestamps, skill parsing and todo normalization.
 - `internal/sessionbus` — in-process session-event subscriptions and non-blocking fan-out.
 - `internal/sessionevent` — session-to-controller notification vocabulary.
-- `internal/sessionstore` — project registry, durable sessions, messages, inbox, atomic producer delivery, output log, chat focus/cursor and the session-file-read ledger for write-guard checks.
+- `internal/sessionstore` — project registry, durable sessions, messages, inbox, atomic producer delivery, output log, chat focus/cursor, orchestrator read positions and the session-file-read ledger for write-guard checks.
 - `internal/shellenv` — captured per-worktree shell environment for child processes.
 - `internal/subagent` — parent-child link ledger, completion transactions and agent-facing tools.
 - `internal/todo` — session-local task tracking.
@@ -178,6 +178,12 @@ Reads and cursor updates remain authorized for killed roots so their selected
 tails can finish. The log preserves IDs and its AUTOINCREMENT high-water mark
 across schema rebuilds. Replaying a source key returns the original row without
 comparing or changing its payload.
+
+Each `session_watches` row is one orchestrator's read position on one root lineage,
+advanced only by `read_session` in the transaction that selects the page. It never
+touches `chat_focus`. Replacement chains are read in output-log id order and
+re-keyed onto the newest root. The result is untrusted tool output
+([ADR-0098](docs/adr/0098-an-orchestrator-reads-output-logs-from-its-own-position.md)).
 
 Entry sends a header and the last three renderable rows, oldest first. Those
 rows and the newest outbox ID of any type come from one read. Entry then
@@ -716,7 +722,7 @@ the control socket carries no event traffic and no server pushes
 
 Orchestrator mode is a durable attribute on an ordinary manager-owned root,
 granted and revoked only by human `/orchestrate on|off`; it survives restart and `/clear`.
-From its next run, that root alone gets list, send and spawn tools, with mode and
+From its next run, that root alone gets list, send, spawn and read tools, with mode and
 ownership checked on every call; its subagents and targets receive no new tool.
 Sent messages carry host-authored sender provenance at acceptance and appear in
 the target's chat. Their authority is plain text: no commands, grants, skill
@@ -725,6 +731,7 @@ a budget-parked target. Spawn accepts visible registered projects with existing 
 excluding coagent worktrees identified by the configured worktrees-root layout; optional
 worktrees use guarded no-execution creation. A spawned root takes its title from
 the prompt at creation; it is independent and never moves chat focus ([ADR-0097](docs/adr/0097-orchestrator-mode-is-a-human-granted-capability-on-an-ordinary-root.md)).
+Reading another session writes nothing to it and returns untrusted data; `batch` refuses `read_session`.
 
 ### Credential boundary
 

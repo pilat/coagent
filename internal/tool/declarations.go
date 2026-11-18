@@ -53,3 +53,14 @@ type PromptDeclarer interface { //nolint:iface // Declared by tools elsewhere, c
 	Tool
 	PromptDeclaration() PromptDeclaration
 }
+
+// IsExternalCall reports whether a tool's pending call waits on the outside
+// world rather than on the loop.
+func IsExternalCall(name string) bool { return externalCallTools[name] }
+
+// IsDirectOnly reports whether batch must refuse a tool.
+func IsDirectOnly(candidate Tool) bool {
+	_, direct := candidate.(DirectOnly)
+
+	return direct
+}

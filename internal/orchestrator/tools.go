@@ -38,6 +38,7 @@ type Host interface {
 	ListSessions(ctx context.Context, callerID int64, filter string) ([]Entry, int, error)
 	SendToSession(ctx context.Context, callerID, targetID int64, message string) (int64, error)
 	SpawnSession(ctx context.Context, callerID int64, project, worktree, prompt string) (int64, string, error)
+	ReadSession(ctx context.Context, callerID, targetID int64, latest bool) (Page, error)
 }
 
 type Entry struct {
@@ -55,6 +56,7 @@ type arguments struct {
 	Project   string `json:"project"`
 	Worktree  string `json:"worktree"`
 	Prompt    string `json:"prompt"`
+	Latest    bool   `json:"latest"`
 }
 
 type sessionTool struct {
@@ -101,6 +103,15 @@ func NewTools(host Host, sessionID int64) []tool.Tool {
 			promptDescription: "start a session in a project",
 			promptOrder:       3,
 		},
+		untrustedTool{sessionTool: &sessionTool{
+			host:              host,
+			callerID:          sessionID,
+			id:                IDReadSession,
+			description:       readDescription,
+			parameters:        readParameters,
+			promptDescription: "read a session's chat",
+			promptOrder:       4,
+		}},
 	}
 }
 
@@ -127,7 +138,7 @@ func (t *sessionTool) Execute(ctx context.Context, params json.RawMessage) (*too
 	}
 
 	switch {
-	case t.id == IDSendToSession && args.SessionID <= 0:
+	case (t.id == IDSendToSession || t.id == IDReadSession) && args.SessionID <= 0:
 		return nil, errors.New("session_id is required")
 	case t.id == IDSendToSession && strings.TrimSpace(args.Message) == "":
 		return nil, errors.New("message is required")
@@ -142,6 +153,8 @@ func (t *sessionTool) Execute(ctx context.Context, params json.RawMessage) (*too
 		return t.list(ctx, args.Filter)
 	case IDSendToSession:
 		return t.send(ctx, args)
+	case IDReadSession:
+		return t.read(ctx, args)
 	default:
 		return t.spawn(ctx, args)
 	}
