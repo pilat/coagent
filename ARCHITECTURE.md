@@ -737,7 +737,9 @@ excluding coagent worktrees identified by the configured worktrees-root layout; 
 worktrees use guarded no-execution creation. A spawned root takes its title from
 the prompt at creation; it is independent and never moves chat focus ([ADR-0097](docs/adr/0097-orchestrator-mode-is-a-human-granted-capability-on-an-ordinary-root.md)).
 Reading another session writes nothing to it and returns untrusted data; `batch` refuses `read_session`.
-A signal is host-authored, carries no target text or title, and is never visible to the target.
+The model-facing signal contains ids, project name and outcome kind, without target-authored text or title.
+Its persist-only chat row carries the target's shared display name, including title; it never enters the watcher's transcript.
+For `/clear` the chat names the cleared session and replacement id. The target sees neither surface.
 
 ### Credential boundary
 

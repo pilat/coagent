@@ -29,11 +29,13 @@ row per watcher, the one-shot arm consumed, `signalled` set. Nothing more is sen
 next `read_session` of the target clears `signalled`. Each processed outcome also consumes one-shot arms covered by
 an unread signal. A `/clear` of the target moves its rows to the replacement.
 
-The signal is a host-authored line that names the target and the outcome kind and points to `read_session`; it
-never carries the target's text. It is a `source=subagent` row, which now means a host-authored completion fact about
+The model-facing signal is a host-authored line containing session ids, the project name, the outcome kind and a
+`read_session` hint; it carries no target-authored text or title. It is a `source=subagent` row, which means a host-authored completion fact about
 another session delivered to a session that waits on it. So it behaves as a background result does: it wakes an idle
 orchestrator, waits in a stopped one, and never releases a budget. When the orchestrator accepts it, its own chat
-shows a `🔔` row. The target sees nothing.
+shows a persist-only `🔔` row with the target's shared `ChatDisplayName`, including its title. For `/clear` it uses
+the cleared session's display name and the replacement id. That chat row never enters the watcher's model transcript.
+The target sees nothing.
 
 An armed one-shot is a background wake source and a budget obligation of the watcher, so an orchestrator that says
 "sent, waiting" is not nudged and keeps its budget; a wait on a session that waits on the caller does not count. A

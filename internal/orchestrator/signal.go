@@ -14,8 +14,8 @@ const (
 // SignalKind identifies a root's turn outcome without carrying its output.
 type SignalKind string
 
-// SignalText uses only host-owned identity and outcome data in both surfaces.
-func SignalText(k SignalKind, id int64, project string, replacement int64) (string, string) {
+// SignalText keeps the display name in chat and out of the model line.
+func SignalText(k SignalKind, id int64, project, name string, replacement int64) (string, string) {
 	var fact, notice string
 
 	readID := id
@@ -46,7 +46,7 @@ func SignalText(k SignalKind, id int64, project string, replacement int64) (stri
 		readID,
 		readID,
 	)
-	chat := fmt.Sprintf("🔔 #%d %s %s", id, project, notice)
+	chat := fmt.Sprintf("🔔 #%d %s %s", id, name, notice)
 
 	return line, chat
 }

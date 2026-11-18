@@ -336,9 +336,10 @@ One `session_watches` row: an orchestrator (watcher) and a root (target) with it
 _Avoid_: subscription alone (say standing subscription; "subscription" also names a manager event subscription), follow.
 
 **outcome signal**:
-One host-authored line in an orchestrator's inbox saying that a watched root reached a turn outcome, and pointing to
-`read_session`; it never carries the target's text. It is a `source=subagent` row and shows as `🔔 #N project …` in the
-orchestrator's chat. At most one is unread per watch
+One host-authored model line in an orchestrator's inbox naming the watched root's ids, project and turn outcome,
+and pointing to `read_session`; it carries no target-authored text or title. It is a `source=subagent` row.
+The orchestrator's chat shows a persist-only `🔔 #N display name …` row using the shared project/title display name;
+that row never enters its model transcript. For `/clear` the name belongs to the cleared session. At most one is unread per watch
 ([ADR-0099](adr/0099-turn-outcomes-signal-watchers-through-armed-watch-rows.md)).
 _Avoid_: notification (that is a manager event), reply, terminal signal.
 

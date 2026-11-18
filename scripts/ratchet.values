@@ -56,7 +56,7 @@ lines internal/configapply 290
 lines internal/configops 518
 lines internal/controllerapi 313
 lines internal/ctl 1023
-lines internal/daemon 5413
+lines internal/daemon 5415
 lines internal/git 868
 lines internal/humanize 24
 lines internal/id 17

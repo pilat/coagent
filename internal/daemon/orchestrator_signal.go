@@ -121,7 +121,9 @@ func (s *Service) fireOutcome(ctx context.Context, targetID int64, kind orchestr
 		return fmt.Errorf("load outcome project: %w", err)
 	}
 
-	line, notice := orchestrator.SignalText(kind, recordID, project, targetID)
+	title, _ := record.Attributes[controllerapi.SessionAttributeTitle].(string)
+	name := sessionstore.ChatDisplayName(project, title)
+	line, notice := orchestrator.SignalText(kind, recordID, project, name, targetID)
 
 	_, err = s.store.FireWatches(ctx, sessionstore.WatchFire{TargetID: targetID, Line: line, Notice: notice})
 	if err != nil {
