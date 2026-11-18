@@ -8,6 +8,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/pilat/coagent/internal/logger"
+	"github.com/pilat/coagent/internal/sessionbuild"
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/subagent"
 )
@@ -306,7 +307,17 @@ func (s *Service) finalizeChildLocked(ctx context.Context, childID int64, errore
 		return nil
 	}
 
+	s.retireChildToolResources(ctx, childID)
+
 	return func() { s.deliverCompletionToParent(ctx, *link) }
+}
+
+func (s *Service) retireChildToolResources(ctx context.Context, childID int64) {
+	if err := sessionbuild.RetireToolResources(s.build.Resources, childID); err != nil {
+		logger.Ctx(ctx).
+			Named("daemon.completion").
+			Warn("retire_child_tools", zap.Int64("child", childID), zap.Error(err))
+	}
 }
 
 // Foreground children are never queued (as at spawn), so a resumed one that finds
@@ -320,6 +331,8 @@ func (s *Service) failUnresumableChildLocked(ctx context.Context, childID int64)
 	if link == nil {
 		return nil
 	}
+
+	s.retireChildToolResources(ctx, childID)
 
 	// Delivery re-locks the tree; the restart sweep redelivers if this goroutine never runs.
 	failed := *link

@@ -2,6 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-09-26
+- **Amended by:** [ADR-0096](0096-a-finished-subagent-retires-its-tool-resources.md) — a finished subagent retires its tool resources
 - **Supersedes:** [ADR-0042](0042-work-tree-sessions-write-the-main-repository-git.md) (worktree filesystem grants), [ADR-0044](0044-session-shields-confine-project-filesystem.md) (session shields), [ADR-0045](0045-session-bound-mcp-process-identity.md) (pooled session-bound MCP processes)
 
 ## Context
