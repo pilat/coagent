@@ -255,8 +255,8 @@ A git repo supplying loadable skills and subagent definitions, cloned and cached
 One external MCP-server process and its discovered tools, retained for one
 session ID across loop activations. Each stack refreshes the live client's
 catalog before use and keeps its schemas fixed during that activation. Policy,
-configuration or shell-snapshot changes replace the client; stop/kill and daemon
-shutdown close it. Distinct from the **MCP registry**, which stores server definitions.
+configuration or shell-snapshot changes replace the client; a subagent's terminal
+link, stop/kill and daemon shutdown close it. Distinct from the **MCP registry**, which stores server definitions.
 _Avoid_: MCP pool, MCP catalog (neither has a separate lifetime).
 
 **MCP registry**:
@@ -588,7 +588,7 @@ _Avoid_: capability, model role.
 The in-memory credential map parsed from `~/.coagent/secrets`, deliberately kept out of the process environment (tool subprocesses inherit no credentials) and scrubbed from all log output.
 
 **shellenv**:
-A per-session, per-cwd snapshot of a login+interactive shell (mise / asdf / nvm / direnv toolchain activation), captured lazily and replayed for Bash / LSP / MCP subprocess spawns. It survives loop activations under the same policy; fingerprint validation and a 30-minute backstop keep it fresh ([ADR-0001](adr/0001-shellenv-fingerprint-invalidation.md)). Resource retirement removes its snapshots. Capture and `type -P` lookup execute through the session's confinement runner. The snapshot is exposed to the sandbox read-only through an inherited descriptor — never the user cache directory. Captures `os.Environ()` only — never a secrets map.
+A per-session, per-cwd snapshot of a login+interactive shell (mise / asdf / nvm / direnv toolchain activation), captured lazily and replayed for Bash / LSP / MCP subprocess spawns. It survives loop activations under the same policy until a subagent's terminal link; fingerprint validation and a 30-minute backstop keep it fresh ([ADR-0001](adr/0001-shellenv-fingerprint-invalidation.md)). Resource retirement removes its snapshots. Capture and `type -P` lookup execute through the session's confinement runner. The snapshot is exposed to the sandbox read-only through an inherited descriptor — never the user cache directory. Captures `os.Environ()` only — never a secrets map.
 
 **filesystem-write sandbox**:
 Retired as a term: the default is **project confinement**, one ordered

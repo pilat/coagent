@@ -18,6 +18,66 @@ import (
 	"github.com/pilat/coagent/internal/tool"
 )
 
+func TestScenario_CompletedSubagentStopsItsMCPProcesses(t *testing.T) {
+	fake := newFakeMCPServer(t, "pong", false)
+	respond := func(_ string, msgs []llmwire.Message) *llmwire.Response {
+		if hasUserContaining(msgs, "CHILD_WORK") {
+			if hasUserContaining(msgs, "FOLLOW_UP") {
+				return textReply("child follow-up answer")
+			}
+			return textReply("child answer")
+		}
+		if hasUserContaining(msgs, "<subagent_completion>") {
+			return textReply("parent received follow-up")
+		}
+		if hasToolResultFor(msgs, "task") {
+			return textReply("parent received child")
+		}
+		if hasUserContaining(msgs, "SPAWN_CHILD") {
+			return callReply(taskCallID, "task", `{"prompt":"CHILD_WORK","description":"c","subagent_type":"general"}`)
+		}
+		if hasToolResultFor(msgs, tool.IDMCPAdd) {
+			return textReply("registered")
+		}
+		return callReply("add-1", tool.IDMCPAdd, fake.addParams("fake", "project"))
+	}
+	h := newHarness(t, harnessOptions{respond: respond})
+	counts := func() (int, int) {
+		data, err := os.ReadFile(fake.log)
+		require.NoError(t, err)
+		events := string(data)
+		spawn := strings.Count(events, "spawn\n")
+		return spawn, spawn - strings.Count(events, "exit\n")
+	}
+	root := h.ask("register the fake mcp server", "registered")
+	h.reply(root, "SPAWN_CHILD now", "parent received child")
+	link := h.waitLink(root, taskCallID)
+	h.waitDelivered(link.ChildID)
+	spawn, live := counts()
+	assert.GreaterOrEqual(t, spawn, 2)
+	t.Logf("after child delivery: spawn=%d live=%d", spawn, live)
+	h.waitUntil("completed child's MCP process exited", func() bool {
+		_, live := counts()
+		return live == 1
+	})
+	spawnsBefore, _ := counts()
+	require.NoError(t, h.mgr.SendToChild(h.ctx, link.ChildID, "FOLLOW_UP one more"))
+	h.waitUntil("parent received follow-up", func() bool {
+		return lastAssistantTextDTO(h.messages(root)) == "parent received follow-up"
+	})
+	spawn, _ = counts()
+	assert.Greater(t, spawn, spawnsBefore)
+	h.waitUntil("follow-up child's MCP process exited", func() bool {
+		_, live := counts()
+		return live == 1
+	})
+	require.NoError(t, h.mgr.sendToSession(h.ctx, root, "/stop"))
+	h.waitUntil("MCP processes stopped", func() bool {
+		_, live := counts()
+		return live == 0
+	})
+}
+
 // Catalog refresh follows the same live client across activation boundaries.
 func TestScenario_NextMCPStackReusesProcessAndRefreshesTools(t *testing.T) {
 	fake := newFakeMCPServer(t, "pong from fake", false)

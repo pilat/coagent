@@ -992,8 +992,9 @@ policy and MCP configuration. It retains shell snapshots and MCP clients across
 replies and sleep/resume; distinct IDs never share them. Stacks lease those
 resources exclusively and own their LSP manager, rooted access and registry.
 Policy/configuration changes retire the previous generation; shell recapture
-restarts MCP. Stop/kill retire the whole tree, including idle descendants, and
-shutdown closes the cache after runners join. MCP registry changes replace clients lazily when the next stack acquires the
+restarts MCP. Stop/kill retire the whole tree, including idle descendants.
+A subagent's resources also retire when its link becomes terminal, so a later round starts fresh ([ADR-0096](docs/adr/0096-a-finished-subagent-retires-its-tool-resources.md)).
+Shutdown closes the cache after runners join. MCP registry changes replace clients lazily when the next stack acquires the
 resolved server set; an active stack retains its current tools and schemas.
 MCP acquisition precedes agent-type tool filtering, so enabled clients may start
 even when the allowlist subsequently removes every tool they expose.
