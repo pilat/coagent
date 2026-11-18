@@ -74,7 +74,7 @@ func TestOrchestratorReadSessionFollowsTargetTurns(t *testing.T) {
 	assert.Equal(t, "first answer", page.Rows[1].Content)
 	page = readWithoutTargetChanges(t, h, caller, target)
 	assert.Empty(t, page.Rows)
-	_, err := (orchestratorHost{s: h.mgr}).SendToSession(h.ctx, caller, target, "SENT_TURN")
+	_, _, err := (orchestratorHost{s: h.mgr}).SendToSession(h.ctx, caller, target, "SENT_TURN")
 	require.NoError(t, err)
 	h.waitAnswer(target, "sent answer")
 	page = readWithoutTargetChanges(t, h, caller, target)

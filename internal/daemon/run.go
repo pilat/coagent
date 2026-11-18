@@ -18,6 +18,7 @@ const maxEmptyLoopIterations = 3
 
 type runOutcome struct {
 	again, hadInput, errored, publishIdle bool
+	answered, suspended, budgetFired      bool
 }
 
 func (s *Service) runSession(ctx context.Context, rs *runner) {
@@ -36,7 +37,10 @@ func (s *Service) runSession(ctx context.Context, rs *runner) {
 	emptyRuns := 0
 
 	for {
+		answered := last.answered
 		last = s.runOnce(ctx, rs)
+
+		last.answered = last.answered || answered
 		if !last.again {
 			return
 		}
@@ -139,6 +143,10 @@ func (s *Service) closeRunner(ctx context.Context, rs *runner,
 func (s *Service) concludeRun(ctx context.Context, rs *runner, result session.RunResult,
 	runErr error, out runOutcome, idle bool,
 ) runOutcome {
+	out.answered = result.Final != ""
+	out.suspended = result.Suspended
+	out.budgetFired = result.BudgetFired
+
 	if runErr != nil {
 		s.handleRunError(ctx, rs.sessionID, result.ErrorNotice, runErr)
 
@@ -245,6 +253,7 @@ func (s *Service) finishRunnerDelivery(ctx context.Context, rs *runner, out runO
 	id := rs.sessionID
 
 	deliver := s.finalizeChildLocked(cleanup, id, errored)
+	s.signalOutcome(ctx, id, runSignalKind(out, errored), 0)
 
 	if out.publishIdle && ctx.Err() == nil {
 		s.publishIdle(id)

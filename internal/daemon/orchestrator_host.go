@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"slices"
@@ -35,6 +36,12 @@ func (h orchestratorHost) ListSessions(
 	rows = slices.DeleteFunc(rows, func(row sessionstore.ChatSession) bool {
 		return !strings.Contains(strings.ToLower(row.Name), strings.ToLower(filter))
 	})
+
+	states, err := h.s.store.WatchStates(ctx, callerID)
+	if err != nil {
+		return nil, 0, fmt.Errorf("load listed session watches: %w", err)
+	}
+
 	entries := make([]orchestrator.Entry, 0, min(20, len(rows)))
 
 	for _, row := range rows[:min(20, len(rows))] {
@@ -49,11 +56,14 @@ func (h orchestratorHost) ListSessions(
 		}
 
 		entry := orchestrator.Entry{
-			ID:       row.ID,
-			Name:     row.Name,
-			State:    state,
-			Activity: row.Activity,
-			Self:     row.ID == callerID,
+			ID:         row.ID,
+			Name:       row.Name,
+			State:      state,
+			Activity:   row.Activity,
+			Self:       row.ID == callerID,
+			Subscribed: states[row.ID].Subscribed,
+			Armed:      states[row.ID].Armed,
+			Signalled:  states[row.ID].Signalled,
 		}
 		entries = append(entries, entry)
 	}
@@ -61,28 +71,32 @@ func (h orchestratorHost) ListSessions(
 	return entries, len(rows), nil
 }
 
-func (h orchestratorHost) SendToSession(ctx context.Context, callerID, targetID int64, message string) (int64, error) {
+func (h orchestratorHost) SendToSession(
+	ctx context.Context,
+	callerID, targetID int64,
+	message string,
+) (int64, bool, error) {
 	caller, owner, err := h.caller(ctx, callerID)
 	if err != nil {
-		return 0, err
+		return 0, false, err
 	}
 
 	target, err := h.sendTarget(ctx, owner, targetID)
 	if err != nil {
-		return 0, err
+		return 0, false, err
 	}
 
 	if target.ID == callerID {
-		return 0, errors.New("cannot send to this session itself")
+		return 0, false, errors.New("cannot send to this session itself")
 	}
 
 	parked, err := h.parked(ctx, target.ID)
 	if err != nil {
-		return 0, err
+		return 0, false, err
 	}
 
 	if parked {
-		return 0, fmt.Errorf(
+		return 0, false, fmt.Errorf(
 			"session #%d is parked at its budget checkpoint; only the human can resume it",
 			target.ID,
 		)
@@ -90,24 +104,35 @@ func (h orchestratorHost) SendToSession(ctx context.Context, callerID, targetID 
 
 	attrs, err := h.provenance(ctx, caller)
 	if err != nil {
-		return 0, err
+		return 0, false, err
 	}
 
-	_, err = h.s.store.Enqueue(ctx, sessionstore.Input{
-		SessionID:  target.ID,
-		Source:     sessionstore.InputSourceAgent,
-		Content:    message,
-		Attributes: attrs,
+	var unread bool
+
+	err = h.s.store.WithTx(ctx, func(tx *sql.Tx) error {
+		_, err := sessionstore.EnqueueTx(ctx, tx, sessionstore.Input{
+			SessionID: target.ID, Source: sessionstore.InputSourceAgent, Content: message, Attributes: attrs,
+		})
+		if err != nil {
+			return fmt.Errorf("enqueue sent message: %w", err)
+		}
+
+		unread, err = sessionstore.ArmWatchTx(ctx, tx, callerID, target.ID, false)
+		if err != nil {
+			return fmt.Errorf("arm sent session watch: %w", err)
+		}
+
+		return nil
 	})
 	if errors.Is(err, sessionstore.ErrSessionNotAcceptingInput) {
-		return 0, fmt.Errorf("session #%d is stopping; try again shortly", target.ID)
+		return 0, false, fmt.Errorf("session #%d is stopping; try again shortly", target.ID)
 	}
 
 	if err != nil {
-		return 0, fmt.Errorf("send to session: %w", err)
+		return 0, false, fmt.Errorf("send to session: %w", err)
 	}
 
-	return target.ID, nil
+	return target.ID, unread, nil
 }
 
 func (h orchestratorHost) caller(ctx context.Context, id int64) (*sessionstore.SessionRecord, string, error) {

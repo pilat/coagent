@@ -96,6 +96,15 @@ func TestReadSessionRendering(t *testing.T) {
 	}
 }
 
+func TestReadSessionArmPositionDescription(t *testing.T) {
+	t.Parallel()
+
+	read := findTool(t, &fakeHost{}, IDReadSession)
+	assert.Contains(t, read.Description(),
+		"A first arm positions a new watch at the target's end; an existing watch keeps its position.")
+	assert.NotContains(t, read.Description(), "reads start from that moment")
+}
+
 func TestReadSessionValidation(t *testing.T) {
 	t.Parallel()
 	host := &fakeHost{}

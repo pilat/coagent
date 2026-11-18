@@ -6,6 +6,15 @@ import (
 	"time"
 )
 
+const armedWaitSQL = `SELECT EXISTS(SELECT 1 FROM session_watches w
+	JOIN sessions me ON me.id = w.watcher_id WHERE w.watcher_id = ?
+	AND w.armed = 1 AND w.signalled = 0 AND me.killed_at IS NULL AND me.parent_id = 0
+	AND json_type(me.attributes, '$.orchestrator') = 'true' AND NOT EXISTS
+	(SELECT 1 FROM session_watches back JOIN sessions peer ON peer.id = back.watcher_id
+	WHERE back.watcher_id = w.target_id AND back.target_id = w.watcher_id
+	AND back.armed = 1 AND back.signalled = 0 AND peer.killed_at IS NULL AND peer.parent_id = 0
+	AND json_type(peer.attributes, '$.orchestrator') = 'true'))`
+
 // LiveProcess is an advertised running background process of one exact session.
 type LiveProcess struct {
 	ID         string
@@ -38,7 +47,12 @@ func (s *Store) HasBackgroundObligationByRoot(ctx context.Context, rootID int64)
 		return true, nil
 	}
 
-	return s.HasPendingAsyncInputByRoot(ctx, rootID)
+	pending, err := s.HasPendingAsyncInputByRoot(ctx, rootID)
+	if err != nil || pending {
+		return pending, err
+	}
+
+	return s.hasArmedWait(ctx, rootID)
 }
 
 func (s *Store) HasBackgroundWakeSource(ctx context.Context, sessionID int64) (bool, error) {
@@ -73,7 +87,11 @@ func (s *Store) HasBackgroundWakeSource(ctx context.Context, sessionID int64) (b
 		return false, fmt.Errorf("query pending async input: %w", err)
 	}
 
-	return pending, nil
+	if pending {
+		return true, nil
+	}
+
+	return s.hasArmedWait(ctx, sessionID)
 }
 
 // ListLiveProcesses returns the session's own advertised running processes, oldest first.
@@ -119,4 +137,13 @@ func (s *Store) HasPendingBackgroundWait(ctx context.Context, sessionID int64) (
 	}
 
 	return pending, nil
+}
+
+func (s *Store) hasArmedWait(ctx context.Context, id int64) (bool, error) {
+	var waiting bool
+	if err := s.db.QueryRowContext(ctx, armedWaitSQL, id).Scan(&waiting); err != nil {
+		return false, fmt.Errorf("query armed session wait: %w", err)
+	}
+
+	return waiting, nil
 }

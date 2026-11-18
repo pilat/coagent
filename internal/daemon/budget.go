@@ -12,6 +12,7 @@ import (
 
 	"github.com/pilat/coagent/internal/budget"
 	"github.com/pilat/coagent/internal/logger"
+	"github.com/pilat/coagent/internal/orchestrator"
 	"github.com/pilat/coagent/internal/session"
 	"github.com/pilat/coagent/internal/sessionevent"
 	"github.com/pilat/coagent/internal/sessionstore"
@@ -357,6 +358,10 @@ func (s *Service) parkBudgetTree(ctx context.Context, rootID int64) {
 	if err != nil {
 		logger.Ctx(ctx).Named("daemon.budget").Warn(failureEvent, zap.Error(err))
 		return
+	}
+
+	if stopped {
+		s.signalOutcome(ctx, rootID, orchestrator.SignalParked, 0)
 	}
 
 	s.publishIdle(rootID)

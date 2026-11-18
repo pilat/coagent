@@ -110,20 +110,9 @@ func (s *Store) replaceManagerRoot(
 
 	defer func() { _ = tx.Rollback() }()
 
-	old, err := scanSession(
-		tx.QueryRowContext(ctx, `SELECT `+sessionColumns+` FROM sessions WHERE id = ?`, oldSessionID),
-	)
+	old, err := loadReplacementRoot(ctx, tx, oldSessionID)
 	if err != nil {
-		return nil, nil, fmt.Errorf("load replacement root: %w", err)
-	}
-
-	if err := requireManagerOwner(old.Attributes); err != nil {
 		return nil, nil, err
-	}
-
-	if old.ParentID != 0 || old.KilledAt != nil || old.Status == SessionStatusTerminating ||
-		old.Status == SessionStatusKilled {
-		return nil, nil, errors.New("session cannot be replaced")
 	}
 
 	now := time.Now().UTC()
@@ -169,11 +158,36 @@ func (s *Store) replaceManagerRoot(
 		return nil, nil, err
 	}
 
+	if _, err := tx.ExecContext(ctx, `UPDATE session_watches SET target_id = ? WHERE target_id = ?`,
+		newRecord.ID, oldSessionID); err != nil {
+		return nil, nil, fmt.Errorf("move replacement watches: %w", err)
+	}
+
 	if err := tx.Commit(); err != nil {
 		return nil, nil, fmt.Errorf("commit manager root replacement: %w", err)
 	}
 
 	return newRecord, commit, nil
+}
+
+func loadReplacementRoot(ctx context.Context, tx *sql.Tx, sessionID int64) (*SessionRecord, error) {
+	record, err := scanSession(
+		tx.QueryRowContext(ctx, `SELECT `+sessionColumns+` FROM sessions WHERE id = ?`, sessionID),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("load replacement root: %w", err)
+	}
+
+	if err := requireManagerOwner(record.Attributes); err != nil {
+		return nil, err
+	}
+
+	if record.ParentID != 0 || record.KilledAt != nil || record.Status == SessionStatusTerminating ||
+		record.Status == SessionStatusKilled {
+		return nil, errors.New("session cannot be replaced")
+	}
+
+	return record, nil
 }
 
 func handleReplacementInput(ctx context.Context, tx *sql.Tx, inputID, sessionID int64, now time.Time) error {

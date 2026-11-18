@@ -31,6 +31,85 @@ func TestWakeSource_AdvertisedProcessIsAWakeSource(t *testing.T) {
 	assert.True(t, has)
 }
 
+func TestWakeSource_ArmedWait(t *testing.T) {
+	t.Run("standing is not a wake source", func(t *testing.T) {
+		store, _, watcher, target := signalTestPair(t)
+		signalTestArm(t, store, watcher, target, true)
+		signalTestWake(t, store, watcher, false)
+	})
+	t.Run("one-shot and pending signal", func(t *testing.T) {
+		store, db, watcher, target := signalTestPair(t)
+		signalTestArm(t, store, watcher, target, false)
+		signalTestWake(t, store, watcher, true)
+		signalTestFire(t, store, target, 1)
+		signalTestWake(t, store, watcher, true)
+		_, err := db.ExecContext(t.Context(), `UPDATE session_inbox SET state = 'handled',
+			resolved_at = CURRENT_TIMESTAMP, resolution_reason = 'test' WHERE session_id = ?`, watcher)
+		require.NoError(t, err)
+		signalTestWake(t, store, watcher, false)
+		signalTestArm(t, store, watcher, target, false)
+		signalTestWake(t, store, watcher, false)
+	})
+	t.Run("mutual waits do not count", func(t *testing.T) {
+		store, _, watcher, target := signalTestPair(t)
+		_, err := store.SetOrchestrator(t.Context(), "owner", target, true)
+		require.NoError(t, err)
+		signalTestArm(t, store, watcher, target, false)
+		signalTestArm(t, store, target, watcher, false)
+		signalTestWake(t, store, watcher, false)
+		signalTestWake(t, store, target, false)
+	})
+	t.Run("mode off does not count", func(t *testing.T) {
+		store, _, watcher, target := signalTestPair(t)
+		signalTestArm(t, store, watcher, target, false)
+		_, err := store.SetOrchestrator(t.Context(), "owner", watcher, false)
+		require.NoError(t, err)
+		signalTestWake(t, store, watcher, false)
+	})
+}
+
+func TestWakeSource_InactiveReciprocalWait(t *testing.T) {
+	for _, inactive := range []string{"mode off", "killed", "unread signal"} {
+		t.Run(inactive, func(t *testing.T) {
+			store, db, watcher, target := signalTestPair(t)
+			_, err := store.SetOrchestrator(t.Context(), "owner", target, true)
+			require.NoError(t, err)
+			signalTestArm(t, store, watcher, target, false)
+			signalTestArm(t, store, target, watcher, false)
+			signalTestWake(t, store, watcher, false)
+			signalTestWake(t, store, target, false)
+
+			switch inactive {
+			case "mode off":
+				_, err = store.SetOrchestrator(t.Context(), "owner", watcher, false)
+				require.NoError(t, err)
+			case "killed":
+				_, err = store.MarkSessionKilledWithOutput(t.Context(), watcher, 0)
+				require.NoError(t, err)
+			case "unread signal":
+				signalTestFire(t, store, target, 1)
+				signalTestArm(t, store, watcher, target, false)
+				_, err = db.ExecContext(t.Context(), `UPDATE session_inbox SET state = 'handled',
+					resolved_at = CURRENT_TIMESTAMP, resolution_reason = 'test' WHERE session_id = ?`, watcher)
+				require.NoError(t, err)
+			}
+
+			signalTestWake(t, store, watcher, false)
+			signalTestWake(t, store, target, true)
+		})
+	}
+}
+
+func signalTestWake(t *testing.T, store *Store, watcher int64, want bool) {
+	t.Helper()
+	wake, err := store.HasBackgroundWakeSource(t.Context(), watcher)
+	require.NoError(t, err)
+	assert.Equal(t, want, wake)
+	obligation, err := store.HasBackgroundObligationByRoot(t.Context(), watcher)
+	require.NoError(t, err)
+	assert.Equal(t, want, obligation)
+}
+
 func TestWakeSource_UndeliveredBackgroundLinkStates(t *testing.T) {
 	ctx := context.Background()
 	store, db, projectID := newTestStore(t)

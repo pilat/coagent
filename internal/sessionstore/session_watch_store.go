@@ -206,7 +206,8 @@ func saveWatchPosition(
 
 	_, err = tx.ExecContext(ctx, `INSERT INTO session_watches (watcher_id, target_id, read_through)
 		VALUES (?, ?, ?) ON CONFLICT(watcher_id, target_id) DO UPDATE
-		SET read_through = MAX(session_watches.read_through, excluded.read_through)`, read.WatcherID, newest, cursor)
+		SET read_through = MAX(session_watches.read_through, excluded.read_through), signalled = 0`,
+		read.WatcherID, newest, cursor)
 	if err != nil {
 		return fmt.Errorf("save watch position: %w", err)
 	}
