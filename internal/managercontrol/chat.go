@@ -206,6 +206,32 @@ func (c *controller) AdvanceChat(ctx context.Context, chatID string, sessionID, 
 	return advanced, nil
 }
 
+func (c *controller) Orchestrator(ctx context.Context, _ string, id int64) (bool, error) {
+	if err := requireManagerIdentity(c.managerID); err != nil {
+		return false, err
+	}
+
+	on, err := c.app.store.OrchestratorMode(ctx, c.managerID, id)
+	if err != nil {
+		return false, fmt.Errorf("%w", err)
+	}
+
+	return on, nil
+}
+
+func (c *controller) SetOrchestrator(ctx context.Context, _ string, id int64, on bool) (bool, error) {
+	if err := requireManagerIdentity(c.managerID); err != nil {
+		return false, err
+	}
+
+	changed, err := c.app.store.SetOrchestrator(ctx, c.managerID, id, on)
+	if err != nil {
+		return false, fmt.Errorf("%w", err)
+	}
+
+	return changed, nil
+}
+
 func (c *controller) chatSession(ctx context.Context, sessionID int64) (*sessionstore.SessionRecord, error) {
 	if err := requireManagerIdentity(c.managerID); err != nil {
 		return nil, err

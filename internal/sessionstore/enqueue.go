@@ -105,7 +105,13 @@ func EnqueueTx(ctx context.Context, tx *sql.Tx, in Input) (*Enqueued, error) {
 			return &Enqueued{}, nil
 		}
 
-		if err := activateScheduledInputTx(ctx, tx, in.SessionID, now); err != nil {
+		if err := activateManagerInputTx(ctx, tx, in.SessionID, now); err != nil {
+			return nil, err
+		}
+	}
+
+	if in.Source == InputSourceAgent && parentID == 0 {
+		if err := activateAgentInputTx(ctx, tx, in.SessionID, now); err != nil {
 			return nil, err
 		}
 	}
@@ -417,8 +423,8 @@ func prepareEnqueueAttributesTx(
 	return attributes, nil
 }
 
-func activateScheduledInputTx(ctx context.Context, tx *sql.Tx, id int64, at time.Time) error {
-	if err := startScheduledEpisode(ctx, tx, id); err != nil {
+func activateManagerInputTx(ctx context.Context, tx *sql.Tx, id int64, at time.Time) error {
+	if err := startManagerEpisode(ctx, tx, id); err != nil {
 		return err
 	}
 
@@ -428,7 +434,7 @@ func activateScheduledInputTx(ctx context.Context, tx *sql.Tx, id int64, at time
 		at,
 		id,
 	); err != nil {
-		return fmt.Errorf("activate scheduled root: %w", err)
+		return fmt.Errorf("activate manager input root: %w", err)
 	}
 
 	return nil

@@ -23,6 +23,8 @@ const (
 	maxDepth     = 3
 )
 
+const spawnHeadroom = 4
+
 var (
 	errDaemonShuttingDown = errors.New("daemon is shutting down")
 	errNoCapacity         = errors.New("session capacity reached")
@@ -76,6 +78,13 @@ func (s *runnerSet) load(id int64) (*runner, bool) {
 	r, ok := s.byID[id]
 
 	return r, ok
+}
+
+func (s *runnerSet) freeSlots() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return maxTotal - s.running
 }
 
 func (s *runnerSet) register(r *runner) (*runner, bool) {

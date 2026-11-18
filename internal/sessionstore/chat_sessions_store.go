@@ -11,7 +11,6 @@ import (
 
 type chatSessionActivity struct {
 	ChatSession
-	activity time.Time
 }
 
 // ChatSessions lists live owned roots by their last output or conversational input.
@@ -61,6 +60,15 @@ func (s *Store) ChatSessions(ctx context.Context, managerID string) ([]ChatSessi
 	return sessions, nil
 }
 
+// ChatDisplayName shares the root's display name across session lists and sender provenance.
+func ChatDisplayName(project, title string) string {
+	if title != "" {
+		return project + " · " + title
+	}
+
+	return project
+}
+
 func scanChatSession(rows *sql.Rows) (chatSessionActivity, error) {
 	var session chatSessionActivity
 	var created time.Time
@@ -79,30 +87,22 @@ func scanChatSession(rows *sql.Rows) (chatSessionActivity, error) {
 		return chatSessionActivity{}, fmt.Errorf("scan chat session summary: %w", err)
 	}
 
-	session.Name = chatDisplayName(projectName, title)
+	session.Name = ChatDisplayName(projectName, title)
 
-	session.activity = output.Time
-	if input.Time.After(session.activity) {
-		session.activity = input.Time
+	session.Activity = output.Time
+	if input.Time.After(session.Activity) {
+		session.Activity = input.Time
 	}
 
 	if !output.Valid && !input.Valid {
-		session.activity = created
+		session.Activity = created
 	}
 
 	return session, nil
 }
 
-func chatDisplayName(project, title string) string {
-	if title != "" {
-		return project + " · " + title
-	}
-
-	return project
-}
-
 func compareChatSessions(a, b chatSessionActivity) int {
-	if order := b.activity.Compare(a.activity); order != 0 {
+	if order := b.Activity.Compare(a.Activity); order != 0 {
 		return order
 	}
 

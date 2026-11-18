@@ -35,6 +35,11 @@ type fakeController struct {
 		id    int64
 		title string
 	}
+	orchestrator        bool
+	orchestratorChanged bool
+	orchestratorErr     error
+	orchestratorReads   []orchestratorRead
+	orchestratorWrites  []orchestratorWrite
 
 	createSessionCalls  []controllerapi.SessionCreateData
 	createSessionErr    error
@@ -48,6 +53,17 @@ type fakeController struct {
 	listModelsCalls int
 	setModelCalls   []controllerapi.SessionSetModelData
 	setModelErr     error
+}
+
+type orchestratorRead struct {
+	chat string
+	id   int64
+}
+
+type orchestratorWrite struct {
+	chat string
+	id   int64
+	on   bool
 }
 
 func (f *fakeController) CreateSession(_ context.Context, data controllerapi.SessionCreateData) (int64, error) {
@@ -286,6 +302,20 @@ func (f *fakeController) SetSessionTitle(_ context.Context, _ string, id int64, 
 		title string
 	}{id, title})
 	return nil
+}
+
+func (f *fakeController) Orchestrator(_ context.Context, chat string, id int64) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.orchestratorReads = append(f.orchestratorReads, orchestratorRead{chat, id})
+	return f.orchestrator, f.orchestratorErr
+}
+
+func (f *fakeController) SetOrchestrator(_ context.Context, chat string, id int64, on bool) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.orchestratorWrites = append(f.orchestratorWrites, orchestratorWrite{chat, id, on})
+	return f.orchestratorChanged, f.orchestratorErr
 }
 
 func harnessResponse(req *http.Request, payload string) *http.Response {

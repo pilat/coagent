@@ -73,5 +73,8 @@ type Store interface { //nolint:interfacebloat // Lifecycle commands share atomi
 	HasBackgroundObligationByRoot(ctx context.Context, rootID int64) (bool, error)
 	GetProjectWorkDir(ctx context.Context, projectID int64) (string, error)
 	GetProjectName(ctx context.Context, projectID int64) (string, error)
+	ChatSessions(context.Context, string) ([]sessionstore.ChatSession, error)
+	ListProjects(context.Context) ([]sessionstore.ProjectRow, error)
+	GetOrCreateNamedProject(context.Context, string, string) (int64, error)
 	ReactivateForSchedule(context.Context, int64) (bool, error)
 }

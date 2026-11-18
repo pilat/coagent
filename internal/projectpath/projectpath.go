@@ -52,6 +52,15 @@ func WorktreePath(root, repoRoot, name string) string {
 	return filepath.Join(root, RepoNamespace(repoRoot), name)
 }
 
+// IsWorktreePath reports whether dir is exactly two levels below root,
+// matching WorktreePath's namespace/name layout without inspecting the filesystem.
+func IsWorktreePath(root, dir string) bool {
+	root = filepath.Clean(root)
+	parent := filepath.Dir(dir)
+
+	return parent != root && filepath.Dir(parent) == root
+}
+
 // RepoNamespace returns the stable display and filesystem namespace for a repository.
 func RepoNamespace(repoRoot string) string {
 	clean := repoRoot

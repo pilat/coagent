@@ -33,6 +33,7 @@ var toolGroups = []struct {
 	{tool.PromptGroupSkills, "Skills", nil},
 	{tool.PromptGroupWeb, "Web", nil},
 	{tool.PromptGroupNone, "Scheduling", []string{"schedule", "sleep"}},
+	{tool.PromptGroupSessions, "Other sessions", nil},
 }
 
 var coreToolDescriptions = map[string]string{

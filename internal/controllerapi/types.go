@@ -25,7 +25,8 @@ const (
 	// SessionAttributeManagerID is the durable owner of a root session. Manager
 	// subscriptions are routed by this value, so one manager never receives
 	// another manager's conversation.
-	SessionAttributeManagerID = "manager_id"
+	SessionAttributeManagerID    = "manager_id"
+	SessionAttributeOrchestrator = "orchestrator"
 	// SessionAttributeWorktreeOrigin attests that the controller created a /gwt
 	// worktree; it is not accepted from a manager or ordinary session attributes.
 	SessionAttributeWorktreeOrigin = "coagent_worktree_origin"
@@ -179,4 +180,11 @@ type ScheduleInfo struct {
 	LastFiredAt *time.Time `json:"last_fired_at,omitempty"`
 	Fresh       bool       `json:"fresh"`
 	Prompt      string     `json:"prompt,omitempty"`
+}
+
+// OrchestratorMode accepts only the durable JSON boolean, never a string or number.
+func OrchestratorMode(attrs map[string]any) bool {
+	on, _ := attrs[SessionAttributeOrchestrator].(bool)
+
+	return on
 }

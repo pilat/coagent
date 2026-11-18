@@ -8,6 +8,21 @@ The shared vocabulary of coagent — the words that name its concepts, so code, 
 
 ## Actors & entities
 
+- **orchestrator mode**: A durable capability on one manager-owned root, granted and revoked only by the human with
+  `/orchestrate on|off`. It gives that root `list_sessions`, `send_to_session` and `spawn_session` over every live root
+  of its manager; its subagents never get them. It is not a session kind, agent type or role
+  ([ADR-0097](adr/0097-orchestrator-mode-is-a-human-granted-capability-on-an-ordinary-root.md)).
+  _Avoid_: assistant, desk, coordinator, supervisor; "orchestrator" for the daemon.
+- **orchestrator**: A root session with orchestrator mode on. _Avoid_: manager (that is the Telegram-side owner),
+  parent (that is the subagent relation).
+- **sent message**: Text one orchestrator writes into another root with `send_to_session` or as a `spawn_session`
+  prompt: `source=agent` input with sender provenance and no human authority. The target sees a host-authored line
+  naming the sender; its chat shows `↪ from #N name`. _Avoid_: relay, forward, reply.
+- **sender provenance**: The sending session's id and names carried as inbox attributes of a sent message and turned
+  into the host line and chat marker when the target accepts it. Never part of the message text.
+- **spawned session**: A root created by `spawn_session`: ordinary and manager-owned, with its own budget, outside the
+  orchestrator's stop tree; its first input is a sent message. _Avoid_: child, subagent (those are `task`).
+
 **daemon**:
 The single long-lived coagent process. It coordinates session lifecycle, durable
 producer ledgers and admission. `managercontrol`

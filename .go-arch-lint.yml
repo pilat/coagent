@@ -51,6 +51,7 @@ components:
   mcpstore:     { in: internal/mcpstore }
   sessionstore: { in: internal/sessionstore }
   subagent:     { in: internal/subagent }
+  orchestrator: { in: internal/orchestrator }
   transcript:   { in: internal/transcript }
   managerdelivery: { in: internal/managerdelivery }
   managercontrol: { in: internal/managercontrol }
@@ -110,6 +111,8 @@ deps:
     mayDependOn: [budget, controllerapi, progress, todo, transcript]
   subagent:
     mayDependOn: [loader, logger, registry, sessionstore, tool, transcript]
+  orchestrator:
+    mayDependOn: [tool]
   mcpstore:
     mayDependOn: [coagenthome, tool]
   sessionbus:
@@ -197,9 +200,9 @@ deps:
   managers:
     mayDependOn: [config, controllerapi, logger, telegram]
 
-  # Orchestrator.
+  # Lifecycle owner.
   daemon:
-    mayDependOn: [backgroundprocess, budget, coagenthome, config, configapply, controllerapi, git, id, llm, llmwire, loader, logger, mcp, mcpstore, progress, progressruntime, projectpath, registry, schedule, session, sessionbuild, sessionprompt, sessionbus, sessionevent, sessionstore, subagent, todo, tool, transcript, worktree]
+    mayDependOn: [backgroundprocess, budget, coagenthome, config, configapply, controllerapi, git, id, llm, llmwire, loader, logger, mcp, mcpstore, orchestrator, progress, progressruntime, projectpath, registry, schedule, session, sessionbuild, sessionprompt, sessionbus, sessionevent, sessionstore, subagent, todo, tool, transcript, worktree]
 
   configops:
     mayDependOn: [coagenthome, config, logger]

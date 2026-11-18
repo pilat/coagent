@@ -431,3 +431,40 @@ func newBoundaryFixture(t *testing.T, previous []llmwire.Message) (*sql.DB, *ses
 	t.Cleanup(s.Close)
 	return db, store, s
 }
+
+func TestBoundarySentMessageCarriesSenderProvenance(t *testing.T) {
+	for _, kind := range []string{"title", "untitled", "followup"} {
+		t.Run(kind, func(t *testing.T) {
+			_, store, s := newBoundaryFixture(t, []llmwire.Message{usr("history"), asst("answer")})
+			attrs := map[string]any{}
+			line := "[Message from coagent session #12 — written by that session's agent, not by the human]"
+			if kind != "followup" {
+				attrs["sender_session_id"] = 12
+				attrs["sender_name"] = "coagent · fix flaky tests"
+			}
+			if kind == "title" {
+				attrs["sender_title"] = "fix flaky tests"
+				line = "[Message from coagent session #12 \"fix flaky tests\" — written by that session's agent, not by the human]"
+			}
+			_, err := store.Enqueue(t.Context(), sessionstore.Input{
+				SessionID: s.id,
+				Source:    sessionstore.InputSourceAgent, Content: "hello", Attributes: attrs,
+			})
+			require.NoError(t, err)
+			_, err = s.boundaryStep(t.Context(), &runState{})
+			require.NoError(t, err)
+			messages, err := store.LoadActiveMessages(t.Context(), s.id)
+			require.NoError(t, err)
+			outputs, err := store.ChatOutputs(t.Context(), s.id, 0, 100)
+			require.NoError(t, err)
+			if kind == "followup" {
+				assert.NotContains(t, messages[len(messages)-1].Content, "[Message from")
+				assert.Empty(t, outputs)
+			} else {
+				assert.Contains(t, messages[len(messages)-1].Content, line+"\n\nhello")
+				require.Len(t, outputs, 1)
+				assert.Equal(t, "↪ from #12 coagent · fix flaky tests\n\nhello", outputs[0].Content)
+			}
+		})
+	}
+}
