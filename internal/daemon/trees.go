@@ -14,6 +14,7 @@ import (
 	"github.com/pilat/coagent/internal/coagenthome"
 	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/logger"
+	"github.com/pilat/coagent/internal/orchestrator"
 	"github.com/pilat/coagent/internal/session"
 	"github.com/pilat/coagent/internal/sessionbuild"
 	"github.com/pilat/coagent/internal/sessionevent"
@@ -61,7 +62,13 @@ func (s *Service) kill(ctx context.Context, input *sessionstore.InboxInput) erro
 		return err
 	}
 
-	return s.killLocked(ctx, input.SessionID)
+	if err := s.killLocked(ctx, input.SessionID); err != nil {
+		return err
+	}
+
+	s.signalOutcome(ctx, input.SessionID, orchestrator.SignalKilled, 0)
+
+	return nil
 }
 
 // The already-stopped check and receipt share the fence with tree cleanup.
@@ -89,7 +96,13 @@ func (s *Service) stop(ctx context.Context, input *sessionstore.InboxInput) erro
 		return err
 	}
 
-	return s.stopLocked(ctx, record, input.ID)
+	if err := s.stopLocked(ctx, record, input.ID); err != nil {
+		return err
+	}
+
+	s.signalOutcome(ctx, input.SessionID, orchestrator.SignalStopped, 0)
+
+	return nil
 }
 
 func (s *Service) Fence(fenceCtx context.Context, rootSessionID int64) (func(), error) {
@@ -324,7 +337,14 @@ func (s *Service) clear(ctx context.Context, input *sessionstore.InboxInput) (in
 		return 0, err
 	}
 
-	return s.clearLocked(ctx, input.SessionID, input.ID)
+	replacement, err := s.clearLocked(ctx, input.SessionID, input.ID)
+	if err != nil {
+		return 0, err
+	}
+
+	s.signalOutcome(ctx, replacement, orchestrator.SignalCleared, input.SessionID)
+
+	return replacement, nil
 }
 
 func (s *Service) clearLocked(ctx context.Context, sessionID, inputID int64) (int64, error) {

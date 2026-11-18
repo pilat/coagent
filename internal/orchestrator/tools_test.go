@@ -27,6 +27,8 @@ type fakeHost struct {
 	err     error
 	calls   []hostCall
 	page    Page
+	was     bool
+	unread  bool
 }
 
 func (h *fakeHost) ListSessions(_ context.Context, caller int64, filter string) ([]Entry, int, error) {
@@ -34,14 +36,26 @@ func (h *fakeHost) ListSessions(_ context.Context, caller int64, filter string) 
 	return h.entries, h.total, h.err
 }
 
-func (h *fakeHost) SendToSession(_ context.Context, caller, target int64, message string) (int64, error) {
+func (h *fakeHost) SendToSession(_ context.Context, caller, target int64, message string) (int64, bool, error) {
 	h.calls = append(h.calls, hostCall{caller: caller, target: target, message: message})
-	return 25, h.err
+	return 25, h.unread, h.err
 }
 
 func (h *fakeHost) ReadSession(_ context.Context, caller, target int64, latest bool) (Page, error) {
 	h.calls = append(h.calls, hostCall{caller: caller, target: target, latest: latest})
 	return h.page, h.err
+}
+
+func (h *fakeHost) Subscribe(_ context.Context, caller, target int64) (int64, bool, error) {
+	h.calls = append(h.calls, hostCall{caller: caller, target: target})
+
+	return 25, h.unread, h.err
+}
+
+func (h *fakeHost) Unsubscribe(_ context.Context, caller, target int64) (int64, bool, error) {
+	h.calls = append(h.calls, hostCall{caller: caller, target: target})
+
+	return 25, h.was, h.err
 }
 
 func (h *fakeHost) SpawnSession(
@@ -91,12 +105,12 @@ func TestToolsResultsAndHostArguments(t *testing.T) {
 		{IDListSessions, `{"filter":"api"}`, "", `No sessions match "api".`, hostCall{caller: 12, filter: "api"}},
 		{
 			IDSendToSession, `{"session_id":13,"message":" hello\nthere "}`, "sent to #25",
-			"Message queued for session #25. No reply or completion signal comes back; do not poll.",
+			"Message queued for session #25. You get one signal when its turn is over; then read it with read_session.",
 			hostCall{caller: 12, target: 13, message: " hello\nthere "},
 		},
 		{
 			IDSpawnSession, `{"project":"api","worktree":"login","prompt":" solve login "}`, "spawned #26",
-			"Started session #26 in api — login. No reply or completion signal comes back; do not poll.",
+			"Started session #26 in api — login. You get one signal when its first turn is over; then read it with read_session.",
 			hostCall{caller: 12, project: "api", worktree: "login", prompt: " solve login "},
 		},
 	} {
@@ -117,12 +131,14 @@ func TestToolsResultsAndHostArguments(t *testing.T) {
 
 func TestToolsDeclarations(t *testing.T) {
 	tools := NewTools(nil, 12)
-	require.Len(t, tools, 4)
+	require.Len(t, tools, 6)
 	for i, tc := range []struct{ id, trail, prompt string }{
 		{IDListSessions, "filter", "list your root sessions"},
 		{IDSendToSession, "message", "write to a session"},
 		{IDSpawnSession, "prompt", "start a session in a project"},
 		{id: IDReadSession, trail: "", prompt: "read a session's chat"},
+		{id: IDSubscribe, prompt: "get a signal when a session's turn ends"},
+		{id: IDUnsubscribe, prompt: "stop those signals"},
 	} {
 		candidate := tools[i]
 		assert.Equal(t, tc.id, candidate.ID())

@@ -9,7 +9,7 @@ The shared vocabulary of coagent — the words that name its concepts, so code, 
 ## Actors & entities
 
 - **orchestrator mode**: A durable capability on one manager-owned root, granted and revoked only by the human with
-  `/orchestrate on|off`. It gives that root `list_sessions`, `send_to_session`, `spawn_session` and `read_session` over roots
+  `/orchestrate on|off`. It gives that root `list_sessions`, `send_to_session`, `spawn_session`, `read_session`, `subscribe` and `unsubscribe` over roots
   of its manager; its subagents never get them. It is not a session kind, agent type or role
   ([ADR-0097](adr/0097-orchestrator-mode-is-a-human-granted-capability-on-an-ordinary-root.md)).
   _Avoid_: assistant, desk, coordinator, supervisor; "orchestrator" for the daemon.
@@ -326,14 +326,35 @@ _Avoid_: per-session read tracking, transport receipt, read position (that is an
 **read position**:
 `session_watches.read_through`, the highest output-log id one orchestrator has read of one root
 lineage. Only `read_session` advances it; it survives restart and compaction and never touches the chat focus.
-Absent means the next read shows the newest rows
+Absent means the next read shows the newest rows. A first arm positions a new watch at the target's output-log end;
+an existing watch keeps its position
 ([ADR-0098](adr/0098-an-orchestrator-reads-output-logs-from-its-own-position.md)).
 _Avoid_: chat cursor (that is the human's), offset, bookmark.
 
 **watch**:
-One `session_watches` row: an orchestrator (watcher) and a root (target) with the read position, the place
-later stages keep subscription and signal state.
-_Avoid_: subscription (that is a later, standing intent), follow.
+One `session_watches` row: an orchestrator (watcher) and a root (target) with its read position, arms and unread signal.
+_Avoid_: subscription alone (say standing subscription; "subscription" also names a manager event subscription), follow.
+
+**outcome signal**:
+One host-authored model line in an orchestrator's inbox naming the watched root's ids, project and turn outcome,
+and pointing to `read_session`; it carries no target-authored text or title. It is a `source=subagent` row.
+The orchestrator's chat shows a persist-only `🔔 #N display name …` row using the shared project/title display name;
+that row never enters its model transcript. For `/clear` the name belongs to the cleared session. At most one is unread per watch
+([ADR-0099](adr/0099-turn-outcomes-signal-watchers-through-armed-watch-rows.md)).
+_Avoid_: notification (that is a manager event), reply, terminal signal.
+
+**turn outcome**:
+The end of a root's work for now: a final answer with no pending input and no background wake source, an error that
+ends the run, `/stop`, a budget park, `/kill` or `/clear`. Steps, idle flips and output rows are not outcomes.
+_Avoid_: finish reason (that is the provider's), completion (a subagent's), iteration (one LLM call plus its tools;
+a turn outcome ends one or more iterations).
+
+**arm**:
+A watch's readiness to fire: one-shot (set by `send_to_session` and `spawn_session`, consumed by the next processed outcome) or standing
+(set by `subscribe`, cleared by `unsubscribe`, re-armed by each read). An armed one-shot is a background wake source
+of the watcher.
+_Avoid_: subscription for the one-shot; "armed" alone, which also names a budget generation — say armed wait or
+standing subscription.
 
 **entry**:
 A selected session's bold `→ #N name` header followed by its last three renderable
@@ -413,7 +434,7 @@ _Avoid_: command text authorization, hidden tool.
 A sentinel error `sleep` returns to checkpoint and exit the agent loop *without* recording a result; the timer's exact result is injected on resume. The persisted status is `suspended`. Standalone `schedule` creates future work but does not suspend the calling session.
 
 **session input**:
-A user/agent action, scheduled turn, exact call result or process/subagent completion addressed to an
+A user/agent action, scheduled turn, exact call result, process/subagent completion or outcome signal addressed to an
 existing session and accepted into the durable `session_inbox` FIFO before any
 consumer observes it. A normal message or bounded completion envelope is
 promoted into the append-only transcript; a generic session command is
@@ -421,6 +442,7 @@ handled from the same ledger without entering the LLM. Manager-specific UI
 actions such as project spawning, pickers and masked secret prompts remain with
 the manager. The same input path handles a live, idle, suspended, or stopped
 session; “steering” and “waking” are no longer separate data transports.
+`source=subagent` carries a host-authored completion fact about another session, delivered to a session waiting on it.
 _Avoid_: steering message, wake message, in-memory inbox.
 
 **waiting projection**:
@@ -521,7 +543,7 @@ ends an activation is a separate agent-loop decision.
 _Avoid_: task completion, final answer, terminal signal.
 
 **background wake source**:
-A durable process or subagent obligation that will deliver model-bound input
+A durable process or subagent obligation or an armed one-shot wait for an outcome signal that will deliver model-bound input
 after the current activation ends, including a completion already queued in the
 session inbox. It is established from producer ledgers and inbox state, not from
 prompt text or a process-local snapshot, and therefore survives daemon restart.

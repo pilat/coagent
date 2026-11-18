@@ -31,6 +31,8 @@ const (
 	InputAttributeSenderSessionID = "sender_session_id"
 	InputAttributeSenderName      = "sender_name"
 	InputAttributeSenderTitle     = "sender_title"
+	InputAttributeSignalTargetID  = "signal_target_id"
+	InputAttributeSignalNotice    = "signal_notice"
 )
 
 const inboxColumns = `id, session_id, source, raw_content, attributes, received_at, state, resolved_at, resolution_reason, accepted_message_id, COALESCE(delivery_key, '')`

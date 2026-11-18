@@ -89,7 +89,7 @@ does not imply a tier except where it expresses an implementation variant.
 - `internal/managercontrol` — manager-bound application use cases and controller adaptation.
 - `internal/managerdiscovery` — manager-facing project, model, skill and spawn-favorites discovery.
 - `internal/migrate` — SQLite opening and schema migration with production backup policy.
-- `internal/orchestrator` — orchestrator-mode tools (list, send, spawn, read) over a daemon-implemented host; schemas, validation and result text only.
+- `internal/orchestrator` — orchestrator-mode tools (list, send, spawn, read, subscribe, unsubscribe) over a daemon-implemented host; schemas, validation and result text only.
 - `internal/progress` — transport-neutral diagnostic status facts and Markdown rendering.
 - `internal/progressruntime` — on-demand status projection and live runner/model/context state.
 - `internal/projectpath` — canonical project-root paths and project-name validation.
@@ -184,6 +184,11 @@ advanced only by `read_session` in the transaction that selects the page. It nev
 touches `chat_focus`. Replacement chains are read in output-log id order and
 re-keyed onto the newest root. The result is untrusted tool output
 ([ADR-0098](docs/adr/0098-an-orchestrator-reads-output-logs-from-its-own-position.md)).
+The row also holds one-shot `armed`, standing `subscribed` and unread `signalled` state; reads clear the last.
+The first arm creates a watch at the target's output-log end; later arms keep its read position.
+The daemon's `signalOutcome` fires at five turn-outcome points as `source=subagent`, consuming arms even when an unread signal covers the outcome.
+Armed one-shot waits count as wake sources and budget obligations, except active mutual waits; standing arms do not.
+Target `/clear` moves the rows to its replacement ([ADR-0099](docs/adr/0099-turn-outcomes-signal-watchers-through-armed-watch-rows.md)).
 
 Entry sends a header and the last three renderable rows, oldest first. Those
 rows and the newest outbox ID of any type come from one read. Entry then
@@ -622,7 +627,7 @@ Background work reports independently without blocking the parent. A child can
 have serialized rounds: an activation sequence rejects delayed completions from
 an earlier round. Foreground completion uses a transactional link compare-and-swap
 with an exact `source=call_result` parent inbox row. Background completion commits its
-delivery acknowledgement with one `source=subagent` parent inbox row; the shared
+delivery acknowledgement with one `source=subagent` parent inbox row, the source also used for host-authored outcome signals; the shared
 loop later promotes that bounded envelope. If the parent or its root was killed,
 the same transaction closes the link obligation without creating inbox input;
 startup recovery retains that suppression path across a crash window. The parent
@@ -722,7 +727,7 @@ the control socket carries no event traffic and no server pushes
 
 Orchestrator mode is a durable attribute on an ordinary manager-owned root,
 granted and revoked only by human `/orchestrate on|off`; it survives restart and `/clear`.
-From its next run, that root alone gets list, send, spawn and read tools, with mode and
+From its next run, that root alone gets list, send, spawn, read, subscribe and unsubscribe tools, with mode and
 ownership checked on every call; its subagents and targets receive no new tool.
 Sent messages carry host-authored sender provenance at acceptance and appear in
 the target's chat. Their authority is plain text: no commands, grants, skill
@@ -732,6 +737,9 @@ excluding coagent worktrees identified by the configured worktrees-root layout; 
 worktrees use guarded no-execution creation. A spawned root takes its title from
 the prompt at creation; it is independent and never moves chat focus ([ADR-0097](docs/adr/0097-orchestrator-mode-is-a-human-granted-capability-on-an-ordinary-root.md)).
 Reading another session writes nothing to it and returns untrusted data; `batch` refuses `read_session`.
+The model-facing signal contains ids, project name and outcome kind, without target-authored text or title.
+Its persist-only chat row carries the target's shared display name, including title; it never enters the watcher's transcript.
+For `/clear` the chat names the cleared session and replacement id. The target sees neither surface.
 
 ### Credential boundary
 

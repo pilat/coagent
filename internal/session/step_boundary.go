@@ -174,7 +174,7 @@ func (s *Session) handleBoundaryInput(
 	}
 
 	if len(batch.pending) > 0 && sleepsOnly {
-		s.interruptBoundarySleeps(batch, input.Source)
+		s.interruptBoundarySleeps(batch, input)
 		return boundaryStop, nil
 	}
 
@@ -353,16 +353,20 @@ func (s *Session) deferBoundaryCompaction(batch *boundaryBatch, input *sessionst
 	s.compactionDeferAnnounced = true
 }
 
-func (s *Session) interruptBoundarySleeps(batch *boundaryBatch, source sessionstore.InputSource) {
+func (s *Session) interruptBoundarySleeps(batch *boundaryBatch, input *sessionstore.InboxInput) {
 	notice := sleepInterruptedMessage
 
-	switch source {
+	switch input.Source {
 	case sessionstore.InputSourceSchedule:
 		notice = "Sleep interrupted — a scheduled task became due."
 	case sessionstore.InputSourceAgent:
 		notice = "Sleep interrupted — another session sent a message."
+	case sessionstore.InputSourceSubagent:
+		if inputSignalNotice(input) != "" {
+			notice = "Sleep interrupted — a result from another session arrived."
+		}
 	case sessionstore.InputSourceUser, sessionstore.InputSourceProcess,
-		sessionstore.InputSourceSubagent, sessionstore.InputSourceCallResult:
+		sessionstore.InputSourceCallResult:
 	}
 
 	for _, call := range s.PendingExternalCalls() {
@@ -533,6 +537,8 @@ func (s *Session) acceptBoundaryText(
 
 		return boundaryContinue, nil
 	}
+
+	signalNotice(batch, input)
 
 	c := &batch.commit
 	content := s.prompt.AppendGitStateDelta(

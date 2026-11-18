@@ -68,9 +68,18 @@ func (h orchestratorHost) SpawnSession(
 
 	err = h.s.store.WithTx(ctx, func(tx *sql.Tx) error {
 		var err error
-		sessionID, err = h.createSpawnTx(ctx, tx, selected, prompt, attrs, sender)
 
-		return err
+		sessionID, err = h.createSpawnTx(ctx, tx, selected, prompt, attrs, sender)
+		if err != nil {
+			return err
+		}
+
+		_, err = sessionstore.ArmWatchTx(ctx, tx, callerID, sessionID, false)
+		if err != nil {
+			return fmt.Errorf("arm spawned session watch: %w", err)
+		}
+
+		return nil
 	})
 	if err != nil {
 		return 0, "", fmt.Errorf("spawn session: %w", created.Abandon(err))

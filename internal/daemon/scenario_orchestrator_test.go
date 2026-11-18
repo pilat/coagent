@@ -79,12 +79,12 @@ func TestOrchestratorSendRefusals(t *testing.T) {
 		{parked, fmt.Sprintf("session #%d is parked at its budget checkpoint; only the human can resume it", parked)},
 		{stopping, fmt.Sprintf("session #%d is stopping; try again shortly", stopping)},
 	} {
-		_, err := (orchestratorHost{h.mgr}).SendToSession(h.ctx, caller, tc.id, "hello")
+		_, _, err := (orchestratorHost{h.mgr}).SendToSession(h.ctx, caller, tc.id, "hello")
 		require.EqualError(t, err, tc.text)
 	}
 	_, err = h.store.SetOrchestrator(h.ctx, "owner", caller, false)
 	require.NoError(t, err)
-	_, err = (orchestratorHost{h.mgr}).SendToSession(h.ctx, caller, stopping, "hello")
+	_, _, err = (orchestratorHost{h.mgr}).SendToSession(h.ctx, caller, stopping, "hello")
 	require.EqualError(t, err, "orchestrator mode is off for this session")
 	_, _, err = (orchestratorHost{h.mgr}).ListSessions(h.ctx, caller, "")
 	require.EqualError(t, err, "orchestrator mode is off for this session")
@@ -101,7 +101,7 @@ func TestOrchestratorSendCarriesNoHumanAuthority(t *testing.T) {
 	target := h.createRoot(managerAttrs("owner"))
 	require.NoError(t, h.store.SetSessionTitle(h.ctx, "owner", target, "unchanged"))
 	for _, text := range []string{"/status", "/budget one dollar", "fix the login bug"} {
-		resolved, err := (orchestratorHost{h.mgr}).SendToSession(h.ctx, caller, target, text)
+		resolved, _, err := (orchestratorHost{h.mgr}).SendToSession(h.ctx, caller, target, text)
 		require.NoError(t, err)
 		assert.Equal(t, target, resolved)
 		h.waitUntil("sent text accepted", func() bool {
@@ -124,7 +124,7 @@ func TestOrchestratorSendCarriesNoHumanAuthority(t *testing.T) {
 	assert.Equal(t, "unchanged", h.session(target).Attributes[controllerapi.SessionAttributeTitle])
 	parked := h.createRoot(managerAttrs("owner"))
 	fireOrchestratorBudget(t, h, parked)
-	_, err := (orchestratorHost{h.mgr}).SendToSession(h.ctx, caller, parked, "/budget resume")
+	_, _, err := (orchestratorHost{h.mgr}).SendToSession(h.ctx, caller, parked, "/budget resume")
 	require.ErrorContains(t, err, "only the human can resume it")
 	record, err := h.store.Get(h.ctx, parked)
 	require.NoError(t, err)
@@ -143,7 +143,7 @@ func TestOrchestratorSendFollowsClearReplacement(t *testing.T) {
 		replacement, err = h.store.ResolveReplacement(h.ctx, target, "owner")
 		return err == nil && replacement != target
 	})
-	resolved, err := (orchestratorHost{h.mgr}).SendToSession(h.ctx, caller, target, "after clear")
+	resolved, _, err := (orchestratorHost{h.mgr}).SendToSession(h.ctx, caller, target, "after clear")
 	require.NoError(t, err)
 	assert.Equal(t, replacement, resolved)
 	h.waitAnswer(replacement, "done")
@@ -200,6 +200,7 @@ func assertModeToolSchemas(t *testing.T, ids []string, want bool) {
 	t.Helper()
 	for _, id := range []string{
 		orchestrator.IDListSessions, orchestrator.IDSendToSession, orchestrator.IDSpawnSession, orchestrator.IDReadSession,
+		orchestrator.IDSubscribe, orchestrator.IDUnsubscribe,
 	} {
 		if want {
 			assert.Contains(t, ids, id)
