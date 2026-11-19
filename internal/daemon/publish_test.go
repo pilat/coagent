@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 
 	"github.com/pilat/coagent/internal/sessionevent"
 	"github.com/pilat/coagent/internal/sessionstore"
@@ -41,43 +40,6 @@ func TestPublishGate_OwnerlessRootReachesNoManager(t *testing.T) {
 	rec := h.createRoot(nil)
 	mgr.NotifySession(rec, sessionevent.Notification{Type: sessionevent.NotifyMessage, Message: "unowned"})
 	requireNoManagerNotification(t, alpha)
-}
-
-func TestPublishGate_ClaimingOwnerUpdatesTheWarmRoute(t *testing.T) {
-	h := newHarness(t, harnessOptions{configure: withTestModels, clientFor: (&mockFactory{}).client})
-	mgr := h.mgr
-	alpha := mgr.bus.SubscribeManager("alpha")
-	rec := h.createRoot(nil)
-	mgr.NotifySession(rec, sessionevent.Notification{Type: sessionevent.NotifyMessage, Message: "before"})
-	requireNoManagerNotification(t, alpha)
-	require.NoError(t, mgr.SetAttributes(context.Background(), rec, managerAttrs("alpha")))
-	mgr.NotifySession(rec, sessionevent.Notification{Type: sessionevent.NotifyMessage, Message: "after"})
-	assert.Equal(t, "after", requireNotification(t, alpha).Notification.Message)
-}
-
-func TestPublishGate_ConcurrentClaimWinsOverAStaleRouteRead(t *testing.T) {
-	h := newHarness(t, harnessOptions{configure: withTestModels, clientFor: (&mockFactory{}).client})
-	mgr := h.mgr
-	alpha := mgr.bus.SubscribeManager("alpha")
-	rec := h.createRoot(nil)
-	stale := &staleReadSessionStore{
-		Store:  mgr.store,
-		target: rec,
-		read:   make(chan struct{}), release: make(chan struct{}),
-	}
-	mgr.store = stale
-	published := make(chan struct{})
-	go func() {
-		defer close(published)
-		mgr.NotifySession(rec, sessionevent.Notification{
-			Type: sessionevent.NotifyMessage, Message: "claimed while lookup was stale",
-		})
-	}()
-	waitForScenarioSignal(t, stale.read, "scenario signal")
-	require.NoError(t, mgr.SetAttributes(context.Background(), rec, managerAttrs("alpha")))
-	close(stale.release)
-	waitForScenarioSignal(t, published, "scenario signal")
-	assert.Equal(t, "claimed while lookup was stale", requireNotification(t, alpha).Notification.Message)
 }
 
 func TestPublishGate_DropsMalformedEventBeforeSessionLookup(t *testing.T) {
@@ -120,15 +82,6 @@ type countingSessionStore struct {
 	getCalls int
 }
 
-type staleReadSessionStore struct {
-	Store
-	target      int64
-	read        chan struct{}
-	release     chan struct{}
-	mu          sync.Mutex
-	intercepted bool
-}
-
 func (c *countingSessionStore) GetSession(ctx context.Context, id int64) (*sessionstore.SessionRecord, error) {
 	c.mu.Lock()
 	c.getCalls++
@@ -140,23 +93,4 @@ func (c *countingSessionStore) calls() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.getCalls
-}
-
-func (s *staleReadSessionStore) GetSession(
-	ctx context.Context,
-	id int64,
-) (*sessionstore.SessionRecord, error) {
-	record, err := s.Store.GetSession(ctx, id)
-	if err != nil || id != s.target {
-		return record, err
-	}
-	s.mu.Lock()
-	intercept := !s.intercepted
-	s.intercepted = true
-	s.mu.Unlock()
-	if intercept {
-		close(s.read)
-		<-s.release
-	}
-	return record, nil
 }

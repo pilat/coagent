@@ -277,35 +277,6 @@ func (s *Store) CreateReplacementSession(
 	}, nil
 }
 
-func (s *Store) SetAttributes(ctx context.Context, id int64, attrs map[string]any) error {
-	attrsJSON, err := json.Marshal(attrs)
-	if err != nil {
-		return fmt.Errorf("marshal attributes: %w", err)
-	}
-
-	now := time.Now().UTC()
-
-	result, err := s.db.ExecContext(
-		ctx,
-		`UPDATE sessions SET attributes = ?, updated_at = ? WHERE id = ?`,
-		string(attrsJSON), now, id,
-	)
-	if err != nil {
-		return fmt.Errorf("set attributes: %w", err)
-	}
-
-	rows, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("rows affected: %w", err)
-	}
-
-	if rows == 0 {
-		return fmt.Errorf("session %d not found", id)
-	}
-
-	return nil
-}
-
 func (s *Store) UpdateSessionModel(ctx context.Context, id int64, model, reasoningLevel string) error {
 	now := time.Now().UTC()
 

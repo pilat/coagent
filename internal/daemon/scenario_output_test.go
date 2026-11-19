@@ -712,7 +712,7 @@ func TestProcessCompletionRetainsInputWithoutWakingStoppedOrErroredSession(t *te
 	}
 }
 
-// Durable routing sends root events only to their owner across cache warming, claims and clear/recreation.
+// Durable routing sends root events only to their owner across cache warming, a cold cache and clear/recreation.
 func TestPublishRoutingModel_ManagerOwnershipSurvivesTransitions(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t, harnessOptions{configure: withTestModels, clientFor: (&mockFactory{}).client})
@@ -742,13 +742,10 @@ func TestPublishRoutingModel_ManagerOwnershipSurvivesTransitions(t *testing.T) {
 	}
 	alphaID := create("alpha")
 	betaID := create("beta")
-	claimedID := create("")
+	ownerlessID := create("")
 	publish(alphaID, "alpha owns this")
 	publish(betaID, "beta owns this")
-	publish(claimedID, "nobody owns this")
-	require.NoError(t, mgr.SetAttributes(ctx, claimedID, managerAttrs("alpha")))
-	model[claimedID] = "alpha"
-	publish(claimedID, "alpha claimed the warm route")
+	publish(ownerlessID, "nobody owns this")
 
 	// A restarted daemon begins with empty route caches and must recover the
 	// exact owner from the durable session record.

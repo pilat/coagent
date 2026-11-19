@@ -55,10 +55,6 @@ func (f *stubWorktreeBackend) GetSession(context.Context, int64) (*sessionstore.
 
 func (f *stubWorktreeBackend) SetModel(context.Context, int64, string, string) error { return nil }
 
-func (f *stubWorktreeBackend) SetAttributes(context.Context, int64, map[string]any) error {
-	return nil
-}
-
 func (f *stubWorktreeBackend) HasActiveLoop(int64) bool { return false }
 
 func (f *stubWorktreeBackend) NotifySession(int64, sessionevent.Notification) {}

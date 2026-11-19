@@ -10,26 +10,6 @@ import (
 	"github.com/pilat/coagent/internal/orchestrator"
 )
 
-func TestManager_SetAttributesRejectsOrchestrator(t *testing.T) {
-	h := newHarness(t, harnessOptions{respond: trivialRespond})
-	id := h.createRoot(managerAttrs("owner"))
-	for _, value := range []any{true, false, nil} {
-		err := h.mgr.SetAttributes(h.ctx, id, map[string]any{"orchestrator": value})
-		require.EqualError(t, err, "orchestrator attribute is set only by /orchestrate")
-		assert.NotContains(t, h.session(id).Attributes, "orchestrator")
-	}
-}
-
-func TestManager_SetAttributesRejectsSpawnedBy(t *testing.T) {
-	h := newHarness(t, harnessOptions{respond: trivialRespond})
-	id := h.createRoot(managerAttrs("owner"))
-	for _, value := range []any{int64(12), float64(12), "12", nil} {
-		err := h.mgr.SetAttributes(h.ctx, id, map[string]any{"spawned_by": value})
-		require.EqualError(t, err, "spawned_by attribute is set only by spawn_session")
-		assert.NotContains(t, h.session(id).Attributes, "spawned_by")
-	}
-}
-
 // Clearing preserves spawn authority without granting it to human-created roots.
 func TestSpawnedByCopiesAcrossClear(t *testing.T) {
 	h := orchestratorProjectHarness(t)

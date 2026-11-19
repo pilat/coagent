@@ -350,9 +350,6 @@ func (s *Service) clear(ctx context.Context, input *sessionstore.InboxInput) (in
 func (s *Service) clearLocked(ctx context.Context, sessionID, inputID int64) (int64, error) {
 	log := logger.Ctx(ctx).Named("manager.clear")
 
-	s.routes.claim.Lock()
-	defer s.routes.claim.Unlock()
-
 	rec, err := s.store.GetSession(ctx, sessionID)
 	if err != nil {
 		return 0, fmt.Errorf("session %d not found", sessionID)

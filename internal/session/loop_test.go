@@ -302,9 +302,10 @@ func TestRun_DurableTurns(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			_, store, id := newAttachmentsStore(t)
+			db, store, id := newAttachmentsStore(t)
 			if tc.ownerless {
-				require.NoError(t, store.SetAttributes(t.Context(), id, nil))
+				_, err := db.ExecContext(t.Context(), "UPDATE sessions SET attributes = '{}' WHERE id = ?", id)
+				require.NoError(t, err)
 			}
 			_, err := store.Enqueue(
 				t.Context(),
