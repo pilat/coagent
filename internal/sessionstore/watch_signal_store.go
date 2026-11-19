@@ -16,6 +16,7 @@ type WatchState struct {
 // WatchFire contains only host-authored text about the target's turn outcome.
 type WatchFire struct {
 	TargetID int64
+	ActorID  int64
 	Line     string
 	Notice   string
 }
@@ -101,7 +102,7 @@ func (s *Store) WatchStates(ctx context.Context, watcher int64) (map[int64]Watch
 func (s *Store) FireWatches(ctx context.Context, fire WatchFire) (int, error) {
 	count := 0
 	err := s.WithTx(ctx, func(tx *sql.Tx) error {
-		watchers, err := eligibleWatchers(ctx, tx, fire.TargetID)
+		watchers, err := eligibleWatchers(ctx, tx, fire)
 		if err != nil {
 			return err
 		}
@@ -123,20 +124,21 @@ func (s *Store) FireWatches(ctx context.Context, fire WatchFire) (int, error) {
 	return count, err
 }
 
-func eligibleWatchers(ctx context.Context, tx *sql.Tx, target int64) ([]int64, error) {
+func eligibleWatchers(ctx context.Context, tx *sql.Tx, fire WatchFire) ([]int64, error) {
 	_, err := tx.ExecContext(ctx, `UPDATE session_watches SET armed = 0
-		WHERE target_id = ? AND armed = 1 AND (signalled = 1 OR watcher_id IN
+		WHERE target_id = ? AND armed = 1 AND (signalled = 1 OR watcher_id = ? OR watcher_id IN
 		(SELECT id FROM sessions WHERE killed_at IS NOT NULL OR parent_id <> 0
-		OR json_type(attributes, '$.orchestrator') IS NOT 'true'))`, target)
+		OR json_type(attributes, '$.orchestrator') IS NOT 'true'))`, fire.TargetID, fire.ActorID)
 	if err != nil {
 		return nil, fmt.Errorf("consume inactive or signalled watch arms: %w", err)
 	}
 
 	rows, err := tx.QueryContext(ctx, `SELECT w.watcher_id FROM session_watches w
 		JOIN sessions s ON s.id = w.watcher_id WHERE w.target_id = ?
+		AND w.watcher_id <> ?
 		AND w.signalled = 0 AND (w.armed = 1 OR w.subscribed = 1)
 		AND s.killed_at IS NULL AND s.parent_id = 0
-		AND json_type(s.attributes, '$.orchestrator') = 'true' ORDER BY w.watcher_id`, target)
+		AND json_type(s.attributes, '$.orchestrator') = 'true' ORDER BY w.watcher_id`, fire.TargetID, fire.ActorID)
 	if err != nil {
 		return nil, fmt.Errorf("load armed watchers: %w", err)
 	}

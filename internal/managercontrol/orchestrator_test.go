@@ -20,6 +20,18 @@ func TestCreateSession_RejectsCallerSuppliedOrchestrator(t *testing.T) {
 	assert.Nil(t, backend.sentAttrs)
 }
 
+func TestCreateSession_RejectsCallerSuppliedSpawnedBy(t *testing.T) {
+	for _, value := range []any{int64(12), float64(12), "12", nil} {
+		backend := &stubWorktreeBackend{}
+		s := worktreeSessionService(t, backend)
+		_, err := s.createSession(t.Context(), "owner", controllerapi.SessionCreateData{
+			Attributes: map[string]any{"spawned_by": value},
+		})
+		require.EqualError(t, err, "spawned_by attribute is reserved")
+		assert.Nil(t, backend.sentAttrs)
+	}
+}
+
 func TestOrchestratorCapability(t *testing.T) {
 	factory, store, project := newChatControl(t)
 	root, err := store.CreateSession(t.Context(), project, "model", "", map[string]any{"manager_id": "owner"})

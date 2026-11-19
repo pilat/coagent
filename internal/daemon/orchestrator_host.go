@@ -14,6 +14,13 @@ import (
 	"github.com/pilat/coagent/internal/sessionstore"
 )
 
+const (
+	sessionStateRunning = "running"
+	sessionStateWaiting = "waiting"
+	sessionStateParked  = "parked"
+	sessionStateIdle    = "idle"
+)
+
 var _ orchestrator.Host = orchestratorHost{}
 
 type orchestratorHost struct{ s *Service }
@@ -42,6 +49,11 @@ func (h orchestratorHost) ListSessions(
 		return nil, 0, fmt.Errorf("load listed session watches: %w", err)
 	}
 
+	lineage, err := h.s.store.ReplacementChain(ctx, callerID, owner)
+	if err != nil {
+		return nil, 0, fmt.Errorf("resolve listing session: %w", err)
+	}
+
 	entries := make([]orchestrator.Entry, 0, min(20, len(rows)))
 
 	for _, row := range rows[:min(20, len(rows))] {
@@ -61,6 +73,7 @@ func (h orchestratorHost) ListSessions(
 			State:      state,
 			Activity:   row.Activity,
 			Self:       row.ID == callerID,
+			Spawned:    slices.Contains(lineage, controllerapi.SpawnedBy(record.Attributes)),
 			Subscribed: states[row.ID].Subscribed,
 			Armed:      states[row.ID].Armed,
 			Signalled:  states[row.ID].Signalled,
@@ -233,7 +246,7 @@ func (h orchestratorHost) parked(ctx context.Context, id int64) (bool, error) {
 
 func (h orchestratorHost) sessionState(ctx context.Context, record *sessionstore.SessionRecord) (string, error) {
 	if h.s.HasActiveLoop(record.ID) {
-		return "running", nil
+		return sessionStateRunning, nil
 	}
 
 	parked, err := h.parked(ctx, record.ID)
@@ -242,14 +255,14 @@ func (h orchestratorHost) sessionState(ctx context.Context, record *sessionstore
 	}
 
 	if parked {
-		return "parked", nil
+		return sessionStateParked, nil
 	}
 
 	switch record.Status {
 	case sessionstore.SessionStatusActive, sessionstore.SessionStatusCompleted:
-		return "idle", nil
+		return sessionStateIdle, nil
 	case sessionstore.SessionStatusSuspended:
-		return "waiting", nil
+		return sessionStateWaiting, nil
 	case sessionstore.SessionStatusError, sessionstore.SessionStatusStopping, sessionstore.SessionStatusStopped,
 		sessionstore.SessionStatusTerminating, sessionstore.SessionStatusKilled:
 		return string(record.Status), nil

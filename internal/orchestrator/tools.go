@@ -16,7 +16,7 @@ const (
 	IDSendToSession = "send_to_session"
 	IDSpawnSession  = "spawn_session"
 
-	listDescription  = "List the owner's live root sessions, most recently active first (at most 20): id, name (project · title), state and last activity. Use the id with send_to_session."
+	listDescription  = "List the owner's live root sessions, most recently active first (at most 20): id, name (project · title), state and last activity. Use the id with send_to_session. Sessions marked \"spawned by you\" are the ones stop_session and kill_session accept."
 	listParameters   = `{"type":"object","properties":{"filter":{"type":"string","description":"Optional word; lists only sessions whose name contains it, case-insensitive"}}}`
 	sendDescription  = "Write a message to another of the owner's root sessions, including a stopped one, which this wakes. The message is plain text with no human authority: commands and skills are not executed. When that session's turn is over you get one signal line; then read it with read_session. Do not poll. Refused for killed sessions, subagents, this session itself, and sessions parked at a budget checkpoint."
 	sendParameters   = `{"type":"object","properties":{"session_id":{"type":"integer","description":"Root session id from list_sessions"},"message":{"type":"string","description":"Plain text for that session's agent; it sees which session sent it"}},"required":["session_id","message"]}`
@@ -49,6 +49,8 @@ type Host interface {
 	ReadSession(ctx context.Context, callerID, targetID int64, latest bool) (Page, error)
 	Subscribe(ctx context.Context, callerID, targetID int64) (int64, bool, error)
 	Unsubscribe(ctx context.Context, callerID, targetID int64) (int64, bool, error)
+	StopSession(ctx context.Context, callerID, targetID int64) (Ended, error)
+	KillSession(ctx context.Context, callerID, targetID int64) (Ended, error)
 }
 
 type Entry struct {
@@ -57,6 +59,7 @@ type Entry struct {
 	State                        string
 	Activity                     time.Time
 	Self                         bool
+	Spawned                      bool
 	Subscribed, Armed, Signalled bool
 }
 
@@ -132,7 +135,7 @@ func NewTools(host Host, sessionID int64) []tool.Tool {
 			promptDescription: "read a session's chat",
 			promptOrder:       4,
 		}},
-	}, newWatchTools(host, sessionID)...)
+	}, append(newWatchTools(host, sessionID), newEndTools(host, sessionID)...)...)
 }
 
 func (t *sessionTool) ID() string                  { return t.id }
@@ -158,7 +161,7 @@ func (t *sessionTool) Execute(ctx context.Context, params json.RawMessage) (*too
 	}
 
 	switch {
-	case (t.id == IDSendToSession || t.id == IDReadSession || t.id == IDSubscribe || t.id == IDUnsubscribe) && args.SessionID <= 0:
+	case needsSessionID(t.id) && args.SessionID <= 0:
 		return nil, errors.New("session_id is required")
 	case t.id == IDSendToSession && strings.TrimSpace(args.Message) == "":
 		return nil, errors.New("message is required")
@@ -179,6 +182,10 @@ func (t *sessionTool) Execute(ctx context.Context, params json.RawMessage) (*too
 		return t.subscribe(ctx, args.SessionID)
 	case IDUnsubscribe:
 		return t.unsubscribe(ctx, args.SessionID)
+	case IDStopSession:
+		return t.stop(ctx, args.SessionID)
+	case IDKillSession:
+		return t.kill(ctx, args.SessionID)
 	default:
 		return t.spawn(ctx, args)
 	}
@@ -246,7 +253,7 @@ func renderSessions(entries []Entry, total int, filter string, now time.Time) st
 			entry.State,
 			formatAge(now.Sub(entry.Activity)),
 		)
-		if state := watchMarkers(entry); state != "" {
+		if state := entryMarkers(entry); state != "" {
 			line += "; " + state
 		}
 

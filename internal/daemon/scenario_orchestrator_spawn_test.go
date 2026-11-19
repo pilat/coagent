@@ -50,6 +50,7 @@ func TestOrchestratorListSessions(t *testing.T) {
 		states[entry.ID] = entry.State
 		assert.False(t, entry.Activity.IsZero())
 		assert.Equal(t, entry.ID == caller, entry.Self)
+		assert.False(t, entry.Spawned)
 	}
 	assert.Equal(
 		t,
@@ -204,6 +205,7 @@ func assertSpawnedRoot(t *testing.T, h *harness, caller, id, project int64, prom
 	assert.Equal(t, project, record.ProjectID)
 	assert.Equal(t, "owner", record.Attributes[controllerapi.SessionAttributeManagerID])
 	assert.Equal(t, prompt, record.Attributes[controllerapi.SessionAttributeTitle])
+	assert.Equal(t, caller, controllerapi.SpawnedBy(record.Attributes))
 	assert.NotContains(t, record.Attributes, controllerapi.SessionAttributeOrchestrator)
 	assert.Zero(t, record.ParentID)
 	assert.Zero(t, record.RootID)
@@ -238,10 +240,14 @@ func orchestratorProject(t *testing.T, h *harness, name string) (int64, string) 
 	return id, path
 }
 
-func orchestratorProjectHarness(t *testing.T) *harness {
+func orchestratorProjectHarness(t *testing.T, responses ...func(string, []llmwire.Message) *llmwire.Response) *harness {
 	t.Helper()
 	root, worktrees := t.TempDir(), t.TempDir()
-	return newHarness(t, harnessOptions{respond: trivialRespond, configure: func(cfg *config.Config) {
+	respond := trivialRespond
+	if len(responses) > 0 {
+		respond = responses[0]
+	}
+	return newHarness(t, harnessOptions{respond: respond, configure: func(cfg *config.Config) {
 		cfg.WorkDir = filepath.Join(root, "initial")
 		require.NoError(t, os.MkdirAll(cfg.WorkDir, 0o755))
 		cfg.UnifiedConfig = &config.UnifiedConfig{ProjectsRoot: root + "/.", WorktreesRoot: worktrees}

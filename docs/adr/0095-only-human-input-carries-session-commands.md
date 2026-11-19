@@ -2,6 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-11-17
+- **Amended by:** [ADR-0101](0101-an-orchestrator-ends-only-sessions-it-spawned.md) — the host writes a fixed /stop or /kill as human-authority input for an orchestrator's own spawned sessions
 
 ## Context
 

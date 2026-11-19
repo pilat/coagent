@@ -27,6 +27,7 @@ const (
 	// another manager's conversation.
 	SessionAttributeManagerID    = "manager_id"
 	SessionAttributeOrchestrator = "orchestrator"
+	SessionAttributeSpawnedBy    = "spawned_by"
 	// SessionAttributeWorktreeOrigin attests that the controller created a /gwt
 	// worktree; it is not accepted from a manager or ordinary session attributes.
 	SessionAttributeWorktreeOrigin = "coagent_worktree_origin"
@@ -187,4 +188,11 @@ func OrchestratorMode(attrs map[string]any) bool {
 	on, _ := attrs[SessionAttributeOrchestrator].(bool)
 
 	return on
+}
+
+// SpawnedBy accepts only the durable JSON number, never a string or an in-memory integer.
+func SpawnedBy(attrs map[string]any) int64 {
+	id, _ := attrs[SessionAttributeSpawnedBy].(float64)
+
+	return int64(id)
 }

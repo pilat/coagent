@@ -2,6 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-11-17
+- **Amended by:** [ADR-0101](0101-an-orchestrator-ends-only-sessions-it-spawned.md) — an outcome caused by an orchestrator names it and gives that orchestrator no signal
 
 ## Context
 

@@ -203,7 +203,7 @@ func assertModeToolSchemas(t *testing.T, ids []string, want bool) {
 	t.Helper()
 	for _, id := range []string{
 		orchestrator.IDListSessions, orchestrator.IDSendToSession, orchestrator.IDSpawnSession, orchestrator.IDReadSession,
-		orchestrator.IDSubscribe, orchestrator.IDUnsubscribe,
+		orchestrator.IDSubscribe, orchestrator.IDUnsubscribe, orchestrator.IDStopSession, orchestrator.IDKillSession,
 	} {
 		if want {
 			assert.Contains(t, ids, id)

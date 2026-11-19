@@ -160,6 +160,10 @@ func (s *Service) SetAttributes(ctx context.Context, sessionID int64, attrs map[
 		return errors.New("orchestrator attribute is set only by /orchestrate")
 	}
 
+	if _, supplied := attrs[controllerapi.SessionAttributeSpawnedBy]; supplied {
+		return errors.New("spawned_by attribute is set only by spawn_session")
+	}
+
 	s.routes.claim.Lock()
 	defer s.routes.claim.Unlock()
 
