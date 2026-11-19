@@ -1,6 +1,7 @@
 package sessionstore
 
 import (
+	"encoding/json"
 	"fmt"
 	"testing"
 
@@ -20,10 +21,10 @@ func TestSetOrchestrator(t *testing.T) {
 		assertOrchestratorMode(t, store, root.ID, on)
 	}
 	for _, invalid := range []any{1, "true", false, nil} {
-		require.NoError(
-			t,
-			store.SetAttributes(t.Context(), root.ID, map[string]any{"manager_id": "owner", "orchestrator": invalid}),
-		)
+		raw, err := json.Marshal(map[string]any{"manager_id": "owner", "orchestrator": invalid})
+		require.NoError(t, err)
+		_, err = db.ExecContext(t.Context(), "UPDATE sessions SET attributes = ? WHERE id = ?", string(raw), root.ID)
+		require.NoError(t, err)
 		assertOrchestratorMode(t, store, root.ID, false)
 		changed, err := store.SetOrchestrator(t.Context(), "owner", root.ID, true)
 		require.NoError(t, err)

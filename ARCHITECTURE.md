@@ -942,7 +942,7 @@ The daemon owns concrete runner state, one synchronized runner set with capacity
 counters and a FIFO waiting queue, and one joined lifetime for daemon workers.
 Tree operations read only the root and its descendants into one snapshot. The
 tree fence serializes spawn and process admission against stop, kill and clear,
-and precedes owner-claim and publication-cache locks. Terminalization and
+and precedes the publication-cache lock. Terminalization and
 completion delivery use the durable subagent ledger.
 The lifecycle composition boundary is recorded in
 [ADR-0065](docs/adr/0065-daemon-owns-lifecycle-composition.md); the bounded

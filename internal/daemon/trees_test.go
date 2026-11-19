@@ -232,50 +232,6 @@ func TestManager_Clear(t *testing.T) {
 	})
 }
 
-func TestManager_ClearRejectsAConcurrentLateOwnerClaim(t *testing.T) {
-	h := newHarness(t, harnessOptions{configure: withTestModels, clientFor: (&mockFactory{}).client})
-	mgr, store := h.mgr, h.store
-	ctx := context.Background()
-	pid := testProject(t, store, t.TempDir())
-	rec, err := mgr.store.CreateSession(ctx, pid, "test-model", "", nil)
-	require.NoError(t, err)
-	blocking := &blockingCreateSessionStore{
-		Store:   mgr.store,
-		entered: make(chan struct{}), release: make(chan struct{}),
-	}
-	mgr.store = blocking
-	clearResult := make(chan struct {
-		id  int64
-		err error
-	}, 1)
-	go func() {
-		id, clearErr := mgr.clear(ctx, lifecycleInput(ctx, t, mgr, rec.ID, "/clear"))
-		clearResult <- struct {
-			id  int64
-			err error
-		}{id: id, err: clearErr}
-	}()
-	waitForScenarioSignal(t, blocking.entered, "scenario signal")
-	if mgr.routes.claim.TryLock() {
-		mgr.routes.claim.Unlock()
-		t.Fatal("clear did not hold the manager ownership boundary while creating its replacement")
-	}
-	claimResult := make(chan error, 1)
-	claimStarted := make(chan struct{})
-	go func() {
-		close(claimStarted)
-		claimResult <- mgr.SetAttributes(ctx, rec.ID, managerAttrs("alpha"))
-	}()
-	waitForScenarioSignal(t, claimStarted, "scenario signal")
-	close(blocking.release)
-	cleared := <-clearResult
-	require.NoError(t, cleared.err)
-	require.ErrorContains(t, <-claimResult, "cannot acquire a manager owner")
-	replacement, err := mgr.store.GetSession(ctx, cleared.id)
-	require.NoError(t, err)
-	assert.NotContains(t, replacement.Attributes, controllerapi.SessionAttributeManagerID)
-}
-
 func TestManager_ClearWhileRunning(t *testing.T) {
 	h, factory, ch := newMockHarness(t)
 	mgr, s := h.mgr, h.store
@@ -423,20 +379,6 @@ func TestStopTreeCleanupPreservesBackgroundProcessesForBudgetPark(t *testing.T) 
 	assert.Equal(t, backgroundprocess.StateRunning, record.State)
 	_, err = service.CancelAll(ctx, backgroundprocess.IntentDaemonShutdown)
 	require.NoError(t, err)
-}
-
-type blockingCreateSessionStore struct {
-	Store
-	entered, release chan struct{}
-}
-
-func (s *blockingCreateSessionStore) CreateReplacementSession(
-	ctx context.Context,
-	oldID int64,
-) (*sessionstore.SessionRecord, error) {
-	close(s.entered)
-	<-s.release
-	return s.Store.CreateReplacementSession(ctx, oldID)
 }
 
 func TestLifecycleCommandIgnoresSecondDispatch(t *testing.T) {

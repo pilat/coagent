@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"maps"
 	"slices"
 	"strings"
 
@@ -151,59 +150,6 @@ func (s *Service) SetModel(ctx context.Context, sessionID int64, model, reasonin
 	}
 
 	_ = client.Close()
-
-	return nil
-}
-
-func (s *Service) SetAttributes(ctx context.Context, sessionID int64, attrs map[string]any) error {
-	if _, supplied := attrs[controllerapi.SessionAttributeOrchestrator]; supplied {
-		return errors.New("orchestrator attribute is set only by /orchestrate")
-	}
-
-	if _, supplied := attrs[controllerapi.SessionAttributeSpawnedBy]; supplied {
-		return errors.New("spawned_by attribute is set only by spawn_session")
-	}
-
-	s.routes.claim.Lock()
-	defer s.routes.claim.Unlock()
-
-	rec, err := s.store.GetSession(ctx, sessionID)
-	if err != nil {
-		return fmt.Errorf("get session before setting attributes: %w", err)
-	}
-
-	if rec == nil {
-		return fmt.Errorf("session %d not found", sessionID)
-	}
-
-	attrs = maps.Clone(attrs)
-	existingOwner, _ := rec.Attributes[controllerapi.SessionAttributeManagerID].(string)
-
-	requestedOwner, _ := attrs[controllerapi.SessionAttributeManagerID].(string)
-	claimingOwner := existingOwner == "" && requestedOwner != ""
-
-	if claimingOwner && (rec.Status == sessionstore.SessionStatusTerminating || rec.KilledAt != nil) {
-		return fmt.Errorf("session %d is closing and cannot acquire a manager owner", sessionID)
-	}
-
-	if existingOwner != "" && requestedOwner != "" && existingOwner != requestedOwner {
-		return fmt.Errorf("session %d belongs to manager %q", sessionID, existingOwner)
-	}
-
-	if existingOwner != "" {
-		if attrs == nil {
-			attrs = make(map[string]any)
-		}
-
-		attrs[controllerapi.SessionAttributeManagerID] = existingOwner
-		requestedOwner = existingOwner
-	}
-
-	if err := s.store.SetAttributes(ctx, sessionID, attrs); err != nil {
-		return fmt.Errorf("set session attributes: %w", err)
-	}
-
-	s.routes.setOwner(sessionID, requestedOwner)
 
 	return nil
 }

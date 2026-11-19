@@ -13,7 +13,6 @@ import (
 )
 
 type routes struct {
-	claim sync.Mutex
 	mu    sync.Mutex
 	child map[int64]bool
 	owner map[int64]string
@@ -132,11 +131,4 @@ func (e *sessionEvents) Emit(n sessionevent.Notification) {
 	default:
 		s.publish(e.sessionID, n)
 	}
-}
-
-func (r *routes) setOwner(sessionID int64, owner string) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	r.owner[sessionID] = owner
 }

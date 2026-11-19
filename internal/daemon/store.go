@@ -25,7 +25,6 @@ type Store interface { //nolint:interfacebloat // Lifecycle commands share atomi
 		attrs map[string]any,
 	) (*sessionstore.SessionRecord, error)
 	CreateReplacementSession(ctx context.Context, oldSessionID int64) (*sessionstore.SessionRecord, error)
-	SetAttributes(ctx context.Context, id int64, attrs map[string]any) error
 	UpdateSessionModel(ctx context.Context, id int64, model, reasoningLevel string) error
 	GetSession(ctx context.Context, id int64) (*sessionstore.SessionRecord, error)
 	ListAllSessions(ctx context.Context) ([]*sessionstore.SessionRecord, error)

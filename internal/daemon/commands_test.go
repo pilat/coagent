@@ -303,51 +303,6 @@ func TestManager_SendToSession_RejectsKilledSession(t *testing.T) {
 	assert.Contains(t, err.Error(), "killed")
 }
 
-func TestManager_SetAttributesCannotRemoveOrRebindManagerOwner(t *testing.T) {
-	h := newHarness(t, harnessOptions{configure: withTestModels, clientFor: (&mockFactory{}).client})
-	mgr, store := h.mgr, h.store
-	ctx := context.Background()
-	pid := testProject(t, store, t.TempDir())
-	rec, err := mgr.store.CreateSession(ctx, pid, "test-model", "", managerAttrs("alpha"))
-	require.NoError(t, err)
-	require.NoError(t, mgr.SetAttributes(ctx, rec.ID, map[string]any{"topic": float64(42)}))
-	stored := h.session(rec.ID)
-	assert.Equal(t, "alpha", stored.Attributes[controllerapi.SessionAttributeManagerID])
-	assert.InDelta(t, float64(42), stored.Attributes["topic"], 0)
-	err = mgr.SetAttributes(ctx, rec.ID, managerAttrs("beta"))
-	require.ErrorContains(t, err, `belongs to manager "alpha"`)
-	stored = h.session(rec.ID)
-	assert.Equal(t, "alpha", stored.Attributes[controllerapi.SessionAttributeManagerID])
-}
-
-func TestManager_ConcurrentManagerClaimsHaveExactlyOneWinner(t *testing.T) {
-	h := newHarness(t, harnessOptions{configure: withTestModels, clientFor: (&mockFactory{}).client})
-	mgr, store := h.mgr, h.store
-	ctx := context.Background()
-	pid := testProject(t, store, t.TempDir())
-	rec, err := mgr.store.CreateSession(ctx, pid, "test-model", "", nil)
-	require.NoError(t, err)
-	start := make(chan struct{})
-	errs := make(chan error, 2)
-	for _, owner := range []string{"alpha", "beta"} {
-		go func() {
-			<-start
-			errs <- mgr.SetAttributes(ctx, rec.ID, managerAttrs(owner))
-		}()
-	}
-	close(start)
-	results := []error{<-errs, <-errs}
-	successes := 0
-	for _, claimErr := range results {
-		if claimErr == nil {
-			successes++
-		}
-	}
-	assert.Equal(t, 1, successes)
-	stored := h.session(rec.ID)
-	assert.Contains(t, []string{"alpha", "beta"}, stored.Attributes[controllerapi.SessionAttributeManagerID])
-}
-
 // TestNewSessionSettlesTheEffortOnItsModel: a fresh session names no level, so it
 // must start on its model's default — anything else is a level nobody chose.
 func TestNewSessionSettlesTheEffortOnItsModel(t *testing.T) {
