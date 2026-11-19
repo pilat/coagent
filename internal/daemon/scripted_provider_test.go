@@ -71,11 +71,6 @@ func (c *recordingLLM) Chat(
 // Responses inspect the real system prompt and transcript to preserve scenario ordering.
 type scriptedLLM struct {
 	respond func(system string, msgs []llmwire.Message) *llmwire.Response
-
-	mu          sync.Mutex
-	sessionID   string
-	chatContext *contextInfo // the ctx of the most recent in-flight Chat
-	cancelSeen  bool         // a Chat returned because its ctx was cancelled
 }
 
 func (c *scriptedLLM) Chat(
@@ -90,10 +85,6 @@ func (c *scriptedLLM) Chat(
 		resp  *llmwire.Response
 		panic any
 	}
-	_, hasDeadline := ctx.Deadline()
-	c.mu.Lock()
-	c.chatContext = &contextInfo{hasDeadline: hasDeadline}
-	c.mu.Unlock()
 	ch := make(chan outcome, 1)
 	go func() {
 		defer func() {
@@ -105,10 +96,6 @@ func (c *scriptedLLM) Chat(
 	}()
 	select {
 	case <-ctx.Done():
-		c.mu.Lock()
-		c.cancelSeen = true
-		c.mu.Unlock()
-
 		return nil, ctx.Err()
 	case o := <-ch:
 		if o.panic != nil {
@@ -149,31 +136,7 @@ func (c *scriptedLLM) SetImageAuthorizer(llm.ImageAuthorizer) {}
 
 func (c *scriptedLLM) GetReasoningLevel() string { return "medium" }
 
-func (c *scriptedLLM) SetSessionID(id string) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.sessionID = id
-}
-
-// Recorded Chat contexts expose any child lifetime deadline incorrectly added by the runner.
-func (c *scriptedLLM) chatRanWithDeadline() bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.chatContext != nil && c.chatContext.hasDeadline
-}
-
-// hasChatContext reports whether the client has observed at least one Chat.
-func (c *scriptedLLM) hasChatContext() bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.chatContext != nil
-}
-
-func (c *scriptedLLM) sawCancellation() bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.cancelSeen
-}
+func (c *scriptedLLM) SetSessionID(string) {}
 
 // fakeMCPServer is one on-disk stdio server plus the log that records its spawns.
 type fakeMCPServer struct {
