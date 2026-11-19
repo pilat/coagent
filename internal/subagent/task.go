@@ -13,6 +13,10 @@ import (
 	"github.com/pilat/coagent/internal/tool"
 )
 
+const (
+	inheritModel = "inherit"
+)
+
 // TaskParams are the parameters for the task tool.
 type TaskParams struct {
 	Prompt       string `json:"prompt,omitempty"`
@@ -184,6 +188,10 @@ func (t *taskTool) Execute(ctx context.Context, params json.RawMessage) (*tool.R
 	var p TaskParams
 	if err := json.Unmarshal(params, &p); err != nil {
 		return nil, fmt.Errorf("invalid parameters: %w", err)
+	}
+
+	if p.Model == inheritModel {
+		p.Model = ""
 	}
 
 	if err := t.validateParams(p); err != nil {

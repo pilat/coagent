@@ -592,6 +592,70 @@ func TestTaskToolPinnedBrowserIgnoresModelParameter(t *testing.T) {
 	}
 }
 
+func TestTaskToolLiteralInheritIsOmitted(t *testing.T) {
+	t.Parallel()
+
+	for _, background := range []bool{false, true} {
+		for _, effort := range []string{"", "high"} {
+			t.Run(fmt.Sprintf("background_%t/effort_%s", background, effort), func(t *testing.T) {
+				t.Parallel()
+
+				omitted, inherited := &mockSpawner{}, &mockSpawner{}
+				models := []ModelInfo{{ID: "tagged", Name: "Candidate", Tags: []string{"fast"}}}
+				omittedTool := NewTaskTool(omitted, 7, nil, models, registry.BrowserSettings{})
+				inheritedTool := NewTaskTool(inherited, 7, nil, models, registry.BrowserSettings{})
+				params := TaskParams{
+					Prompt: "do", Description: "do", SubagentType: "general", Effort: effort, Background: background,
+				}
+				omittedParams, err := json.Marshal(params)
+				require.NoError(t, err)
+				params.Model = "inherit"
+				inheritedParams, err := json.Marshal(params)
+				require.NoError(t, err)
+
+				ctx := tool.WithCallID(context.Background(), "inherit-call")
+				omittedResult, omittedErr := omittedTool.Execute(ctx, omittedParams)
+				inheritedResult, inheritedErr := inheritedTool.Execute(ctx, inheritedParams)
+				if background {
+					require.NoError(t, omittedErr)
+					require.NoError(t, inheritedErr)
+				} else {
+					require.ErrorIs(t, omittedErr, tool.ErrSuspend)
+					require.ErrorIs(t, inheritedErr, tool.ErrSuspend)
+				}
+
+				assert.Equal(t, omittedResult, inheritedResult)
+				assert.Equal(t, omitted.lastReq, inherited.lastReq)
+				assert.Empty(t, inherited.lastReq.Model)
+				assert.Equal(t, effort, inherited.lastReq.ReasoningLevel)
+				assert.Equal(t, 1, inherited.spawnCount)
+			})
+		}
+	}
+}
+
+func TestTaskToolInheritIsExactWord(t *testing.T) {
+	t.Parallel()
+
+	for _, model := range []string{"Inherit", " inherit"} {
+		t.Run(model, func(t *testing.T) {
+			t.Parallel()
+
+			sp := &mockSpawner{}
+			task := NewTaskTool(sp, 7, nil,
+				[]ModelInfo{{ID: "tagged", Name: "Candidate", Tags: []string{"fast"}}}, registry.BrowserSettings{})
+			params, err := json.Marshal(TaskParams{
+				Prompt: "do", Description: "do", SubagentType: "general", Model: model, Background: true,
+			})
+			require.NoError(t, err)
+
+			_, err = task.Execute(tool.WithCallID(context.Background(), "inherit-call"), params)
+			require.ErrorContains(t, err, "is not an advertised tagged subagent candidate")
+			assert.Zero(t, sp.spawnCount)
+		})
+	}
+}
+
 func TestTaskToolEffort(t *testing.T) {
 	t.Parallel()
 

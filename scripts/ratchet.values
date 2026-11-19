@@ -92,7 +92,7 @@ lines internal/sessionevent 263
 lines internal/sessionprompt 1081
 lines internal/sessionstore 6628
 lines internal/shellenv 975
-lines internal/subagent 1600
+lines internal/subagent 1608
 lines internal/todo 226
 lines internal/tool 773
 lines internal/tool/builtin 7432
