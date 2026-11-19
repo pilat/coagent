@@ -111,7 +111,7 @@ does not imply a tier except where it expresses an implementation variant.
 - `internal/sessionevent` — session-to-controller notification vocabulary.
 - `internal/sessionstore` — project registry, durable sessions, messages, inbox, atomic producer delivery, output log, chat focus/cursor, orchestrator read positions and the session-file-read ledger for write-guard checks.
 - `internal/shellenv` — captured per-worktree shell environment for child processes.
-- `internal/subagent` — parent-child link ledger, completion transactions and agent-facing tools.
+- `internal/subagent` — parent-child link ledger, completion transactions, agent-facing tools and the tagged-model candidate rule.
 - `internal/todo` — session-local task tracking.
 - `internal/tool` — tool protocol, registry, suspension sentinel and ordered stage execution.
 - `internal/tool/builtin` — built-in tools, the browser tool surface and their common stack construction.
@@ -734,7 +734,10 @@ the target's chat. Their authority is plain text: no commands, grants, skill
 expansion, budget release or title naming. A send wakes a stopped root but refuses
 a budget-parked target. Spawn accepts visible registered projects with existing directories,
 excluding coagent worktrees identified by the configured worktrees-root layout; optional
-worktrees use guarded no-execution creation. A spawned root takes its title from
+worktrees use guarded no-execution creation. Spawn may name the new root's model only from the tagged
+candidates `task` offers, and the root takes that model's default effort; omitted, it starts on the default
+model. No tool changes an existing session's model
+([ADR-0100](docs/adr/0100-a-spawned-session-takes-a-tagged-model.md)). A spawned root takes its title from
 the prompt at creation; it is independent and never moves chat focus ([ADR-0097](docs/adr/0097-orchestrator-mode-is-a-human-granted-capability-on-an-ordinary-root.md)).
 Reading another session writes nothing to it and returns untrusted data; `batch` refuses `read_session`.
 The model-facing signal contains ids, project name and outcome kind, without target-authored text or title.
@@ -888,8 +891,8 @@ provider endpoints serving that same configured model ID. Omitted preferences
 produce no provider object on the wire, so the external router's defaults
 remain authoritative rather than becoming implicit coagent policy.
 Model IDs are globally unique. Optional user-defined tags are preserved as YAML
-policy: `/model` exposes every configured model to people, while `task` exposes
-inheritance and only tagged models for autonomous explicit selection.
+policy: `/model` exposes every configured model to people, while `task` (besides inheritance) and
+`spawn_session` expose only tagged models for autonomous explicit selection.
 Optional `task.effort`, set only on explicit user request, overrides the type's
 effort and is validated against the child model before spawn (rejected outright
 when that model has no selector); a pinned type ignores both task model and effort

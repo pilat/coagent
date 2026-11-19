@@ -12,6 +12,7 @@ import (
 
 	"github.com/pilat/coagent/internal/config"
 	"github.com/pilat/coagent/internal/controllerapi"
+	"github.com/pilat/coagent/internal/orchestrator"
 	"github.com/pilat/coagent/internal/projectpath"
 )
 
@@ -46,9 +47,11 @@ func TestOrchestratorSpawnWorktree(t *testing.T) {
 			id, where, err := (orchestratorHost{h.mgr}).SpawnSession(
 				h.ctx,
 				caller,
-				clone,
-				"api",
-				"work in the worktree",
+				orchestrator.SpawnRequest{
+					Project:  clone,
+					Worktree: "api",
+					Prompt:   "work in the worktree",
+				},
 			)
 			path := projectpath.WorktreePath(worktrees, clone, "api")
 			if refusal {

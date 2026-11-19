@@ -34,7 +34,7 @@ type agentInfo struct {
 	Description string
 }
 
-// ModelInfo describes a model available for subagent selection.
+// ModelInfo describes a configured model offered for an agent's explicit selection.
 type ModelInfo struct {
 	ID   string
 	Name string
@@ -48,6 +48,29 @@ type Spawner interface {
 	Result(ctx context.Context, childID int64) (ChildResult, error)
 	SendToChild(ctx context.Context, childID int64, msg string) error
 	LinkPending(ctx context.Context, parentID int64, taskCallID string) (bool, error)
+}
+
+// Candidates returns the configured models an agent may name explicitly, in input order.
+func Candidates(models []ModelInfo) []ModelInfo {
+	candidates := make([]ModelInfo, 0, len(models))
+	for _, model := range models {
+		if len(model.Tags) != 0 {
+			candidates = append(candidates, model)
+		}
+	}
+
+	return candidates
+}
+
+// IsCandidate reports whether id names one of the configured explicit candidates.
+func IsCandidate(models []ModelInfo, id string) bool {
+	for _, model := range Candidates(models) {
+		if model.ID == id {
+			return true
+		}
+	}
+
+	return false
 }
 
 // FormatChildResult uses a neutral label for legacy links with no stored outcome.

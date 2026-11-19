@@ -88,7 +88,10 @@ func TestOrchestratorSendRefusals(t *testing.T) {
 	require.EqualError(t, err, "orchestrator mode is off for this session")
 	_, _, err = (orchestratorHost{h.mgr}).ListSessions(h.ctx, caller, "")
 	require.EqualError(t, err, "orchestrator mode is off for this session")
-	_, _, err = (orchestratorHost{h.mgr}).SpawnSession(h.ctx, caller, "missing", "", "hello")
+	_, _, err = (orchestratorHost{h.mgr}).SpawnSession(h.ctx, caller, orchestrator.SpawnRequest{
+		Project: "missing",
+		Prompt:  "hello",
+	})
 	require.EqualError(t, err, "orchestrator mode is off for this session")
 }
 

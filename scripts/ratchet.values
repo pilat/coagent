@@ -56,7 +56,7 @@ lines internal/configapply 290
 lines internal/configops 518
 lines internal/controllerapi 313
 lines internal/ctl 1023
-lines internal/daemon 5415
+lines internal/daemon 5450
 lines internal/git 868
 lines internal/humanize 24
 lines internal/id 17
@@ -76,7 +76,7 @@ lines internal/mcp 1095
 lines internal/mcpstore 680
 lines internal/memory 139
 lines internal/migrate 695
-lines internal/orchestrator 498
+lines internal/orchestrator 512
 lines internal/procexec 277
 lines internal/progress 284
 lines internal/progressruntime 176
@@ -92,7 +92,7 @@ lines internal/sessionevent 263
 lines internal/sessionprompt 1081
 lines internal/sessionstore 6626
 lines internal/shellenv 975
-lines internal/subagent 1590
+lines internal/subagent 1600
 lines internal/todo 226
 lines internal/tool 773
 lines internal/tool/builtin 7432
