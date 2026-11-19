@@ -48,16 +48,13 @@ func (t *taskTool) SetFramesAvailable(available bool) { t.browserAvailable = ava
 func NewTaskTool(
 	sp Spawner, parentID int64, ldr *loader.Service, models []ModelInfo, browser registry.BrowserSettings,
 ) tool.Tool {
-	candidates := make([]ModelInfo, 0, len(models))
-	for _, model := range models {
-		if len(model.Tags) != 0 {
-			candidates = append(candidates, model)
-		}
-	}
-
 	t := &taskTool{
-		spawner: sp, parentID: parentID, loader: ldr, models: models,
-		modelCatalog: candidates, browser: browser,
+		spawner:      sp,
+		parentID:     parentID,
+		loader:       ldr,
+		models:       models,
+		modelCatalog: Candidates(models),
+		browser:      browser,
 	}
 	if ldr != nil {
 		t.skillCatalog = ldr
@@ -292,7 +289,7 @@ func (t *taskTool) validateParams(p TaskParams) error {
 		return errors.New("subagent_type is required")
 	}
 
-	if p.Model != "" && !t.pinnedModel(p.SubagentType) && !t.isCandidateModel(p.Model) {
+	if p.Model != "" && !t.pinnedModel(p.SubagentType) && !IsCandidate(t.models, p.Model) {
 		return fmt.Errorf("model %q is not an advertised tagged subagent candidate", p.Model)
 	}
 
@@ -323,16 +320,6 @@ func (t *taskTool) renderOpeningInput(p *TaskParams) error {
 	p.Prompt = loader.RenderSkillInvocation(skill, p.SkillArgs)
 
 	return nil
-}
-
-func (t *taskTool) isCandidateModel(id string) bool {
-	for _, model := range t.modelCatalog {
-		if model.ID == id {
-			return true
-		}
-	}
-
-	return false
 }
 
 // A pinned type keeps its configured model and effort despite per-call overrides.

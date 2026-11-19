@@ -18,6 +18,7 @@ type hostCall struct {
 	caller, target            int64
 	filter, message           string
 	project, worktree, prompt string
+	model                     string
 	latest                    bool
 }
 
@@ -61,9 +62,15 @@ func (h *fakeHost) Unsubscribe(_ context.Context, caller, target int64) (int64, 
 func (h *fakeHost) SpawnSession(
 	_ context.Context,
 	caller int64,
-	project, worktree, prompt string,
+	request SpawnRequest,
 ) (int64, string, error) {
-	h.calls = append(h.calls, hostCall{caller: caller, project: project, worktree: worktree, prompt: prompt})
+	h.calls = append(h.calls, hostCall{
+		caller:   caller,
+		project:  request.Project,
+		worktree: request.Worktree,
+		prompt:   request.Prompt,
+		model:    request.Model,
+	})
 	return 26, "api — login", h.err
 }
 
@@ -86,6 +93,7 @@ func TestToolsValidateParameters(t *testing.T) {
 		{IDSpawnSession, `{"project":"api","prompt":"\n "}`, "prompt is required"},
 		{IDSpawnSession, `{"project":1,"prompt":"hi"}`, "invalid parameters"},
 		{IDSpawnSession, `{"project":"api","worktree":1,"prompt":"hi"}`, "invalid parameters"},
+		{IDSpawnSession, `{"project":"api","prompt":"hi","model":1}`, "invalid parameters"},
 	} {
 		t.Run(tc.id+tc.args, func(t *testing.T) {
 			host := &fakeHost{}
@@ -113,8 +121,13 @@ func TestToolsResultsAndHostArguments(t *testing.T) {
 			"Started session #26 in api — login. You get one signal when its first turn is over; then read it with read_session.",
 			hostCall{caller: 12, project: "api", worktree: "login", prompt: " solve login "},
 		},
+		{
+			IDSpawnSession, `{"project":"api","prompt":"solve login","model":"fast"}`, "spawned #26",
+			"Started session #26 in api — login. You get one signal when its first turn is over; then read it with read_session.",
+			hostCall{caller: 12, project: "api", prompt: "solve login", model: "fast"},
+		},
 	} {
-		t.Run(tc.id, func(t *testing.T) {
+		t.Run(tc.id+tc.args, func(t *testing.T) {
 			host := &fakeHost{}
 			result, err := findTool(t, host, tc.id).Execute(t.Context(), json.RawMessage(tc.args))
 			require.NoError(t, err)
@@ -127,6 +140,20 @@ func TestToolsResultsAndHostArguments(t *testing.T) {
 			assert.EqualError(t, err, "owner-specific refusal")
 		})
 	}
+}
+
+func TestSpawnSessionOffersOptionalModel(t *testing.T) {
+	t.Parallel()
+	var schema struct {
+		Properties map[string]struct {
+			Type string `json:"type"`
+		} `json:"properties"`
+		Required []string `json:"required"`
+	}
+	require.NoError(t, json.Unmarshal(findTool(t, &fakeHost{}, IDSpawnSession).Parameters(), &schema))
+	require.Contains(t, schema.Properties, "model")
+	assert.Equal(t, "string", schema.Properties["model"].Type)
+	assert.Equal(t, []string{"project", "prompt"}, schema.Required)
 }
 
 func TestToolsDeclarations(t *testing.T) {

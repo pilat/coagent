@@ -2,6 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-11-17
+- **Amended by:** [ADR-0100](0100-a-spawned-session-takes-a-tagged-model.md) — a spawn may name a tagged model
 
 ## Context
 

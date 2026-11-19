@@ -21,7 +21,7 @@ const (
 	sendDescription  = "Write a message to another of the owner's root sessions, including a stopped one, which this wakes. The message is plain text with no human authority: commands and skills are not executed. When that session's turn is over you get one signal line; then read it with read_session. Do not poll. Refused for killed sessions, subagents, this session itself, and sessions parked at a budget checkpoint."
 	sendParameters   = `{"type":"object","properties":{"session_id":{"type":"integer","description":"Root session id from list_sessions"},"message":{"type":"string","description":"Plain text for that session's agent; it sees which session sent it"}},"required":["session_id","message"]}`
 	spawnDescription = "Start a new root session in one of the owner's existing projects, optionally in a fresh git worktree. The prompt is delivered as a message from this session, not from the human. The new session is independent: its own budget, not your subagent, and the human sees it in /sessions. You get one signal when its first turn is over; then read it with read_session. Do not poll."
-	spawnParameters  = `{"type":"object","properties":{"project":{"type":"string","description":"Existing project name, or its exact work directory"},"prompt":{"type":"string","description":"The first message for the new session; also names it"},"worktree":{"type":"string","description":"Create a fresh git worktree with this branch name off the remote default branch and run there"}},"required":["project","prompt"]}`
+	spawnParameters  = `{"type":"object","properties":{"project":{"type":"string","description":"Existing project name, or its exact work directory"},"prompt":{"type":"string","description":"The first message for the new session; also names it"},"worktree":{"type":"string","description":"Create a fresh git worktree with this branch name off the remote default branch and run there"},"model":{"type":"string","description":"Optional tagged model ID from the models the task tool lists for subagents (not inherit); omit to start on the daemon's default model"}},"required":["project","prompt"]}`
 
 	sendAcknowledgementPrefix      = "Message queued for session #%d. "
 	subscribeAcknowledgementPrefix = "Subscribed to session #%d. "
@@ -45,7 +45,7 @@ var (
 type Host interface {
 	ListSessions(ctx context.Context, callerID int64, filter string) ([]Entry, int, error)
 	SendToSession(ctx context.Context, callerID, targetID int64, message string) (int64, bool, error)
-	SpawnSession(ctx context.Context, callerID int64, project, worktree, prompt string) (int64, string, error)
+	SpawnSession(ctx context.Context, callerID int64, request SpawnRequest) (int64, string, error)
 	ReadSession(ctx context.Context, callerID, targetID int64, latest bool) (Page, error)
 	Subscribe(ctx context.Context, callerID, targetID int64) (int64, bool, error)
 	Unsubscribe(ctx context.Context, callerID, targetID int64) (int64, bool, error)
@@ -60,6 +60,14 @@ type Entry struct {
 	Subscribed, Armed, Signalled bool
 }
 
+// SpawnRequest is one spawn_session call; an empty Worktree or Model means none or the default model.
+type SpawnRequest struct {
+	Project  string
+	Worktree string
+	Prompt   string
+	Model    string
+}
+
 type arguments struct {
 	Filter    string `json:"filter"`
 	SessionID int64  `json:"session_id"`
@@ -67,6 +75,7 @@ type arguments struct {
 	Project   string `json:"project"`
 	Worktree  string `json:"worktree"`
 	Prompt    string `json:"prompt"`
+	Model     string `json:"model"`
 	Latest    bool   `json:"latest"`
 }
 
@@ -202,7 +211,12 @@ func (t *sessionTool) send(ctx context.Context, args arguments) (*tool.Result, e
 }
 
 func (t *sessionTool) spawn(ctx context.Context, args arguments) (*tool.Result, error) {
-	sessionID, project, err := t.host.SpawnSession(ctx, t.callerID, args.Project, args.Worktree, args.Prompt)
+	sessionID, project, err := t.host.SpawnSession(ctx, t.callerID, SpawnRequest{
+		Project:  args.Project,
+		Worktree: args.Worktree,
+		Prompt:   args.Prompt,
+		Model:    args.Model,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("%w", err)
 	}

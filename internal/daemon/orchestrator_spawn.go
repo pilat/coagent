@@ -10,17 +10,24 @@ import (
 	"strings"
 
 	"github.com/pilat/coagent/internal/controllerapi"
+	"github.com/pilat/coagent/internal/orchestrator"
 	"github.com/pilat/coagent/internal/projectpath"
 	"github.com/pilat/coagent/internal/sessionstore"
+	"github.com/pilat/coagent/internal/subagent"
 	"github.com/pilat/coagent/internal/worktree"
 )
 
 func (h orchestratorHost) SpawnSession(
 	ctx context.Context,
 	callerID int64,
-	project, worktreeName, prompt string,
+	request orchestrator.SpawnRequest,
 ) (int64, string, error) {
 	caller, owner, err := h.caller(ctx, callerID)
+	if err != nil {
+		return 0, "", err
+	}
+
+	request.Model, err = h.spawnModel(request.Model)
 	if err != nil {
 		return 0, "", err
 	}
@@ -31,7 +38,7 @@ func (h orchestratorHost) SpawnSession(
 		return 0, "", fmt.Errorf(full, maxTotal-free, maxTotal)
 	}
 
-	selected, err := h.project(ctx, project)
+	selected, err := h.project(ctx, request.Project)
 	if err != nil {
 		return 0, "", err
 	}
@@ -42,13 +49,13 @@ func (h orchestratorHost) SpawnSession(
 	}
 
 	attrs := map[string]any{controllerapi.SessionAttributeManagerID: owner}
-	if title := controllerapi.SessionTitleFromInput(prompt); title != "" {
+	if title := controllerapi.SessionTitleFromInput(request.Prompt); title != "" {
 		attrs[controllerapi.SessionAttributeTitle] = title
 	}
 
 	var created worktree.Result
-	if worktreeName != "" {
-		created, err = worktree.Create(ctx, h.s.build.Config.UnifiedConfig, selected.WorkDir, worktreeName, true)
+	if request.Worktree != "" {
+		created, err = worktree.Create(ctx, h.s.build.Config.UnifiedConfig, selected.WorkDir, request.Worktree, true)
 		if err != nil {
 			return 0, "", fmt.Errorf("worktree: %w", err)
 		}
@@ -69,7 +76,7 @@ func (h orchestratorHost) SpawnSession(
 	err = h.s.store.WithTx(ctx, func(tx *sql.Tx) error {
 		var err error
 
-		sessionID, err = h.createSpawnTx(ctx, tx, selected, prompt, attrs, sender)
+		sessionID, err = h.createSpawnTx(ctx, tx, selected, request, attrs, sender)
 		if err != nil {
 			return err
 		}
@@ -88,14 +95,42 @@ func (h orchestratorHost) SpawnSession(
 	return sessionID, selected.Name, nil
 }
 
+func (h orchestratorHost) spawnModel(requested string) (string, error) {
+	if requested == "" {
+		return h.s.models.defaultModel, nil
+	}
+
+	if subagent.IsCandidate(h.s.models.infos, requested) {
+		return requested, nil
+	}
+
+	var ids []string
+	for _, model := range subagent.Candidates(h.s.models.infos) {
+		ids = append(ids, model.ID)
+	}
+
+	if len(ids) == 0 {
+		return "", fmt.Errorf(
+			"model %q is not an advertised tagged candidate; no tagged models are configured, so omit model for the daemon's default model",
+			requested,
+		)
+	}
+
+	return "", fmt.Errorf(
+		"model %q is not an advertised tagged candidate; choose one of: %s, or omit model for the daemon's default model",
+		requested,
+		strings.Join(ids, ", "),
+	)
+}
+
 func (h orchestratorHost) createSpawnTx(
 	ctx context.Context,
 	tx *sql.Tx,
 	project sessionstore.ProjectRow,
-	prompt string,
+	request orchestrator.SpawnRequest,
 	attrs, sender map[string]any,
 ) (int64, error) {
-	level, err := h.s.models.effort(h.s.models.defaultModel, "", "")
+	level, err := h.s.models.effort(request.Model, "", "")
 	if err != nil {
 		return 0, err
 	}
@@ -104,7 +139,7 @@ func (h orchestratorHost) createSpawnTx(
 		ProjectID:      project.ID,
 		Name:           project.Name,
 		WorkDir:        project.WorkDir,
-		Model:          h.s.models.defaultModel,
+		Model:          request.Model,
 		ReasoningLevel: level,
 		Attributes:     attrs,
 	})
@@ -115,7 +150,7 @@ func (h orchestratorHost) createSpawnTx(
 	_, err = sessionstore.EnqueueTx(ctx, tx, sessionstore.Input{
 		SessionID:  record.ID,
 		Source:     sessionstore.InputSourceAgent,
-		Content:    prompt,
+		Content:    request.Prompt,
 		Attributes: sender,
 	})
 	if err != nil {

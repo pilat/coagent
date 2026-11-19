@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/pilat/coagent/internal/orchestrator"
 	"github.com/pilat/coagent/internal/projectpath"
 )
 
@@ -37,7 +38,10 @@ func TestOrchestratorSpawnRegisteredProjects(t *testing.T) {
 
 	for _, selection := range []string{"EXTERNAL", external} {
 		t.Run("visible repository "+selection, func(t *testing.T) {
-			id, name, err := (orchestratorHost{h.mgr}).SpawnSession(h.ctx, caller, selection, "", "external work")
+			id, name, err := (orchestratorHost{h.mgr}).SpawnSession(h.ctx, caller, orchestrator.SpawnRequest{
+				Project: selection,
+				Prompt:  "external work",
+			})
 			require.NoError(t, err)
 			assert.Equal(t, "external", name)
 			h.waitAnswer(id, "done")
@@ -54,7 +58,10 @@ func TestOrchestratorSpawnRegisteredProjects(t *testing.T) {
 	} {
 		t.Run(tc.selection, func(t *testing.T) {
 			before := orchestratorSessionCount(t, h)
-			_, _, err := (orchestratorHost{h.mgr}).SpawnSession(h.ctx, caller, tc.selection, "", "do work")
+			_, _, err := (orchestratorHost{h.mgr}).SpawnSession(h.ctx, caller, orchestrator.SpawnRequest{
+				Project: tc.selection,
+				Prompt:  "do work",
+			})
 			require.EqualError(t, err, tc.want)
 			assert.Equal(t, before, orchestratorSessionCount(t, h))
 		})

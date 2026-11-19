@@ -21,7 +21,8 @@ The shared vocabulary of coagent — the words that name its concepts, so code, 
 - **sender provenance**: The sending session's id and names carried as inbox attributes of a sent message and turned
   into the host line and chat marker when the target accepts it. Never part of the message text.
 - **spawned session**: A root created by `spawn_session`: ordinary and manager-owned, with its own budget, outside the
-  orchestrator's stop tree; its first input is a sent message. _Avoid_: child, subagent (those are `task`).
+  orchestrator's stop tree; its first input is a sent message. It runs on the default model unless the orchestrator
+  named a tagged one. _Avoid_: child, subagent (those are `task`).
 
 **daemon**:
 The single long-lived coagent process. It coordinates session lifecycle, durable
@@ -613,7 +614,7 @@ _Avoid_: "previous catalog", "cached body" (those are the whole catalog snapshot
 
 **model tag**:
 A user-defined lowercase ASCII token on a configured model. Tags are hints with
-no built-in routing meaning: they bound which configured models `task` may offer
+no built-in routing meaning: they bound which configured models `task` and `spawn_session` may offer
 for autonomous explicit selection, while `/model` remains available for every
 configured model.
 _Avoid_: capability, model role.

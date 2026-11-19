@@ -16,6 +16,7 @@ import (
 	"github.com/pilat/coagent/internal/config"
 	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/llmwire"
+	"github.com/pilat/coagent/internal/orchestrator"
 	"github.com/pilat/coagent/internal/projectpath"
 	"github.com/pilat/coagent/internal/sessionstore"
 )
@@ -79,7 +80,10 @@ func TestOrchestratorSpawn(t *testing.T) {
 	require.NoError(t, h.store.SetChatFocus(h.ctx, "owner", "chat", caller))
 	require.NoError(t, h.store.BindChat(h.ctx, "owner", "empty"))
 	for _, selection := range []string{"NaMeD", path} {
-		id, where, err := (orchestratorHost{h.mgr}).SpawnSession(h.ctx, caller, selection, "", "fix the login bug")
+		id, where, err := (orchestratorHost{h.mgr}).SpawnSession(h.ctx, caller, orchestrator.SpawnRequest{
+			Project: selection,
+			Prompt:  "fix the login bug",
+		})
 		require.NoError(t, err)
 		assert.Equal(t, "named", where)
 		h.waitAnswer(id, "done")
@@ -113,7 +117,10 @@ func TestOrchestratorSpawn(t *testing.T) {
 	require.NoError(t, err)
 	for _, selection := range []string{"missing", "hidden", hiddenPath} {
 		before := orchestratorSessionCount(t, h)
-		_, _, err := (orchestratorHost{h.mgr}).SpawnSession(h.ctx, caller, selection, "", "do work")
+		_, _, err := (orchestratorHost{h.mgr}).SpawnSession(h.ctx, caller, orchestrator.SpawnRequest{
+			Project: selection,
+			Prompt:  "do work",
+		})
 		require.EqualError(
 			t,
 			err,
@@ -122,12 +129,18 @@ func TestOrchestratorSpawn(t *testing.T) {
 		assert.Equal(t, before, orchestratorSessionCount(t, h))
 	}
 	for _, selection := range []string{"named/existing", worktree} {
-		_, _, err := (orchestratorHost{h.mgr}).SpawnSession(h.ctx, caller, selection, "", "do work")
+		_, _, err := (orchestratorHost{h.mgr}).SpawnSession(h.ctx, caller, orchestrator.SpawnRequest{
+			Project: selection,
+			Prompt:  "do work",
+		})
 		require.EqualError(t, err, fmt.Sprintf(
 			"project %q is a worktree; name its base project and pass worktree to create a fresh one", selection))
 	}
 	for _, selection := range []string{"stale", stale} {
-		_, _, err := (orchestratorHost{h.mgr}).SpawnSession(h.ctx, caller, selection, "", "do work")
+		_, _, err := (orchestratorHost{h.mgr}).SpawnSession(h.ctx, caller, orchestrator.SpawnRequest{
+			Project: selection,
+			Prompt:  "do work",
+		})
 		require.EqualError(t, err, fmt.Sprintf(
 			"project %q directory is missing: %s; open an existing project instead", selection, stale))
 	}
@@ -135,7 +148,10 @@ func TestOrchestratorSpawn(t *testing.T) {
 	_, second := orchestratorProject(t, h, "api")
 	paths := []string{first, second}
 	slices.Sort(paths)
-	_, _, err = (orchestratorHost{h.mgr}).SpawnSession(h.ctx, caller, "api", "", "do work")
+	_, _, err = (orchestratorHost{h.mgr}).SpawnSession(h.ctx, caller, orchestrator.SpawnRequest{
+		Project: "api",
+		Prompt:  "do work",
+	})
 	require.EqualError(t, err, `project name "api" is ambiguous; use one of: `+strings.Join(paths, ", "))
 }
 
@@ -157,7 +173,10 @@ func TestOrchestratorSpawnCapacity(t *testing.T) {
 		held++
 	}
 	before := orchestratorSessionCount(t, h)
-	_, _, err = (orchestratorHost{h.mgr}).SpawnSession(h.ctx, caller, path, "", "new work")
+	_, _, err = (orchestratorHost{h.mgr}).SpawnSession(h.ctx, caller, orchestrator.SpawnRequest{
+		Project: path,
+		Prompt:  "new work",
+	})
 	require.EqualError(
 		t,
 		err,
@@ -170,7 +189,10 @@ func TestOrchestratorSpawnCapacity(t *testing.T) {
 	assert.Equal(t, before, orchestratorSessionCount(t, h))
 	h.mgr.runners.release(false, 0)
 	held--
-	id, _, err := (orchestratorHost{h.mgr}).SpawnSession(h.ctx, caller, path, "", "new work")
+	id, _, err := (orchestratorHost{h.mgr}).SpawnSession(h.ctx, caller, orchestrator.SpawnRequest{
+		Project: path,
+		Prompt:  "new work",
+	})
 	require.NoError(t, err)
 	h.waitAnswer(id, "done")
 	assert.Equal(t, before+1, orchestratorSessionCount(t, h))
