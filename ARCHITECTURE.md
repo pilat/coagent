@@ -89,7 +89,7 @@ does not imply a tier except where it expresses an implementation variant.
 - `internal/managercontrol` — manager-bound application use cases and controller adaptation.
 - `internal/managerdiscovery` — manager-facing project, model, skill and spawn-favorites discovery.
 - `internal/migrate` — SQLite opening and schema migration with production backup policy.
-- `internal/orchestrator` — orchestrator-mode tools (list, send, spawn, read, subscribe, unsubscribe) over a daemon-implemented host; schemas, validation and result text only.
+- `internal/orchestrator` — orchestrator-mode tools (list, send, spawn, read, subscribe, unsubscribe, stop, kill) over a daemon-implemented host; schemas, validation and result text only.
 - `internal/progress` — transport-neutral diagnostic status facts and Markdown rendering.
 - `internal/progressruntime` — on-demand status projection and live runner/model/context state.
 - `internal/projectpath` — canonical project-root paths and project-name validation.
@@ -186,7 +186,7 @@ re-keyed onto the newest root. The result is untrusted tool output
 ([ADR-0098](docs/adr/0098-an-orchestrator-reads-output-logs-from-its-own-position.md)).
 The row also holds one-shot `armed`, standing `subscribed` and unread `signalled` state; reads clear the last.
 The first arm creates a watch at the target's output-log end; later arms keep its read position.
-The daemon's `signalOutcome` fires at five turn-outcome points as `source=subagent`, consuming arms even when an unread signal covers the outcome.
+The daemon's `signalOutcome` fires at five turn-outcome points as `source=subagent`, consuming arms even when an unread signal covers the outcome; the acting orchestrator's arm is consumed without a signal.
 Armed one-shot waits count as wake sources and budget obligations, except active mutual waits; standing arms do not.
 Target `/clear` moves the rows to its replacement ([ADR-0099](docs/adr/0099-turn-outcomes-signal-watchers-through-armed-watch-rows.md)).
 
@@ -727,7 +727,7 @@ the control socket carries no event traffic and no server pushes
 
 Orchestrator mode is a durable attribute on an ordinary manager-owned root,
 granted and revoked only by human `/orchestrate on|off`; it survives restart and `/clear`.
-From its next run, that root alone gets list, send, spawn, read, subscribe and unsubscribe tools, with mode and
+From its next run, that root alone gets list, send, spawn, read, subscribe, unsubscribe, stop and kill tools, with mode and
 ownership checked on every call; its subagents and targets receive no new tool.
 Sent messages carry host-authored sender provenance at acceptance and appear in
 the target's chat. Their authority is plain text: no commands, grants, skill
@@ -739,6 +739,8 @@ candidates `task` offers, and the root takes that model's default effort; omitte
 model. No tool changes an existing session's model
 ([ADR-0100](docs/adr/0100-a-spawned-session-takes-a-tagged-model.md)). A spawned root takes its title from
 the prompt at creation; it is independent and never moves chat focus ([ADR-0097](docs/adr/0097-orchestrator-mode-is-a-human-granted-capability-on-an-ordinary-root.md)).
+Spawned roots carry a write-once `spawned_by` attribute refused from managers and preserved by `/clear`.
+An orchestrator stopping or killing a root it spawned writes a fixed `source=user` `/stop` or `/kill` row through the human's command flow, naming the actor; stop refuses an armed target budget, while kill remains allowed ([ADR-0101](docs/adr/0101-an-orchestrator-ends-only-sessions-it-spawned.md)).
 Reading another session writes nothing to it and returns untrusted data; `batch` refuses `read_session`.
 The model-facing signal contains ids, project name and outcome kind, without target-authored text or title.
 Its persist-only chat row carries the target's shared display name, including title; it never enters the watcher's transcript.

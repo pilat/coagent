@@ -48,7 +48,10 @@ func (h orchestratorHost) SpawnSession(
 		return 0, "", err
 	}
 
-	attrs := map[string]any{controllerapi.SessionAttributeManagerID: owner}
+	attrs := map[string]any{
+		controllerapi.SessionAttributeManagerID: owner,
+		controllerapi.SessionAttributeSpawnedBy: callerID,
+	}
 	if title := controllerapi.SessionTitleFromInput(request.Prompt); title != "" {
 		attrs[controllerapi.SessionAttributeTitle] = title
 	}

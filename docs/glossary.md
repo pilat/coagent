@@ -10,7 +10,7 @@ The shared vocabulary of coagent — the words that name its concepts, so code, 
 
 - **orchestrator mode**: A durable capability on one manager-owned root, granted and revoked only by the human with
   `/orchestrate on|off`. It gives that root `list_sessions`, `send_to_session`, `spawn_session`, `read_session`, `subscribe` and `unsubscribe` over roots
-  of its manager; its subagents never get them. It is not a session kind, agent type or role
+  of its manager, plus `stop_session` and `kill_session` only over sessions it spawned; its subagents never get them. It is not a session kind, agent type or role
   ([ADR-0097](adr/0097-orchestrator-mode-is-a-human-granted-capability-on-an-ordinary-root.md)).
   _Avoid_: assistant, desk, coordinator, supervisor; "orchestrator" for the daemon.
 - **orchestrator**: A root session with orchestrator mode on. _Avoid_: manager (that is the Telegram-side owner),
@@ -18,11 +18,14 @@ The shared vocabulary of coagent — the words that name its concepts, so code, 
 - **sent message**: Text one orchestrator writes into another root with `send_to_session` or as a `spawn_session`
   prompt: `source=agent` input with sender provenance and no human authority. The target sees a host-authored line
   naming the sender; its chat shows `↪ from #N name`. _Avoid_: relay, forward, reply.
-- **sender provenance**: The sending session's id and names carried as inbox attributes of a sent message and turned
-  into the host line and chat marker when the target accepts it. Never part of the message text.
+- **sender provenance**: The sending session's id and names carried as inbox attributes of a sent message or
+  host-written lifecycle command. They name the author in the target's chat and, for a sent message, its model input.
+  Never part of the message text.
 - **spawned session**: A root created by `spawn_session`: ordinary and manager-owned, with its own budget, outside the
   orchestrator's stop tree; its first input is a sent message. It runs on the default model unless the orchestrator
-  named a tagged one. _Avoid_: child, subagent (those are `task`).
+  named a tagged one. Its durable `spawned_by` attribute names the spawner, which can stop or kill it, as can the
+  spawner's `/clear` replacement; the orchestrator's own `/stop` still does not reach it.
+  _Avoid_: child, subagent (those are `task`).
 
 **daemon**:
 The single long-lived coagent process. It coordinates session lifecycle, durable
@@ -339,6 +342,7 @@ _Avoid_: subscription alone (say standing subscription; "subscription" also name
 **outcome signal**:
 One host-authored model line in an orchestrator's inbox naming the watched root's ids, project and turn outcome,
 and pointing to `read_session`; it carries no target-authored text or title. It is a `source=subagent` row.
+A stop or kill by an orchestrator names that session; that session gets no signal for its own action.
 The orchestrator's chat shows a persist-only `🔔 #N display name …` row using the shared project/title display name;
 that row never enters its model transcript. For `/clear` the name belongs to the cleared session. At most one is unread per watch
 ([ADR-0099](adr/0099-turn-outcomes-signal-watchers-through-armed-watch-rows.md)).
@@ -421,6 +425,8 @@ can release a fired budget; a matching leading command creates its exact
 tool activation grant.
 Session commands are read only from human input and scheduled turns; other
 sources reach the model as text.
+The orchestrator host also writes one: the fixed `/stop` or `/kill` an orchestrator issues on a session it spawned,
+with sender attributes naming it — authority the human delegated with `/orchestrate`.
 _Avoid_: real user message (authority follows the source field).
 
 **tool activation grant**:

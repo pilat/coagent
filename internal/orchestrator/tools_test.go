@@ -30,6 +30,7 @@ type fakeHost struct {
 	page    Page
 	was     bool
 	unread  bool
+	ended   Ended
 }
 
 func (h *fakeHost) ListSessions(_ context.Context, caller int64, filter string) ([]Entry, int, error) {
@@ -57,6 +58,16 @@ func (h *fakeHost) Unsubscribe(_ context.Context, caller, target int64) (int64, 
 	h.calls = append(h.calls, hostCall{caller: caller, target: target})
 
 	return 25, h.was, h.err
+}
+
+func (h *fakeHost) StopSession(_ context.Context, caller, target int64) (Ended, error) {
+	h.calls = append(h.calls, hostCall{caller: caller, target: target})
+	return h.ended, h.err
+}
+
+func (h *fakeHost) KillSession(_ context.Context, caller, target int64) (Ended, error) {
+	h.calls = append(h.calls, hostCall{caller: caller, target: target})
+	return h.ended, h.err
 }
 
 func (h *fakeHost) SpawnSession(
@@ -158,7 +169,7 @@ func TestSpawnSessionOffersOptionalModel(t *testing.T) {
 
 func TestToolsDeclarations(t *testing.T) {
 	tools := NewTools(nil, 12)
-	require.Len(t, tools, 6)
+	require.Len(t, tools, 8)
 	for i, tc := range []struct{ id, trail, prompt string }{
 		{IDListSessions, "filter", "list your root sessions"},
 		{IDSendToSession, "message", "write to a session"},
@@ -166,6 +177,8 @@ func TestToolsDeclarations(t *testing.T) {
 		{id: IDReadSession, trail: "", prompt: "read a session's chat"},
 		{id: IDSubscribe, prompt: "get a signal when a session's turn ends"},
 		{id: IDUnsubscribe, prompt: "stop those signals"},
+		{id: IDStopSession, prompt: "stop a session you spawned"},
+		{id: IDKillSession, prompt: "kill a session you spawned"},
 	} {
 		candidate := tools[i]
 		assert.Equal(t, tc.id, candidate.ID())

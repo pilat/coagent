@@ -15,7 +15,7 @@ const (
 type SignalKind string
 
 // SignalText keeps the display name in chat and out of the model line.
-func SignalText(k SignalKind, id int64, project, name string, replacement int64) (string, string) {
+func SignalText(k SignalKind, id int64, project, name string, replacement, actor int64) (string, string) {
 	var fact, notice string
 
 	readID := id
@@ -27,11 +27,19 @@ func SignalText(k SignalKind, id int64, project, name string, replacement int64)
 		fact, notice = "stopped on an error", "stopped on an error"
 	case SignalStopped:
 		fact, notice = "was stopped by the human with /stop", "was stopped"
+		if actor != 0 {
+			fact = fmt.Sprintf("was stopped by session #%d with %s", actor, IDStopSession)
+			notice = fmt.Sprintf("was stopped by #%d", actor)
+		}
 	case SignalParked:
 		fact = "is parked at its budget checkpoint; only the human can resume it"
 		notice = "is parked at its budget checkpoint"
 	case SignalKilled:
 		fact, notice = "was killed", "was killed"
+		if actor != 0 {
+			fact = fmt.Sprintf("was killed by session #%d with %s", actor, IDKillSession)
+			notice = fmt.Sprintf("was killed by #%d", actor)
+		}
 	case SignalCleared:
 		fact = fmt.Sprintf("was cleared by the human; its replacement is session #%d", replacement)
 		notice = fmt.Sprintf("was cleared; now #%d", replacement)

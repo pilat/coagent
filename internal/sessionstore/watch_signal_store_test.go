@@ -164,6 +164,33 @@ func TestWatchSignals_FireArmRead(t *testing.T) {
 	})
 }
 
+func TestWatchSignals_ActorIsNotSignalled(t *testing.T) {
+	store, _, actor, target := signalTestPair(t)
+	record, err := store.GetSession(t.Context(), target)
+	require.NoError(t, err)
+	other := chatTestRoot(t, store, record.ProjectID, "owner")
+	_, err = store.SetOrchestrator(t.Context(), "owner", other.ID, true)
+	require.NoError(t, err)
+	signalTestArm(t, store, actor, target, false)
+	signalTestArm(t, store, actor, target, true)
+	signalTestArm(t, store, other.ID, target, false)
+
+	count, err := store.FireWatches(t.Context(), WatchFire{
+		TargetID: target, ActorID: actor, Line: "host line", Notice: "host notice",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 1, count)
+	assert.Equal(t, WatchState{Subscribed: true}, signalTestState(t, store, actor, target))
+	assert.Equal(t, WatchState{Signalled: true}, signalTestState(t, store, other.ID, target))
+	rows, err := store.ListPending(t.Context(), actor)
+	require.NoError(t, err)
+	assert.Empty(t, rows)
+	rows, err = store.ListPending(t.Context(), other.ID)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	assert.Equal(t, "host line", rows[0].RawContent)
+}
+
 func signalTestPair(t *testing.T) (*Store, *sql.DB, int64, int64) {
 	t.Helper()
 	store, db, project := newTestStore(t)

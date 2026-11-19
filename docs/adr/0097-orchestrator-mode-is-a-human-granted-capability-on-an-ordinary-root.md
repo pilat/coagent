@@ -3,6 +3,7 @@
 - **Status:** Accepted
 - **Date:** 2026-11-17
 - **Amended by:** [ADR-0100](0100-a-spawned-session-takes-a-tagged-model.md) — a spawn may name a tagged model
+- **Amended by:** [ADR-0101](0101-an-orchestrator-ends-only-sessions-it-spawned.md) — an orchestrator can stop and kill the sessions it spawned
 
 ## Context
 

@@ -28,6 +28,10 @@ func (s *service) createSession(
 		return 0, errors.New("orchestrator attribute is reserved")
 	}
 
+	if _, supplied := data.Attributes[controllerapi.SessionAttributeSpawnedBy]; supplied {
+		return 0, errors.New("spawned_by attribute is reserved")
+	}
+
 	if _, supplied := data.Attributes[controllerapi.SessionAttributeTitle]; supplied {
 		return 0, errors.New("title attribute is reserved")
 	}

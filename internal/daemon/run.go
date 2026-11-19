@@ -253,7 +253,7 @@ func (s *Service) finishRunnerDelivery(ctx context.Context, rs *runner, out runO
 	id := rs.sessionID
 
 	deliver := s.finalizeChildLocked(cleanup, id, errored)
-	s.signalOutcome(ctx, id, runSignalKind(out, errored), 0)
+	s.signalOutcome(ctx, id, runSignalKind(out, errored), 0, 0)
 
 	if out.publishIdle && ctx.Err() == nil {
 		s.publishIdle(id)

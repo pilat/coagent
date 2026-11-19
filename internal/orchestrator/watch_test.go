@@ -28,11 +28,11 @@ func TestRenderSessionsWatchMarkers(t *testing.T) {
 			ID: 12, Name: "coagent", State: "idle", Activity: now, Self: true,
 			Subscribed: true, Armed: true, Signalled: true,
 		},
-		{ID: 13, Name: "api", State: "idle", Activity: now, Armed: true},
+		{ID: 13, Name: "api", State: "idle", Activity: now, Spawned: true, Armed: true},
 		{ID: 14, Name: "docs", State: "idle", Activity: now, Subscribed: true, Signalled: true},
 	}
 	assert.Equal(t, "#12 coagent — idle, active 0m ago; subscribed, awaiting signal, unread signal (this session)\n"+
-		"#13 api — idle, active 0m ago; awaiting signal\n"+
+		"#13 api — idle, active 0m ago; spawned by you, awaiting signal\n"+
 		"#14 docs — idle, active 0m ago; subscribed, unread signal", renderSessions(entries, 3, "", now))
 }
 

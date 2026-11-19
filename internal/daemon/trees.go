@@ -58,7 +58,7 @@ func (s *Service) kill(ctx context.Context, input *sessionstore.InboxInput) erro
 		return err
 	}
 
-	if err := s.handleLifecycleInput(ctx, input, "Stopping session..."); err != nil {
+	if err := s.handleLifecycleInput(ctx, input, commandAcknowledgement(input, "Stopping session...")); err != nil {
 		return err
 	}
 
@@ -66,7 +66,7 @@ func (s *Service) kill(ctx context.Context, input *sessionstore.InboxInput) erro
 		return err
 	}
 
-	s.signalOutcome(ctx, input.SessionID, orchestrator.SignalKilled, 0)
+	s.signalOutcome(ctx, input.SessionID, orchestrator.SignalKilled, 0, commandSender(input))
 
 	return nil
 }
@@ -92,7 +92,7 @@ func (s *Service) stop(ctx context.Context, input *sessionstore.InboxInput) erro
 		return s.handleStoppedStop(ctx, input)
 	}
 
-	if err := s.handleLifecycleInput(ctx, input, "⏳ Stopping…"); err != nil {
+	if err := s.handleLifecycleInput(ctx, input, commandAcknowledgement(input, "⏳ Stopping…")); err != nil {
 		return err
 	}
 
@@ -100,7 +100,7 @@ func (s *Service) stop(ctx context.Context, input *sessionstore.InboxInput) erro
 		return err
 	}
 
-	s.signalOutcome(ctx, input.SessionID, orchestrator.SignalStopped, 0)
+	s.signalOutcome(ctx, input.SessionID, orchestrator.SignalStopped, 0, commandSender(input))
 
 	return nil
 }
@@ -342,7 +342,7 @@ func (s *Service) clear(ctx context.Context, input *sessionstore.InboxInput) (in
 		return 0, err
 	}
 
-	s.signalOutcome(ctx, replacement, orchestrator.SignalCleared, input.SessionID)
+	s.signalOutcome(ctx, replacement, orchestrator.SignalCleared, input.SessionID, 0)
 
 	return replacement, nil
 }

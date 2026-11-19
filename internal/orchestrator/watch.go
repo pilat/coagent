@@ -68,8 +68,12 @@ func (t *sessionTool) unsubscribe(ctx context.Context, targetID int64) (*tool.Re
 	return &tool.Result{Title: fmt.Sprintf("unsubscribed #%d", id), Output: output}, nil
 }
 
-func watchMarkers(entry Entry) string {
+func entryMarkers(entry Entry) string {
 	var markers []string
+
+	if entry.Spawned {
+		markers = append(markers, "spawned by you")
+	}
 
 	if entry.Subscribed {
 		markers = append(markers, "subscribed")

@@ -73,18 +73,23 @@ func (h orchestratorHost) Unsubscribe(ctx context.Context, callerID, targetID in
 	return newest, was, nil
 }
 
-func (s *Service) signalOutcome(ctx context.Context, targetID int64, kind orchestrator.SignalKind, oldID int64) {
+func (s *Service) signalOutcome(ctx context.Context, targetID int64, kind orchestrator.SignalKind, oldID, actor int64) {
 	if ctx.Err() != nil {
 		return
 	}
 
-	if err := s.fireOutcome(ctx, targetID, kind, oldID); err != nil {
+	if err := s.fireOutcome(ctx, targetID, kind, oldID, actor); err != nil {
 		logger.Ctx(ctx).Named("daemon.orchestrator").Error("signal_outcome_failed",
 			zap.Int64("session_id", targetID), zap.Error(err))
 	}
 }
 
-func (s *Service) fireOutcome(ctx context.Context, targetID int64, kind orchestrator.SignalKind, oldID int64) error {
+func (s *Service) fireOutcome(
+	ctx context.Context,
+	targetID int64,
+	kind orchestrator.SignalKind,
+	oldID, actor int64,
+) error {
 	recordID := targetID
 	if oldID != 0 {
 		recordID = oldID
@@ -123,9 +128,11 @@ func (s *Service) fireOutcome(ctx context.Context, targetID int64, kind orchestr
 
 	title, _ := record.Attributes[controllerapi.SessionAttributeTitle].(string)
 	name := sessionstore.ChatDisplayName(project, title)
-	line, notice := orchestrator.SignalText(kind, recordID, project, name, targetID)
+	line, notice := orchestrator.SignalText(kind, recordID, project, name, targetID, actor)
 
-	_, err = s.store.FireWatches(ctx, sessionstore.WatchFire{TargetID: targetID, Line: line, Notice: notice})
+	_, err = s.store.FireWatches(ctx, sessionstore.WatchFire{
+		TargetID: targetID, ActorID: actor, Line: line, Notice: notice,
+	})
 	if err != nil {
 		return fmt.Errorf("fire outcome watches: %w", err)
 	}
