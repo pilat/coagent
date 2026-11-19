@@ -323,11 +323,6 @@ func spawnTaskCall(callID, agentType, marker string) llmwire.ToolCall {
 	}
 }
 
-// contextInfo snapshots the seam observation the raw client can make: what the runner actually handed the session loop.
-type contextInfo struct {
-	hasDeadline bool
-}
-
 type scheduleRestartHarness struct {
 	*harness
 	db        *sql.DB
@@ -347,8 +342,6 @@ type harness struct {
 	ctx       context.Context
 	opts      harnessOptions
 
-	llmMu        sync.Mutex
-	llmRefs      []*scriptedLLM // every client the session factory created
 	wakeOnce     sync.Once
 	shutdownOnce sync.Once
 }
@@ -514,11 +507,7 @@ func newHarness(t *testing.T, o harnessOptions) *harness {
 	clientFor := o.clientFor
 	if clientFor == nil {
 		clientFor = func(*config.Config) (llm.Client, error) {
-			client := &scriptedLLM{respond: o.respond}
-			h.llmMu.Lock()
-			h.llmRefs = append(h.llmRefs, client)
-			h.llmMu.Unlock()
-			return client, nil
+			return &scriptedLLM{respond: o.respond}, nil
 		}
 	}
 	registry := mcpstore.NewStore(db)

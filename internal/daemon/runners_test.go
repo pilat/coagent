@@ -2,7 +2,6 @@ package daemon
 
 import (
 	"database/sql"
-	"fmt"
 	"testing"
 	"time"
 
@@ -92,11 +91,13 @@ func TestStartRejectsKilledSessionWithRunningChildLink(t *testing.T) {
 
 // Child Chat receives cancellation without a wall-clock deadline; explicit stop must cancel that same context.
 func TestScenario_RunnerAddsNoChildLifetimeDeadline(t *testing.T) {
+	childEntered := make(chan struct{})
 	childRelease := make(chan struct{})
 	respond := func(_ string, msgs []llmwire.Message) *llmwire.Response {
 		if hasUserContaining(msgs, "CHILD_SEAM") {
+			closeOnce(childEntered)
 			<-childRelease
-			return textReply("unreached by the happy path")
+			return callReply("child-seam-ls", "ls", `{"path":"."}`)
 		}
 		if hasToolResultFor(msgs, tool.IDTask) {
 			return textReply("parent sees the stopped child")
@@ -111,20 +112,16 @@ func TestScenario_RunnerAddsNoChildLifetimeDeadline(t *testing.T) {
 	parentID, err := h.mgr.Send(h.ctx, h.projectID, "spawn for seam check", "fake-model", nil)
 	require.NoError(t, err)
 	link := h.waitLink(parentID, taskCallID)
-	childSessionID := fmt.Sprintf("%d:%d", parentID, link.ChildID)
-
-	// Inspect the context inside Chat; the runner must not add a child lifetime deadline.
-	h.waitUntil("child Chat is in flight", func() bool {
-		client := h.sessionClient(childSessionID)
-		return client != nil && client.hasChatContext()
-	})
-	childClient := h.sessionClient(childSessionID)
-	require.NotNil(t, childClient)
-	assert.False(t, childClient.chatRanWithDeadline(), "the runner must add no child-lifetime deadline")
+	waitForScenarioSignal(t, childEntered, "child's first model call reached the provider")
+	hold := h.holdRunner(link.ChildID)
+	close(childRelease)
+	waitForScenarioSignal(t, hold.entered, "child Chat is in flight")
+	assert.False(t, hold.hadDeadline, "the runner must add no child-lifetime deadline")
 
 	// The only interrupt path is explicit stop: it must cancel the very context the child's client holds.
+	closeOnce(hold.release)
 	require.NoError(t, h.mgr.sendToSession(h.ctx, link.ChildID, "/stop"))
-	h.waitUntil("stop cancels the child context", childClient.sawCancellation)
+	waitForScenarioSignal(t, hold.cancelled, "stop cancels the child context")
 	assert.Equal(t, subagent.StateStopped, func() subagent.State {
 		l := h.link(link.ChildID)
 		require.NotNil(t, l)
@@ -200,19 +197,4 @@ func TestDrainQueue_SkipsKilledChild(t *testing.T) {
 func TestAdmissionCaps_ChildrenCappedBelowTotal(t *testing.T) {
 	assert.Less(t, maxChildren, maxTotal, "maxChildren must stay strictly below maxTotal")
 	assert.LessOrEqual(t, maxPerParent, maxChildren, "per-parent cap cannot exceed the child cap")
-}
-
-// The recorded client exposes the session context actually used by its runner.
-func (h *harness) sessionClient(sessionID string) *scriptedLLM {
-	h.llmMu.Lock()
-	defer h.llmMu.Unlock()
-	for _, c := range h.llmRefs {
-		c.mu.Lock()
-		id := c.sessionID
-		c.mu.Unlock()
-		if id == sessionID {
-			return c
-		}
-	}
-	return nil
 }
