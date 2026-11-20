@@ -10,8 +10,8 @@ import (
 	"github.com/pilat/coagent/internal/tool"
 )
 
-// sleepTool creates a one-shot schedule and suspends the session.
-// The scheduler resumes the session when the timer fires.
+// sleepTool waits inside the turn for up to tool.InTurnWaitLimit; a longer sleep
+// creates a one-shot schedule and suspends the session until the scheduler resumes it.
 type sleepTool struct {
 	svc       Service
 	sessionID int64
@@ -68,6 +68,10 @@ func (t *sleepTool) Execute(ctx context.Context, params json.RawMessage) (*tool.
 		return nil, fmt.Errorf("duration must be positive, got %s", dur)
 	}
 
+	if dur <= tool.InTurnWaitLimit {
+		return sleepInTurn(ctx, dur, p.Duration)
+	}
+
 	// Create a one-shot schedule and suspend the session.
 	// The tool result is NOT recorded — the runner injects the real outcome
 	// ("Sleep completed" or "Sleep interrupted") on resume.
@@ -91,11 +95,24 @@ func (t *sleepTool) Execute(ctx context.Context, params json.RawMessage) (*tool.
 	return nil, tool.ErrSuspend
 }
 
+func sleepInTurn(ctx context.Context, dur time.Duration, requested string) (*tool.Result, error) {
+	timer := time.NewTimer(dur)
+	defer timer.Stop()
+
+	select {
+	case <-timer.C:
+		return &tool.Result{Output: "Sleep completed (" + requested + ")."}, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
 const sleepDescription = `Sleep (wait/pause/delay/nap) for a specified duration. This is a one-time timer — NOT for recurring schedules.
 
 Examples: sleep("30s"), sleep("5m"), sleep("2h"), sleep("3d"), sleep("1w"), sleep("2026-03-25T09:00:00Z")
 
 Use when you need to wait once before continuing: CI pipelines, deployments, rate limits, countdowns, user-requested delays, "wake me up at 9am", "remind me in 2 hours".
+Up to 10s the sleep happens inside the current turn; a longer one suspends the session until the timer fires.
 While sleeping, the agent uses zero tokens and zero compute.
 
 Duration formats:

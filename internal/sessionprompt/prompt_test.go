@@ -116,8 +116,16 @@ func TestBuildToolsSection_SubagentsMustNotUseSleepOrPollingToWait(t *testing.T)
 
 	result := buildToolsSection(reg, false)
 
-	assert.Contains(t, result, "A sleep call cannot order or delay another tool call from the same assistant response")
-	assert.Contains(t, result, "calls emitted together may execute concurrently")
+	assert.Contains(
+		t,
+		result,
+		"A sleep of "+tool.InTurnWaitLimit.String()+" or less waits inside the current turn, and the calls after it in the same response run after it.",
+	)
+	assert.Contains(
+		t,
+		result,
+		"A longer sleep suspends the session, and the calls after it in the same response do not run.",
+	)
 	assert.Contains(t, result, "Never use sleep, schedule, or get_subagent_result polling to wait for subagents")
 	assert.Contains(t, result, "Use foreground task when you need the answer now")
 	assert.Contains(t, result, "background task result arrives automatically in a new turn")

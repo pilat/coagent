@@ -73,7 +73,7 @@ var builtinAgentTypes = map[AgentType]AgentTypeConfig{
 // browserGrantable is every built-in browser.tools can grant; the order is the
 // grant's display and filter order. Everything else is ignored.
 var browserGrantable = []string{
-	"read", "write", "edit", "apply_patch", "ls", "glob", "grep", "bash", "tail", "cancel_process", "webfetch",
+	"read", "write", "edit", "apply_patch", "ls", "glob", "grep", "bash", "tail", "cancel_process", "webfetch", "sleep",
 }
 
 // AgentType defines different agent configurations.

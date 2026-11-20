@@ -200,7 +200,7 @@ func TestIntegration_SchedulerWakesExactSleepThroughDaemonQueue(t *testing.T) {
 		if hasToolResultFor(msgs, tool.IDSleep) {
 			return textReply("timer handled")
 		}
-		return callReply(sleepCallID, tool.IDSleep, `{"duration":"1ms","reason":"boundary test"}`)
+		return callReply(sleepCallID, tool.IDSleep, `{"duration":"1h","reason":"boundary test"}`)
 	}
 	h := newHarness(t, harnessOptions{respond: respond})
 	parentID := h.send("sleep briefly", nil)
@@ -208,6 +208,9 @@ func TestIntegration_SchedulerWakesExactSleepThroughDaemonQueue(t *testing.T) {
 		schedules, listErr := h.schedules.ListSchedules(h.ctx, parentID)
 		return listErr == nil && len(schedules) == 1 && !h.mgr.HasActiveLoop(parentID)
 	})
+	_, err := h.db.ExecContext(h.ctx, "UPDATE schedules SET one_shot_at = ? WHERE session_id = ?",
+		time.Now().Add(-time.Second).UTC(), parentID)
+	require.NoError(t, err)
 	executor := schedule.NewExecutor(h.schedules, h.mgr)
 	executor.Start(h.ctx)
 	defer executor.Stop()

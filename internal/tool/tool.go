@@ -36,8 +36,8 @@ type FrameAvailability interface { //nolint:iface // Its implementation and cons
 	SetFramesAvailable(bool)
 }
 
-// externalCallTools suspend the loop awaiting an outcome produced outside it.
-// Never re-executed, never stubbed by repair; only an injection resolves one.
+// externalCallTools can suspend the loop awaiting an outcome produced outside it.
+// Never re-executed, never stubbed by repair; once pending, only an injection resolves one.
 var externalCallTools = map[string]bool{
 	IDSleep: true,
 	IDTask:  true,

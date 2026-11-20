@@ -366,7 +366,7 @@ browser:
   ([ADR-0091](docs/adr/0091-browser-runs-on-a-fixed-model-with-granted-built-ins.md)).
 - `tools` grants built-in tools on top of the bound server's. Nothing is granted
   by default. Accepted names: `read`, `write`, `edit`, `apply_patch`, `ls`,
-  `glob`, `grep`, `bash`, `tail`, `cancel_process`, `webfetch`. Any other name,
+  `glob`, `grep`, `bash`, `tail`, `cancel_process`, `webfetch`, `sleep`. Any other name,
   including `batch`, `lsp`, `skill`, `websearch`, `task` and MCP tools, is
   ignored without an error or a log line. Granted tools are not frames: they
   do not take `task_state` and do not count toward the one-action rule.

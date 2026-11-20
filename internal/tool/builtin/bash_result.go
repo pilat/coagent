@@ -19,7 +19,7 @@ func (t *bashTool) waitForegroundTerminal(
 	ticker := time.NewTicker(25 * time.Millisecond)
 	defer ticker.Stop()
 
-	timer := time.NewTimer(time.Until(record.Deadline.Add(foregroundGrace)))
+	timer := time.NewTimer(time.Until(record.Deadline.Add(tool.InTurnWaitLimit)))
 	defer timer.Stop()
 
 	lifecycleCtx := context.WithoutCancel(ctx)

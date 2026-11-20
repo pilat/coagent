@@ -596,8 +596,10 @@ same validation, marking its combined result failed when any nested call did.
 ### Pending external calls: producer ledger and exact result
 
 `ErrSuspend` means a tool has created work whose answer comes from outside the
-agent loop. Sleep, blocking subagent work and terminal input are
-examples. A pending external call has a specific tool-call identifier, producer
+agent loop. A `sleep` longer than `tool.InTurnWaitLimit`, blocking subagent work
+and terminal input are examples; a shorter sleep waits inside its call and
+suspends nothing ([ADR-0102](docs/adr/0102-a-sleep-within-the-in-turn-limit-waits-inside-the-turn.md)).
+A pending external call has a specific tool-call identifier, producer
 owner and eventual result. It is never executed again, synthesized by transcript
 repair, or bypassed by later normal input.
 
@@ -1154,7 +1156,9 @@ user, project or task instructions
 ([ADR-0089](docs/adr/0089-mcp-instructions-follow-tool-visibility.md)).
 
 Schedule owns cron validation, schedule-list rendering, durable schedule records and execution of sleep
-and schedule tools, including the sleep guard over pending producer obligations. It enqueues through session-store and uses a narrow sender
+and schedule tools, including the sleep guard over pending producer obligations.
+A sleep up to `tool.InTurnWaitLimit` waits inside its call and writes no record.
+It enqueues through session-store and uses a narrow sender
 only for event publication. Curated memory is distinct from conversation history and scoped
 to a project. A best-effort inventory is frozen into a fresh opening turn's
 marked project-context row; save/delete results inform the current transcript,
