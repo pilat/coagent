@@ -3,13 +3,13 @@ module github.com/pilat/coagent
 go 1.27.1
 
 require (
-	github.com/anthropics/anthropic-sdk-go/v2 v2.9.0
+	github.com/anthropics/anthropic-sdk-go/v2 v2.12.0
 	github.com/bmatcuk/doublestar/v4 v4.10.4
 	github.com/caarlos0/env/v11 v11.4.2
 	github.com/joho/godotenv v1.5.1
-	github.com/mark3labs/mcp-go v1.5.0
-	github.com/moby/moby/api v1.56.1
-	github.com/pressly/goose/v3 v3.30.0
+	github.com/mark3labs/mcp-go v1.6.0
+	github.com/moby/moby/api v1.57.0
+	github.com/pressly/goose/v3 v3.30.1
 	github.com/robfig/cron/v3 v3.0.1
 	github.com/stretchr/testify v1.12.1
 	github.com/testcontainers/testcontainers-go v0.45.0
@@ -51,7 +51,7 @@ require (
 	github.com/lufia/plan9stats v0.0.0-20260330125221-c963978e514e // indirect
 	github.com/magiconair/properties v1.18.12 // indirect
 	github.com/mattn/go-isatty v0.0.24 // indirect
-	github.com/mfridman/interpolate v0.0.2 // indirect
+	github.com/mfridman/interpolate v0.2.0 // indirect
 	github.com/moby/docker-image-spec v1.3.1 // indirect
 	github.com/moby/go-archive v0.3.3 // indirect
 	github.com/moby/moby/client v0.6.2 // indirect
