@@ -439,7 +439,8 @@ func appendScheduleSection(sb *strings.Builder, registered map[string]bool) {
 
 	if hasSleep {
 		sb.WriteString(
-			"A sleep call cannot order or delay another tool call from the same assistant response; calls emitted together may execute concurrently.\n",
+			"A sleep of 10s or less waits inside the current turn, and the calls after it in the same response run after it. " +
+				"A longer sleep suspends the session, and the calls after it in the same response do not run.\n",
 		)
 	}
 

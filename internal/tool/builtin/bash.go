@@ -18,9 +18,6 @@ import (
 )
 
 const (
-	// foregroundGrace is how long a command runs inline before promotion.
-	foregroundGrace = 10 * time.Second
-
 	// defaultProcessDeadline is the model-facing absolute process deadline.
 	defaultProcessDeadline = 10 * time.Minute
 
@@ -178,7 +175,7 @@ func (t *bashTool) run(
 	deadline time.Duration,
 ) (*tool.Result, error) {
 	start := time.Now()
-	foregroundOnly := deadline < foregroundGrace
+	foregroundOnly := deadline < tool.InTurnWaitLimit
 
 	if t.process == nil {
 		return t.runDirect(ctx, p, workDir, deadline)
@@ -229,7 +226,7 @@ func (t *bashTool) run(
 		return t.backgroundedResult(record, false), nil
 	}
 
-	return t.finishForegroundGrace(ctx, record, p.Command, start.Add(foregroundGrace))
+	return t.finishForegroundGrace(ctx, record, p.Command, start.Add(tool.InTurnWaitLimit))
 }
 
 //nolint:wsl_v5 // Promotion outcomes form one lifecycle decision.

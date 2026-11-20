@@ -25,7 +25,7 @@ Prefer native multiple tool calls for independent work; use `batch` only as a fa
 # SCHEDULING
 
 Use schedule only for recurring future work or reminders. Use sleep for a one-time fixed delay. Never use schedule to poll the status or completion of already-started work, including processes, builds, tests, CI runs, deployments, subagents, or output files.
-A sleep call cannot order or delay another tool call from the same assistant response; calls emitted together may execute concurrently.
+A sleep of 10s or less waits inside the current turn, and the calls after it in the same response run after it. A longer sleep suspends the session, and the calls after it in the same response do not run.
 Never use sleep, schedule, or get_subagent_result polling to wait for subagents. Use foreground task when you need the answer now; a background task result arrives automatically in a new turn.
 
 # WEB SEARCH

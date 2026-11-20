@@ -50,6 +50,9 @@ func TestBackgroundWaitGuardRejectsSleepUntilCompletionDelivered(t *testing.T) {
 	})
 	require.NoError(t, err)
 	guard := &backgroundWaitGuard{inner: inner, sessions: sessions, sessionID: parent.ID}
+	guarded := NewGuardedSleepTool(NewService(NewStore(db, sessions), sessions), parent.ID, sessions)
+	_, err = guarded.Execute(t.Context(), json.RawMessage(`{"duration":"20ms"}`))
+	require.ErrorContains(t, err, "result arrives automatically in a later turn")
 
 	_, err = guard.Execute(t.Context(), nil)
 	require.Error(t, err)
@@ -71,4 +74,10 @@ func TestBackgroundWaitGuardRejectsSleepUntilCompletionDelivered(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "slept", result.Output)
 	assert.Equal(t, 1, inner.calls)
+	result, err = guarded.Execute(t.Context(), json.RawMessage(`{"duration":"20ms"}`))
+	require.NoError(t, err)
+	assert.Equal(t, "Sleep completed (20ms).", result.Output)
+	schedules, err := NewService(NewStore(db, sessions), sessions).ListSchedules(t.Context(), parent.ID)
+	require.NoError(t, err)
+	assert.Empty(t, schedules)
 }

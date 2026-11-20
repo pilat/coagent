@@ -3,6 +3,7 @@ package schedule_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
 	"time"
 
@@ -15,6 +16,83 @@ import (
 
 func sleepContext() context.Context {
 	return tool.WithCallID(context.Background(), "sleep-call-1")
+}
+
+func TestSleepTool_InTurnUpToTheLimit(t *testing.T) {
+	t.Run("short sleep returns its result inside the call", func(t *testing.T) {
+		store := &mockScheduleStore{}
+		params, err := json.Marshal(tool.SleepParams{Duration: "20ms"})
+		require.NoError(t, err)
+		start := time.Now()
+		result, err := schedule.NewSleepTool(store, 1).Execute(sleepContext(), params)
+		elapsed := time.Since(start)
+
+		require.NoError(t, err)
+		require.NotNil(t, result)
+		assert.Equal(t, "Sleep completed (20ms).", result.Output)
+		assert.GreaterOrEqual(t, elapsed, 20*time.Millisecond)
+		assert.Empty(t, store.schedules)
+	})
+
+	t.Run("the limit itself waits in turn", func(t *testing.T) {
+		store := &mockScheduleStore{}
+		ctx, cancel := context.WithTimeout(sleepContext(), 50*time.Millisecond)
+		defer cancel()
+		params, err := json.Marshal(tool.SleepParams{Duration: tool.InTurnWaitLimit.String()})
+		require.NoError(t, err)
+		start := time.Now()
+		result, err := schedule.NewSleepTool(store, 1).Execute(ctx, params)
+		elapsed := time.Since(start)
+
+		require.ErrorIs(t, err, context.DeadlineExceeded)
+		assert.Nil(t, result)
+		assert.Empty(t, store.schedules)
+		assert.Less(t, elapsed, time.Second)
+	})
+
+	t.Run("a timestamp within the limit waits in turn", func(t *testing.T) {
+		store := &mockScheduleStore{}
+		ctx, cancel := context.WithTimeout(sleepContext(), 50*time.Millisecond)
+		defer cancel()
+		duration := time.Now().Add(3 * time.Second).UTC().Format(time.RFC3339)
+		params, err := json.Marshal(tool.SleepParams{Duration: duration})
+		require.NoError(t, err)
+		_, err = schedule.NewSleepTool(store, 1).Execute(ctx, params)
+
+		require.ErrorIs(t, err, context.DeadlineExceeded)
+		assert.Empty(t, store.schedules)
+	})
+
+	t.Run("just over the limit is durable", func(t *testing.T) {
+		for _, duration := range []string{
+			(tool.InTurnWaitLimit + time.Millisecond).String(),
+			(tool.InTurnWaitLimit + 500*time.Millisecond).String(),
+			fmt.Sprintf("%dms", (tool.InTurnWaitLimit + 500*time.Millisecond).Milliseconds()),
+		} {
+			t.Run(duration, func(t *testing.T) {
+				store := &mockScheduleStore{}
+				params, err := json.Marshal(tool.SleepParams{Duration: duration})
+				require.NoError(t, err)
+				start := time.Now()
+				result, err := schedule.NewSleepTool(store, 1).Execute(sleepContext(), params)
+				elapsed := time.Since(start)
+
+				require.ErrorIs(t, err, tool.ErrSuspend)
+				assert.Nil(t, result)
+				require.Len(t, store.schedules, 1)
+				assert.Contains(t, store.schedules[0].inputMsg, "Sleep completed ("+duration+")")
+				assert.Less(t, elapsed, 100*time.Millisecond)
+			})
+		}
+	})
+}
+
+func TestSleepTool_DescriptionNamesTheInTurnLimit(t *testing.T) {
+	assert.Contains(
+		t,
+		schedule.NewSleepTool(nil, 0).Description(),
+		"Up to "+tool.InTurnWaitLimit.String()+" the sleep happens inside the current turn; a longer one suspends the session until the timer fires.",
+	)
 }
 
 func TestSleepTool_NoStore(t *testing.T) {

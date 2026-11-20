@@ -220,24 +220,28 @@ func TestBrowserSettingsGrantOnlyWhitelistedBuiltins(t *testing.T) {
 	isFrame := func(id string) bool { return strings.HasPrefix(id, "mcp__playwright__") }
 	set := NewSet([]AgentTypeConfig{{Name: "custom", Mode: ModeSubagent, Tools: []string{"*"}}}, BrowserSettings{
 		Model: "cheap", Effort: "low",
-		Tools: []string{"read", "batch", "todowrite", "task", "mcp__other__x", "nope", "read"},
+		Tools: []string{"read", "sleep", "batch", "todowrite", "task", "mcp__other__x", "nope", "read"},
 	})
-	all := []string{"read", "write", "batch", "todowrite", "task", "mcp__other__x", "mcp__playwright__click"}
+	all := []string{"read", "write", "batch", "todowrite", "task", "mcp__other__x", "mcp__playwright__click", "sleep"}
 
 	cfg, ok := set.Get(AgentTypeBrowser)
 	require.True(t, ok)
-	assert.Equal(t, []string{"read"}, cfg.GrantedTools)
+	assert.Equal(t, []string{"read", "sleep"}, cfg.GrantedTools)
 	assert.Equal(t, "cheap", cfg.Model)
 	assert.True(t, cfg.PinnedModel)
 	assert.Equal(t, "low", cfg.ReasoningLevel)
 	assert.Equal(t,
-		"Drive the configured browser surface. Also has built-in tools: read. "+browserDescriptionTail,
+		"Drive the configured browser surface. Also has built-in tools: read, sleep. "+browserDescriptionTail,
 		cfg.Description)
-	assert.Equal(t, []string{"read", "mcp__playwright__click"}, set.FilterTools(all, AgentTypeBrowser, isFrame))
+	assert.Equal(
+		t,
+		[]string{"read", "mcp__playwright__click", "sleep"},
+		set.FilterTools(all, AgentTypeBrowser, isFrame),
+	)
 
 	cfg.GrantedTools[0] = "mutated"
 	again, _ := set.Get(AgentTypeBrowser)
-	assert.Equal(t, []string{"read"}, again.GrantedTools)
+	assert.Equal(t, []string{"read", "sleep"}, again.GrantedTools)
 
 	for _, agent := range []AgentType{AgentTypeGeneral, AgentTypeExplore, "custom"} {
 		got, _ := set.Get(agent)
@@ -248,8 +252,8 @@ func TestBrowserSettingsGrantOnlyWhitelistedBuiltins(t *testing.T) {
 }
 
 func TestBrowserSettingsKeepWhitelistOrder(t *testing.T) {
-	cfg, _ := NewSet(nil, BrowserSettings{Tools: []string{"webfetch", "bash", "read"}}).Get(AgentTypeBrowser)
-	assert.Equal(t, []string{"read", "bash", "webfetch"}, cfg.GrantedTools)
+	cfg, _ := NewSet(nil, BrowserSettings{Tools: []string{"sleep", "webfetch", "bash", "read"}}).Get(AgentTypeBrowser)
+	assert.Equal(t, []string{"read", "bash", "webfetch", "sleep"}, cfg.GrantedTools)
 	assert.False(t, cfg.PinnedModel)
 }
 

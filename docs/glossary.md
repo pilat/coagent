@@ -438,7 +438,7 @@ Prompt text is never authority.
 _Avoid_: command text authorization, hidden tool.
 
 **suspend** (`ErrSuspend`):
-A sentinel error `sleep` returns to checkpoint and exit the agent loop *without* recording a result; the timer's exact result is injected on resume. The persisted status is `suspended`. Standalone `schedule` creates future work but does not suspend the calling session.
+A sentinel error a `sleep` longer than `tool.InTurnWaitLimit` returns to checkpoint and exit the agent loop *without* recording a result; the timer's exact result is injected on resume. The persisted status is `suspended`. Standalone `schedule` creates future work but does not suspend the calling session. An **in-turn sleep** never suspends.
 
 **session input**:
 A user/agent action, scheduled turn, exact call result, process/subagent completion or outcome signal addressed to an
@@ -459,6 +459,10 @@ _Avoid_: synthetic sleep notice, polling message.
 **pending sleep**:
 A one-shot schedule carrying `metadata.tool_call_id`, and therefore owning the eventual result of one exact suspended `sleep` call. `PendingSleeps` is the only schedule-domain projection used for waiting UI and interruption. A one-shot without `tool_call_id` is standalone scheduled input and must survive `/stop` or interruption of a different sleep.
 _Avoid_: one-shot wait (ambiguous), any one-shot is sleep.
+
+**in-turn sleep**:
+A `sleep` of at most `tool.InTurnWaitLimit` (10 s). It waits on a timer inside its own call and returns `Sleep completed (<duration>).` in the same turn: no schedule row, no suspension, never a **pending sleep**. Input that arrives meanwhile waits for the next step boundary. By name it is still a **pending external call** while it runs, so a restart in that window settles it through the boot orphan sweep, not as an **interrupted in-loop call**. The same limit is how long a foreground Bash command runs before it moves to the background. See [ADR-0102](adr/0102-a-sleep-within-the-in-turn-limit-waits-inside-the-turn.md).
+_Avoid_: inline sleep, foreground sleep.
 
 **schedule occurrence**:
 One due one-shot or sleep, or one cron minute. An applied occurrence's producer

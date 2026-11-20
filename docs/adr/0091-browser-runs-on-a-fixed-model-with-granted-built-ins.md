@@ -3,6 +3,7 @@
 - **Status:** Accepted
 - **Date:** 2026-11-11
 - **Amends:** [ADR-0088](0088-browser-surface-is-the-configured-mcp-server.md)
+- **Amended by:** [ADR-0102](0102-a-sleep-within-the-in-turn-limit-waits-inside-the-turn.md) — `browser.tools` also accepts `sleep`
 
 ## Context
 

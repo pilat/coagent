@@ -124,6 +124,12 @@ func TestToolsSectionBytes_MCP(t *testing.T) {
 	assertToolsSectionGolden(t, "agent-browser", renderToolsSection(
 		filterRegistryForAgent(set, reg, browser, frames.Owns), false,
 	))
+	granted := registry.NewSet(nil, registry.BrowserSettings{Tools: []string{"sleep"}})
+	grantedBrowser, ok := granted.Get(registry.AgentTypeBrowser)
+	require.True(t, ok)
+	assertToolsSectionGolden(t, "agent-browser-sleep", renderToolsSection(
+		filterRegistryForAgent(granted, reg, grantedBrowser, frames.Owns), false,
+	))
 	assertToolsSectionGolden(t, "mcp-search-order", renderToolsSection(reg, false))
 	assertToolsSectionGolden(t, "mcp-unknown-server-search-word-only",
 		renderToolsSection(reg.Filter([]string{"mcp__context7__search_docs"}), false))

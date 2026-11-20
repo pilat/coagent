@@ -26,6 +26,19 @@ import (
 	"github.com/pilat/coagent/internal/tool"
 )
 
+func TestBashTextsNameTheInTurnWaitLimit(t *testing.T) {
+	seconds := int(tool.InTurnWaitLimit / time.Second)
+	millis := tool.InTurnWaitLimit.Milliseconds()
+	description := bashDescription + backgroundDescriptionSuffix
+
+	assert.Contains(t, description, fmt.Sprintf("stays in the foreground for %d seconds", seconds))
+	assert.Contains(t, description, fmt.Sprintf("without the %d-second wait", seconds))
+	assert.Contains(t, description, fmt.Sprintf("a deadline below %d expires in the foreground", millis))
+	assert.Contains(t, string((&bashTool{}).Parameters()), fmt.Sprintf("below %d expires in the foreground", millis))
+	assert.Contains(t, (&bashTool{}).backgroundedResult(backgroundprocess.Process{}, true).Output,
+		fmt.Sprintf("still running after %d seconds", seconds))
+}
+
 func TestBashPolicy_DirectProjectCat(t *testing.T) {
 	root := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(root, "a.go"), []byte("package a\n"), 0o600))

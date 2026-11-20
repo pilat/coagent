@@ -136,7 +136,7 @@ func TestFilterRegistryForAgent_BrowserBinding(t *testing.T) {
 }
 
 func TestFilterRegistryForAgent_BrowserGrantedTools(t *testing.T) {
-	binding := &config.BrowserConfig{MCPName: "remote", Tools: []string{"read", "write"}}
+	binding := &config.BrowserConfig{MCPName: "remote", Tools: []string{"read", "write", "sleep"}}
 	reg, frames := realRegistry(t, false, mcpServerFixture(t, map[string][]string{"remote": {"view"}}, nil), binding)
 	require.NotNil(t, reg.Get("bash"))
 	set := registry.NewSet(nil, BrowserSettings(&config.UnifiedConfig{Browser: binding}))
@@ -144,7 +144,7 @@ func TestFilterRegistryForAgent_BrowserGrantedTools(t *testing.T) {
 	cfg, ok := set.Get(registry.AgentTypeBrowser)
 	require.True(t, ok)
 	filtered := filterRegistryForAgent(set, reg, cfg, frames.Owns)
-	assert.ElementsMatch(t, []string{"read", "write", "mcp__remote__view"}, filtered.IDs())
+	assert.ElementsMatch(t, []string{"read", "write", "sleep", "mcp__remote__view"}, filtered.IDs())
 	assert.NotContains(t, string(reg.Get("read").Parameters()), "task_state")
 }
 
