@@ -23,7 +23,8 @@ The shared vocabulary of coagent — the words that name its concepts, so code, 
   Never part of the message text.
 - **spawned session**: A root created by `spawn_session`: ordinary and manager-owned, with its own budget, outside the
   orchestrator's stop tree; its first input is a sent message. It runs on the default model unless the orchestrator
-  named a tagged one. Its durable `spawned_by` attribute names the spawner, which can stop or kill it, as can the
+  named a tagged one, at that model's default effort unless the orchestrator named a level the model accepts.
+  Its durable `spawned_by` attribute names the spawner, which can stop or kill it, as can the
   spawner's `/clear` replacement; the orchestrator's own `/stop` still does not reach it.
   _Avoid_: child, subagent (those are `task`).
 
@@ -271,6 +272,8 @@ _Avoid_: "MCP config" (there is no longer a `mcp:` YAML section).
 The per-session level a reasoning-capable model runs at, drawn from the gateway vocabulary `none` / `minimal` / `low` / `medium` / `high` / `xhigh` / `max`. **Which of these a given model accepts is a catalog fact, not a constant** — every model carries its own allowlist (`ModelEntry.EffortLevels`, weakest first) and its own default (`ModelEntry.DefaultEffort`), and a model switch resets the session to that model's default. Each driver renders the level differently: the native Anthropic driver sends adaptive thinking plus an effort level, or a `budget_tokens` fraction of the model's output limit for older models; OpenRouter sends its unified `reasoning: {effort}`; the `openai` driver sends Responses' `reasoning: {effort}` only for a direct-OpenAI provider (`base_url` host `api.openai.com`, [ADR-0090](adr/0090-direct-openai-speaks-responses.md)). A model whose catalog declares no effort selector, or one on a driver that never sends the level, has an empty allowlist and gets no picker step and no level on the wire.
 The `task` tool's optional explicit effort overrides the agent type's effort unless
 the type pins its model, in which case the type's model and effort both stand.
+`spawn_session`'s optional effort is checked the same way against the new root's model; omitted, the root
+takes that model's default.
 _Avoid_: "thinking budget" (that is one driver's encoding of the level, not the level); "the three levels" (the set is per-model).
 
 **effort allowlist**:

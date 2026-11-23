@@ -737,9 +737,11 @@ expansion, budget release or title naming. A send wakes a stopped root but refus
 a budget-parked target. Spawn accepts visible registered projects with existing directories,
 excluding coagent worktrees identified by the configured worktrees-root layout; optional
 worktrees use guarded no-execution creation. Spawn may name the new root's model only from the tagged
-candidates `task` offers, and the root takes that model's default effort; omitted, it starts on the default
-model. No tool changes an existing session's model
-([ADR-0100](docs/adr/0100-a-spawned-session-takes-a-tagged-model.md)). A spawned root takes its title from
+candidates `task` offers; omitted, it starts on the default model
+([ADR-0100](docs/adr/0100-a-spawned-session-takes-a-tagged-model.md)). It may also name an effort level, checked
+against that model's allowlist as `task.effort` is and before anything is created; omitted, the root takes the
+model's default ([ADR-0103](docs/adr/0103-a-spawned-session-may-name-an-effort-level.md)). No tool changes an
+existing session's model or effort. A spawned root takes its title from
 the prompt at creation; it is independent and never moves chat focus ([ADR-0097](docs/adr/0097-orchestrator-mode-is-a-human-granted-capability-on-an-ordinary-root.md)).
 Spawned roots carry a write-once `spawned_by` attribute refused from managers and preserved by `/clear`.
 An orchestrator stopping or killing a root it spawned writes a fixed `source=user` `/stop` or `/kill` row through the human's command flow, naming the actor; stop refuses an armed target budget, while kill remains allowed ([ADR-0101](docs/adr/0101-an-orchestrator-ends-only-sessions-it-spawned.md)).

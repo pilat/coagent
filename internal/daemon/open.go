@@ -305,7 +305,8 @@ func (m models) priced(id string) bool {
 	return false
 }
 
-// Explicit effort must fit the child's model; inherited effort can fall back to its default.
+// Explicit effort must fit the model; inherited effort can fall back to its default.
+// Errors name only the model; callers add any operation context.
 func (m models) effort(model, requested, inherited string) (string, error) {
 	if len(m.entries) == 0 {
 		return cmp.Or(requested, inherited), nil
@@ -314,17 +315,13 @@ func (m models) effort(model, requested, inherited string) (string, error) {
 	if requested != "" {
 		for _, entry := range m.entries {
 			if entry.ID == model && len(entry.EffortLevels) == 0 {
-				return "", fmt.Errorf(
-					"spawn subagent on model %s: model %s accepts no reasoning level; omit effort",
-					model,
-					model,
-				)
+				return "", fmt.Errorf("model %s accepts no reasoning level; omit effort", model)
 			}
 		}
 
 		level, err := sessionbuild.ResolveReasoningLevel(m.entries, model, requested)
 		if err != nil {
-			return "", fmt.Errorf("spawn subagent on model %s: %w", model, err)
+			return "", fmt.Errorf("%w", err)
 		}
 
 		return level, nil
@@ -336,7 +333,7 @@ func (m models) effort(model, requested, inherited string) (string, error) {
 
 	level, err := sessionbuild.ResolveReasoningLevel(m.entries, model, "")
 	if err != nil {
-		return "", fmt.Errorf("spawn subagent on model %s: %w", model, err)
+		return "", fmt.Errorf("%w", err)
 	}
 
 	return level, nil

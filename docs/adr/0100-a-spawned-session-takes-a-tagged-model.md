@@ -3,6 +3,7 @@
 - **Status:** Accepted
 - **Date:** 2026-11-19
 - **Amends:** [ADR-0097](0097-orchestrator-mode-is-a-human-granted-capability-on-an-ordinary-root.md)
+- **Amended by:** [ADR-0103](0103-a-spawned-session-may-name-an-effort-level.md) — a spawn may name an effort level
 
 ## Context
 

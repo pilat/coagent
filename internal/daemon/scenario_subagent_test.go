@@ -18,6 +18,7 @@ import (
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest/observer"
 
+	"github.com/pilat/coagent/internal/config"
 	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/llm/llmtest"
 	"github.com/pilat/coagent/internal/llmwire"
@@ -1268,6 +1269,50 @@ func TestSpawnExplicitEffortReachesChildProvider(t *testing.T) {
 	h.waitDelivered(child.ChildID)
 	assert.Equal(t, "medium", h.session(child.ChildID).ReasoningLevel)
 	assert.Equal(t, "medium", provider.effortFor("child-model"))
+}
+
+func TestSpawnEffortRefusalKeepsSubagentText(t *testing.T) {
+	h := newHarness(t, harnessOptions{
+		respond: trivialRespond,
+		configure: func(cfg *config.Config) {
+			cfg.UnifiedConfig = &config.UnifiedConfig{
+				Models: []config.ModelEntry{
+					reasoningModelEntry("parent-model", []string{"low", "high"}, "high"),
+					reasoningModelEntry("child-model", []string{"low", "medium"}, "low"),
+					{ID: "plain-model", ContextWindow: 200_000},
+				},
+			}
+		},
+	})
+	parent, err := h.store.CreateSession(h.ctx, h.projectID, "parent-model", "high", nil)
+	require.NoError(t, err)
+	for _, tc := range []struct {
+		model, effort, want string
+	}{
+		{
+			model: "child-model", effort: "high",
+			want: `guard child spawn: spawn subagent on model child-model: model child-model does not accept reasoning level "high" (accepts: low, medium)`,
+		},
+		{
+			model: "plain-model", effort: "high",
+			want: "guard child spawn: spawn subagent on model plain-model: model plain-model accepts no reasoning level; omit effort",
+		},
+		{
+			model: "ghost",
+			want:  "guard child spawn: spawn subagent on model ghost: unknown model: ghost",
+		},
+	} {
+		t.Run(tc.model, func(t *testing.T) {
+			_, err := h.mgr.Spawn(h.ctx, subagent.SpawnRequest{
+				ParentID:       parent.ID,
+				AgentType:      "general",
+				Model:          tc.model,
+				Prompt:         "child work",
+				ReasoningLevel: tc.effort,
+			})
+			require.EqualError(t, err, tc.want)
+		})
+	}
 }
 
 func TestStopRejectsSpawnQueuedBehindDurableBoundary(t *testing.T) {
