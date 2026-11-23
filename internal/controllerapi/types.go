@@ -28,7 +28,7 @@ const (
 	SessionAttributeManagerID    = "manager_id"
 	SessionAttributeOrchestrator = "orchestrator"
 	SessionAttributeSpawnedBy    = "spawned_by"
-	// SessionAttributeWorktreeOrigin attests that the controller created a /gwt
+	// SessionAttributeWorktreeOrigin attests that the daemon created the root's
 	// worktree; it is not accepted from a manager or ordinary session attributes.
 	SessionAttributeWorktreeOrigin = "coagent_worktree_origin"
 	WorktreeOriginController       = "controller-created-v1"
@@ -49,9 +49,6 @@ type SessionCreateData struct {
 	// of that name (branched off the repository's default branch pulled fresh
 	// from its remote) and runs the session there instead of in WorkDir.
 	WorktreeName string `json:"worktree_name,omitempty"`
-	// RepoRoot is reserved for controller-created worktrees. The controller
-	// resolves it itself; callers must leave this field empty.
-	RepoRoot string `json:"repo_root,omitempty"`
 }
 
 // SessionMessageData defines one durable normal message for a session.

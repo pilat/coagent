@@ -17,7 +17,7 @@ func (s *Store) CreateManagerRoot(
 	var output *OutputCommit
 	err := s.WithTx(ctx, func(tx *sql.Tx) error {
 		var err error
-		record, output, err = CreateManagerRootTx(ctx, tx, create)
+		record, output, err = createManagerRootTx(ctx, tx, create)
 
 		return err
 	})
@@ -25,8 +25,7 @@ func (s *Store) CreateManagerRoot(
 	return record, output, err
 }
 
-// CreateManagerRootTx composes root creation with other writes in a Store.WithTx transaction.
-func CreateManagerRootTx(
+func createManagerRootTx(
 	ctx context.Context,
 	tx *sql.Tx,
 	create ManagerRootCreate,
@@ -67,8 +66,15 @@ func CreateManagerRootTx(
 		return record, nil, err
 	}
 
-	if create.Prompt != "" {
-		_, err = EnqueueTx(ctx, tx, Input{SessionID: record.ID, Source: InputSourceUser, Content: create.Prompt})
+	if create.Input.Content != "" {
+		create.Input.SessionID = record.ID
+		if _, err := EnqueueTx(ctx, tx, create.Input); err != nil {
+			return record, output, err
+		}
+	}
+
+	if create.Watcher != 0 {
+		_, err = ArmWatchTx(ctx, tx, create.Watcher, record.ID, false)
 	}
 
 	return record, output, err
@@ -243,17 +249,10 @@ func insertManagerRoot(
 		return nil, fmt.Errorf("marshal manager root attributes: %w", err)
 	}
 
-	var episodeStartedAt *time.Time
-	if create.Prompt != "" && create.StartEpisode {
-		episodeStartedAt = &now
-	}
-
 	result, err := tx.ExecContext(ctx, `
-		INSERT INTO sessions (project_id, model, reasoning_level, attributes, agent_type,
-			created_at, updated_at, episode_started_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		create.ProjectID, create.Model, create.ReasoningLevel, string(attrs), rootAgentType,
-		now, now, episodeStartedAt)
+		INSERT INTO sessions (project_id, model, reasoning_level, attributes, agent_type, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		create.ProjectID, create.Model, create.ReasoningLevel, string(attrs), rootAgentType, now, now)
 	if err != nil {
 		return nil, fmt.Errorf("insert manager root: %w", err)
 	}

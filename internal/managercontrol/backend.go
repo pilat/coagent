@@ -7,7 +7,7 @@ import (
 )
 
 type Backend interface {
-	Send(context.Context, int64, string, string, map[string]any) (int64, error)
+	CreateSession(context.Context, int64, string, string, string, map[string]any) (int64, error)
 	SendToSessionResolved(context.Context, int64, string) (int64, error)
 	SetModel(context.Context, int64, string, string) error
 	HasActiveLoop(int64) bool

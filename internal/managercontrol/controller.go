@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/pilat/coagent/internal/config"
 	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/loader"
 	"github.com/pilat/coagent/internal/managerdiscovery"
@@ -28,12 +27,11 @@ func New(
 	store Store,
 	discovery *managerdiscovery.Service,
 	bus *sessionbus.Bus,
-	cfg *config.Config,
 	cache *loader.MarketplaceCache,
 ) controllerapi.ManagerControllerFactory {
 	return &factory{app: &service{
 		backend: backend, store: store, discovery: discovery,
-		bus: bus, cfg: cfg, cache: cache,
+		bus: bus, cache: cache,
 	}}
 }
 

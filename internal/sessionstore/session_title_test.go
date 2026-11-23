@@ -94,7 +94,7 @@ func TestSessionTitle_CreateAndClear(t *testing.T) {
 			WorkDir:    "/project",
 			Model:      "model",
 			Attributes: attrs,
-			Prompt:     "first request",
+			Input:      Input{Source: InputSourceUser, Content: "first request"},
 		})
 		require.NoError(t, err)
 		want := title

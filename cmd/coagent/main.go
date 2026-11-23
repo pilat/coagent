@@ -542,7 +542,7 @@ func startCore(
 	)
 
 	discovery := managerdiscovery.New(sessionStore, cfg, cache)
-	controller := managercontrol.New(daemonSvc, sessionStore, discovery, bus, cfg, cache)
+	controller := managercontrol.New(daemonSvc, sessionStore, discovery, bus, cache)
 
 	noticeSearchUnconfigured(ctx, cfg)
 

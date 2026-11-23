@@ -17,7 +17,7 @@ func TestSpawnFavorites(t *testing.T) {
 		SpawnFavorites: []string{"/repo/two", "/repo/one"},
 	}}
 	discovery := managerdiscovery.New(nil, cfg, nil)
-	ctrl := New(nil, nil, discovery, nil, cfg, nil).ForManager("test")
+	ctrl := New(nil, nil, discovery, nil, nil).ForManager("test")
 
 	got, err := ctrl.SpawnFavorites(t.Context())
 	require.NoError(t, err)

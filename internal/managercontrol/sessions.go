@@ -8,7 +8,6 @@ import (
 
 	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/sessionevent"
-	"github.com/pilat/coagent/internal/worktree"
 )
 
 func (s *service) createSession(
@@ -18,10 +17,6 @@ func (s *service) createSession(
 ) (int64, error) {
 	if err := requireManagerIdentity(managerID); err != nil {
 		return 0, err
-	}
-
-	if data.RepoRoot != "" {
-		return 0, errors.New("repo root is reserved for created worktrees")
 	}
 
 	if _, supplied := data.Attributes[controllerapi.SessionAttributeOrchestrator]; supplied {
@@ -44,23 +39,9 @@ func (s *service) createSession(
 		return 0, errors.New("worktree origin is reserved for created worktrees")
 	}
 
-	var (
-		created             worktree.Result
-		worktreeProjectName string
-	)
-
-	if data.WorktreeName != "" {
-		next, err := worktree.Create(ctx, s.unifiedConfig(), data.WorkDir, data.WorktreeName, false)
-		if err != nil {
-			return 0, fmt.Errorf("worktree: %w", err)
-		}
-
-		data.WorkDir = next.Path
-		// Consumed: the created worktree is registered below under its display name.
-		data.WorktreeName = ""
-		data.RepoRoot = next.RepoRoot
-		worktreeProjectName = next.DisplayName
-		created = next
+	projectID, err := s.resolveSessionProject(ctx, data.WorkDir)
+	if err != nil {
+		return 0, fmt.Errorf("resolve project: %w", err)
 	}
 
 	data.Attributes = maps.Clone(data.Attributes)
@@ -70,16 +51,17 @@ func (s *service) createSession(
 
 	data.Attributes[controllerapi.SessionAttributeManagerID] = managerID
 
-	created.StampAttributes(data.Attributes)
-
-	projectID, err := s.resolveSessionProject(ctx, data, worktreeProjectName)
+	sessionID, err := s.backend.CreateSession(
+		ctx,
+		projectID,
+		data.WorktreeName,
+		data.Prompt,
+		data.Model,
+		data.Attributes,
+	)
 	if err != nil {
-		return 0, fmt.Errorf("resolve project: %w", created.Abandon(err))
-	}
-
-	sessionID, err := s.backend.Send(ctx, projectID, data.Prompt, data.Model, data.Attributes)
-	if err != nil {
-		return 0, fmt.Errorf("send session: %w", created.Abandon(err))
+		// The daemon's text is the refusal shown to the caller.
+		return 0, fmt.Errorf("%w", err)
 	}
 
 	if data.Prompt != "" {

@@ -139,7 +139,6 @@ func newDelayedTelegramHarnessWithClient(
 		sessions,
 		managerdiscovery.New(sessions, cfg, nil),
 		bus,
-		cfg,
 		nil,
 	)
 

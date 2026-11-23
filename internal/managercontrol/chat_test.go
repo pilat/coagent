@@ -166,7 +166,7 @@ func newChatControl(t *testing.T) (controllerapi.ManagerControllerFactory, *sess
 	require.NoError(t, err)
 	backend := &chatTestBackend{store: store, project: project}
 
-	return New(backend, store, nil, nil, nil, nil), store, project
+	return New(backend, store, nil, nil, nil), store, project
 }
 
 func chatCapability(

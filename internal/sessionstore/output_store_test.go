@@ -99,7 +99,7 @@ func TestOutputStore_CreatesManagerRootWithLifecycleAndInitialInputAtomically(t 
 	store, db, projectID := newTestStore(t)
 	record, output, err := store.CreateManagerRoot(ctx, ManagerRootCreate{
 		ProjectID: projectID, Model: "model", Attributes: map[string]any{"manager_id": "telegram"},
-		Prompt: "start", StartEpisode: true, Name: "project", WorkDir: "/work/project",
+		Input: Input{Source: InputSourceUser, Content: "start"}, Name: "project", WorkDir: "/work/project",
 	})
 	require.NoError(t, err)
 	require.NotZero(t, record.ID)
@@ -120,6 +120,52 @@ func TestOutputStore_CreatesManagerRootWithLifecycleAndInitialInputAtomically(t 
 	assert.Equal(t, "start", inputContent)
 	assert.Equal(t, "telegram", inputOwner)
 	assert.False(t, episodeStartedAt.IsZero())
+}
+
+func TestOutputStore_CreatesManagerRootWithAgentInputAndCreatorWatch(t *testing.T) {
+	ctx := t.Context()
+	store, db, projectID := newTestStore(t)
+	watcher, _, err := store.CreateManagerRoot(ctx, ManagerRootCreate{
+		ProjectID: projectID, Model: "model", Attributes: map[string]any{"manager_id": "owner"},
+		Name: "project", WorkDir: "/work/project",
+	})
+	require.NoError(t, err)
+	record, output, err := store.CreateManagerRoot(ctx, ManagerRootCreate{
+		ProjectID: projectID, Model: "model", Attributes: map[string]any{"manager_id": "owner"},
+		Name: "project", WorkDir: "/work/project", Watcher: watcher.ID,
+		Input: Input{
+			Source: InputSourceAgent, Content: "spawned work",
+			Attributes: map[string]any{InputAttributeSenderSessionID: watcher.ID},
+		},
+	})
+	require.NoError(t, err)
+	var source, content string
+	var sender int64
+	require.NoError(t, db.QueryRowContext(ctx, `
+		SELECT source, raw_content, json_extract(attributes, '$.sender_session_id')
+		FROM session_inbox WHERE session_id = ?`, record.ID).Scan(&source, &content, &sender))
+	assert.Equal(t, "agent", source)
+	assert.Equal(t, "spawned work", content)
+	assert.Equal(t, watcher.ID, sender)
+	var rows int
+	require.NoError(t, db.QueryRowContext(ctx,
+		`SELECT count(*) FROM session_inbox WHERE session_id = ?`, record.ID).Scan(&rows))
+	assert.Equal(t, 1, rows)
+	var started, armed, subscribed bool
+	var readThrough int64
+	require.NoError(t, db.QueryRowContext(ctx,
+		`SELECT episode_started_at IS NOT NULL FROM sessions WHERE id = ?`, record.ID).Scan(&started))
+	assert.True(t, started)
+	require.NoError(t, db.QueryRowContext(ctx, `
+		SELECT armed, subscribed, read_through FROM session_watches WHERE watcher_id = ? AND target_id = ?`,
+		watcher.ID, record.ID).Scan(&armed, &subscribed, &readThrough))
+	assert.True(t, armed)
+	assert.False(t, subscribed)
+	assert.Equal(t, output.OutputID, readThrough)
+	require.NoError(t, db.QueryRowContext(ctx,
+		`SELECT count(*) FROM session_watches WHERE watcher_id = ? AND target_id = ?`,
+		watcher.ID, record.ID).Scan(&rows))
+	assert.Equal(t, 1, rows)
 }
 
 func TestOutputStore_ReplacesManagerRootWithOneLifecycleOutput(t *testing.T) {
