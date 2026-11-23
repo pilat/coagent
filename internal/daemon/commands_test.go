@@ -328,6 +328,50 @@ func TestNewSessionSettlesTheEffortOnItsModel(t *testing.T) {
 		"a fresh session must ask for its model's default, not a clamped stand-in")
 }
 
+func TestSendSessionMessageWithARepeatedKeyAppendsOneInput(t *testing.T) {
+	ctx := context.Background()
+	h := newHarness(t, harnessOptions{configure: withTestModels, clientFor: (&mockFactory{}).client})
+	projectID, err := h.store.GetOrCreateProject(ctx, t.TempDir())
+	require.NoError(t, err)
+	root, err := h.store.CreateSession(ctx, projectID, "fake-model", "", managerAttrs("alpha"))
+	require.NoError(t, err)
+	controller := newTestController(h.mgr).ForManager("alpha")
+	for _, key := range []string{"k1", "k1", "k2"} {
+		require.NoError(t, controller.SendSessionMessage(ctx, controllerapi.SessionMessageData{
+			SessionID: root.ID, Message: "hello", IdempotencyKey: key,
+		}))
+	}
+	for _, key := range []string{"user:k1", "user:k2"} {
+		var count int
+		require.NoError(t, h.db.QueryRowContext(ctx,
+			"SELECT count(*) FROM session_inbox WHERE session_id = ? AND delivery_key = ?", root.ID, key).Scan(&count))
+		assert.Equal(t, 1, count)
+	}
+	var count int
+	require.NoError(t, h.db.QueryRowContext(ctx,
+		"SELECT count(*) FROM session_inbox WHERE session_id = ?", root.ID).Scan(&count))
+	assert.Equal(t, 2, count)
+}
+
+func TestRepeatedKeyedStatusAnswersOnce(t *testing.T) {
+	ctx := context.Background()
+	h := newHarness(t, harnessOptions{configure: withTestModels, clientFor: (&mockFactory{}).client})
+	projectID, err := h.store.GetOrCreateProject(ctx, t.TempDir())
+	require.NoError(t, err)
+	root, err := h.store.CreateSession(ctx, projectID, "fake-model", "", managerAttrs("alpha"))
+	require.NoError(t, err)
+	controller := newTestController(h.mgr).ForManager("alpha")
+	for _, key := range []string{"s1", "s1", "s2"} {
+		require.NoError(t, controller.SendSessionMessage(ctx, controllerapi.SessionMessageData{
+			SessionID: root.ID, Message: "/status", IdempotencyKey: key,
+		}))
+	}
+	var count int
+	require.NoError(t, h.db.QueryRowContext(ctx,
+		"SELECT count(*) FROM session_outbox WHERE session_id = ? AND type = 'message'", root.ID).Scan(&count))
+	assert.Equal(t, 2, count)
+}
+
 func TestSendSessionMessageFollowsOwnedReplacement(t *testing.T) {
 	ctx := context.Background()
 	h := newHarness(t, harnessOptions{configure: withTestModels, clientFor: (&mockFactory{}).client})

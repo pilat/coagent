@@ -1,4 +1,4 @@
-.PHONY: help build test tests test.integration test.live harness-e2e lint lint.paths lint.fix fmt fmt.check all verify verify-offline ci long-fuzz race stress arch ratchet.record semgrep secrets mutation mutation.critical mutation.nightly tools workflow.check
+.PHONY: help build test tests test.integration test.live harness-e2e lint lint.paths lint.fix fmt fmt.check generate generate.check all verify verify-offline ci long-fuzz race stress arch ratchet.record semgrep secrets mutation mutation.critical mutation.nightly tools workflow.check
 
 .DEFAULT_GOAL := help
 
@@ -11,6 +11,7 @@ GOPLS_VERSION ?= v0.20.0
 ACTIONLINT_VERSION ?= v1.7.12
 SEMGREP_VERSION ?= 1.168.0
 GITLEAKS_VERSION ?= v8.30.1
+BUF_VERSION ?= v1.75.0
 
 GOLANGCI_RUN = golangci-lint run ./...
 SEMGREP_ENV = uv tool run --offline --from semgrep==$(SEMGREP_VERSION)
@@ -57,6 +58,8 @@ help:
 	@echo "Pieces:"
 	@echo "  fmt              apply the formatters"
 	@echo "  fmt.check        report formatting drift without modifying files"
+	@echo "  generate         regenerate the local API protobuf bindings"
+	@echo "  generate.check   check protobuf schema and generated bindings"
 	@echo "  build            compile the binary"
 	@echo "  test / tests     fast package suites; CI-owned packages excluded"
 	@echo "  lint             golangci-lint over the whole module"
@@ -89,7 +92,7 @@ help:
 
 # The bounded local handoff gate. Secret scanning, full lifecycle, integration,
 # E2E, fuzz, race, stress, and mutation belong to CI/CD.
-all verify: fmt.check build lint arch semgrep tests
+all verify: fmt.check build lint arch semgrep generate.check tests
 
 # Prove the warmed checkout does not need module or Python-package resolution.
 # Missing modules or uv tool state fail closed; only `tools` may populate them.
@@ -100,7 +103,7 @@ verify-offline:
 # invoking `all`: test.integration already includes the ordinary Go suites.
 ci:
 	$(require_ci)
-	$(MAKE) fmt.check build lint arch semgrep secrets test.integration
+	$(MAKE) fmt.check build lint arch semgrep generate.check secrets test.integration
 
 build:
 	go build -ldflags "$(GO_LDFLAGS)" -o coagent ./cmd/coagent
@@ -166,6 +169,8 @@ stress:
 # helpers are pinned here, and the online Semgrep invocation warms uv's tool cache.
 tools:
 	go mod download
+	go install github.com/bufbuild/buf/cmd/buf@$(BUF_VERSION)
+	go install google.golang.org/protobuf/cmd/protoc-gen-go connectrpc.com/connect/v2/cmd/protoc-gen-connect-go
 	golangci-lint version
 	go install golang.org/x/tools/gopls@$(GOPLS_VERSION)
 	go install github.com/fe3dback/go-arch-lint@$(GO_ARCH_LINT_VERSION)
@@ -229,6 +234,22 @@ lint.paths:
 lint.fix:
 	golangci-lint cache clean
 	$(GOLANGCI_RUN) --fix
+
+generate:
+	buf generate
+
+generate.check:
+	@test "$$(buf --version)" = "$(patsubst v%,%,$(BUF_VERSION))" || { echo "✋ buf $(BUF_VERSION) required; run make tools"; exit 1; }
+	@set -eu; \
+		for pair in 'protoc-gen-go google.golang.org/protobuf' 'protoc-gen-connect-go connectrpc.com/connect/v2'; do \
+			set -- $$pair; plugin="$$1"; module="$$2"; \
+			version="$$(go list -m -f '{{.Version}}' "$$module")"; \
+			go version -m "$$(command -v "$$plugin")" | awk -v module="$$module" -v version="$$version" '$$1 == "mod" && $$2 == module && $$3 == version { found = 1 } END { exit !found }' || { echo "✋ $$plugin must match go.mod; run make tools"; exit 1; }; \
+		done
+	buf lint
+	@set -eu; out="$$(mktemp -d)"; trap 'rm -rf "$$out"' EXIT HUP INT TERM; \
+		buf generate --output "$$out"; \
+		diff -r -x '*.proto' api "$$out/api" || { echo "✋ generated code is stale; run make generate"; exit 1; }
 
 fmt:
 	golangci-lint fmt

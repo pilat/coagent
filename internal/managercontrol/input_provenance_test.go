@@ -58,7 +58,7 @@ func (b *inputBackend) CreateSession(
 	return root.ID, nil
 }
 
-func (b *inputBackend) SendToSessionResolved(ctx context.Context, id int64, message string) (int64, error) {
+func (b *inputBackend) SendToSessionResolved(ctx context.Context, id int64, message, _ string) (int64, error) {
 	_, err := b.store.Enqueue(
 		ctx,
 		sessionstore.Input{SessionID: id, Source: sessionstore.InputSourceUser, Content: message},

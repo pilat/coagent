@@ -34,8 +34,9 @@ producer ledgers and admission. `managercontrol`
 implements the in-process `controllerapi.Controller` over the daemon's command
 backend and reads persistence and subscriptions from their owners.
 Domain packages own durable ledgers; the daemon owns runner lifecycle and
-capacity counters. It binds no *network* socket — the only thing it
-listens on is the **control socket**, a same-user unix socket.
+capacity counters. It binds no *network* socket — it listens only on same-user
+unix sockets: the **control socket** and, when API clients are configured, the
+**API socket**.
 _Avoid_: server, gateway.
 
 **session**:
@@ -96,11 +97,12 @@ _Avoid_: job, request (for the work-unit); unqualified "task" in code.
 
 **Controller** (`controllerapi.Controller`):
 The private manager-bound in-process capability `managercontrol` implements over
-the daemon backend for built-in managers — create sessions, durably send
-messages, stop/kill them, and subscribe to their owned session events. The
-composition root binds one capability to each manager ID; session-addressed
-operations reject every other owner. It is an internal package boundary, not a
-supported external API.
+the daemon backend for built-in managers and the local API server — create
+sessions, durably send messages, stop/kill them, and subscribe to their owned
+session events. The composition root binds one capability to each manager and
+**API client** ID; session-addressed operations reject every other owner. It is
+an internal package boundary, not a supported external API. The external
+contract is the **local API**.
 _Avoid_: using "controller" for a front-end integration — that is a manager.
 
 **manager**:
@@ -109,14 +111,16 @@ A Telegram manager owns one durable manager ID, one bot account, one private cha
 with its sole allowed user and one polling instance. Enabled managers cannot
 reuse a bot token. Adding a manager is a source-level contribution, not a
 third-party plugin.
-_Avoid_: controller, bot, adapter, integration.
+_Avoid_: controller, bot, adapter, integration; manager for an **API client**.
 
 **manager ownership**:
-The durable routing identity of a root session: the unique manager ID stored as
-`manager_id`. A manager subscribes with that same ID and receives only its own
-session events. Its bound Controller also stamps new sessions and rejects reads
-or mutations of any other owner; a driver or channel name is not ownership
-because several managers may share it.
+The durable routing identity of a root session: the unique manager or
+**API client** ID stored as `manager_id`. A manager subscribes with that same ID
+and receives only its own session events. Its bound Controller also stamps new
+sessions and rejects reads or mutations of any other owner; a driver or channel
+name is not ownership because several managers may share it. In code an API
+client's root is still a manager-owned root (`manager_id`, `ForManager`): the
+identifiers name the ownership slot, not the kind of owner.
 _Avoid_: channel ownership, transport ownership.
 
 **subagent**:
@@ -138,9 +142,38 @@ A named agent configuration — tool allowlist, prompt template, model override,
 _Avoid_: role, persona, mode (mode is a separate axis on the same config).
 
 **control socket**:
-`~/.coagent/daemon.sock`, mode 0600 — newline-delimited JSON-RPC 2.0, the daemon's local API (`internal/ctl`). It carries the read-only `status` method and nothing else: no mutations, no chat, no server pushes. A unix socket is not a network listener; the "no inbound listener" rule is about the network.
+`~/.coagent/daemon.sock`, mode 0600 — newline-delimited JSON-RPC 2.0, the daemon's status protocol (`internal/ctl`). It carries the read-only `status` method and nothing else: no mutations, no chat, no server pushes. A unix socket is not a network listener; the "no inbound listener" rule is about the network.
 The daemon begins accepting only after every startup op owner has registered, so a greeting is also a control-plane readiness boundary rather than a partially initialized view.
-_Avoid_: RPC server, API server, IPC channel.
+_Avoid_: RPC server, API server, IPC channel; local API (that is `coagent.v1` on the **API socket**).
+
+**local API**:
+`coagent.v1`, the daemon's public contract: the Protocol Buffers schema
+`api/coagent/v1/coagent.proto`, served with ConnectRPC on the **API socket** by
+`internal/localapi`. It is the two durable ledgers (keyed input into
+`session_inbox`, a tail of `session_outbox`), not RPC plus pushes
+([ADR-0104](adr/0104-the-local-api-is-the-two-durable-ledgers.md)).
+_Avoid_: control API, controller API, RPC server.
+
+**API socket**:
+`~/.coagent/api.sock`, mode 0600, bound only when `api.clients` is non-empty;
+every call carries a bearer token.
+_Avoid_: control socket (that is the status protocol).
+
+**API client**:
+One `api.clients` entry (`id`, `role`, `token_sha256`) and the program holding its
+token, which `coagent token <id>` prints once. Its id is a durable owner id beside
+manager ids: it owns and sees only the roots it created. The token authenticates
+an author and grants nothing itself: authority follows the source the host
+stamps on its input. The role `operator` names who holds the token: the person
+who owns the machine, `config.yaml` and the sandbox rules. Its input is
+**human input**.
+_Avoid_: manager (a built-in front end), user.
+
+**idempotency key**:
+The string an **API client** sends with each input. A repeated send of the same
+input to the same root appends nothing. Stored as the inbox delivery key
+`user:<key>`.
+_Avoid_: request id, dedup key.
 
 ## Agent loop & context management
 
@@ -393,9 +426,11 @@ output-log rows.
 _Avoid_: tool result, progress card, one message per call.
 
 **tail**:
-The selected session's output-log rows above that chat's **chat cursor**, read
-in ascending ID order. Non-focused roots are never sent; selecting one enters its
-last three renderable rows before starting its live tail.
+Output-log rows above a position, read in ascending ID order: for a chat, the
+selected session's rows above its **chat cursor**; for an **API client**, one
+root's rows above the id the client holds, continuing through its `/clear`
+replacements. In a chat, non-focused roots are never sent; selecting one enters
+its last three renderable rows before starting its live tail.
 _Avoid_: backlog, transcript.
 
 **skill activation receipt**:
@@ -665,7 +700,7 @@ _Avoid_: sudo wrapper, privilege helper (nothing here is a persistent helper pro
 
 Naming conflicts this vocabulary resolves. "Resolved" means the winner above is the term to use going forward; where existing code or prose still uses a loser, fix it on touch rather than in a sweep.
 
-- **controller vs manager** — *Resolved.* `controllerapi.Controller` is the private manager-bound interface implemented by `managercontrol` over the daemon backend; a built-in front end is a **manager**. It does not name a public extension point.
+- **controller vs manager** — *Resolved.* `controllerapi.Controller` is the private manager-bound interface implemented by `managercontrol` over the daemon backend; a built-in front end is a **manager**. It does not name a public extension point. The public contract is the **local API**, served by `internal/localapi` over that same controller.
 - **task (work-unit) vs `task` tool** — *Resolved.* "task" is prose for a submitted unit of work, realized as a session with no `Task` type; the only code symbol named `task` is the subagent-spawning tool. Qualify in code contexts.
 - **state / status (three vocabularies)** — *Resolved.* Runtime **state** = `controllerapi.State*` (running/idle/error, in-memory); persisted **status** = active/completed/suspended/error; subagent **link state** = `subagent.State*`. Don't treat "running" and "active" as one word.
 - **agent loop vs ReAct loop vs iteration** — *Resolved.* Canonical is **agent loop** (entered through `Run`); "ReAct loop" is an acceptable doc alias; **iteration** is one turn, not a synonym for the loop.

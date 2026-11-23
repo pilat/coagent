@@ -45,7 +45,7 @@ func (f *stubWorktreeBackend) GetOrCreateProject(_ context.Context, workDir stri
 	return 9, nil
 }
 
-func (f *stubWorktreeBackend) SendToSessionResolved(context.Context, int64, string) (int64, error) {
+func (f *stubWorktreeBackend) SendToSessionResolved(context.Context, int64, string, string) (int64, error) {
 	return 0, nil
 }
 

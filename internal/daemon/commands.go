@@ -15,12 +15,12 @@ import (
 
 const budgetParkingNotice = "session %d is parking after a budget checkpoint — send the message again once it stops"
 
-func (s *Service) sendToSession(ctx context.Context, sessionID int64, prompt string) error {
+func (s *Service) sendInput(ctx context.Context, sessionID int64, prompt, key string) error {
 	if s.parkRefuses(sessionID, prompt) {
 		return fmt.Errorf(budgetParkingNotice, sessionID)
 	}
 
-	input, err := s.enqueueUserSessionInput(ctx, sessionID, prompt)
+	input, err := s.enqueueUserSessionInput(ctx, sessionID, prompt, key)
 	if errors.Is(err, sessionstore.ErrSessionNotAcceptingInput) {
 		if record, getErr := s.store.GetSession(ctx, sessionID); getErr == nil && record.KilledAt != nil {
 			return fmt.Errorf("session %d is killed", sessionID)
@@ -33,6 +33,11 @@ func (s *Service) sendToSession(ctx context.Context, sessionID int64, prompt str
 
 	if err != nil {
 		return fmt.Errorf("persist session input: %w", err)
+	}
+
+	// A repeated key: the first send already took effect.
+	if input == nil {
+		return nil
 	}
 
 	if handled, err := s.handleGenericCommand(ctx, input); handled || err != nil {
@@ -74,7 +79,7 @@ func (s *Service) sendToSessionLocked(ctx context.Context, sessionID int64, prom
 	return s.startLocked(ctx, sessionID)
 }
 
-func (s *Service) SendToSessionResolved(ctx context.Context, sessionID int64, prompt string) (int64, error) {
+func (s *Service) SendToSessionResolved(ctx context.Context, sessionID int64, prompt, key string) (int64, error) {
 	record, err := s.store.GetSession(ctx, sessionID)
 	if err != nil {
 		return 0, fmt.Errorf("load session for replacement resolution: %w", err)
@@ -89,7 +94,7 @@ func (s *Service) SendToSessionResolved(ctx context.Context, sessionID int64, pr
 
 	sessionID = resolved
 
-	if err := s.sendToSession(ctx, sessionID, prompt); err != nil {
+	if err := s.sendInput(ctx, sessionID, prompt, key); err != nil {
 		return 0, err
 	}
 
@@ -300,20 +305,25 @@ func (s *Service) prepareStoppedSessionInput(
 func (s *Service) enqueueUserSessionInput(
 	ctx context.Context,
 	sessionID int64,
-	prompt string,
+	prompt, key string,
 ) (*sessionstore.InboxInput, error) {
 	attributes, err := s.sessionInputAttributes(ctx, sessionID, prompt)
 	if err != nil {
 		return nil, err
 	}
 
+	if key != "" {
+		key = "user:" + key
+	}
+
 	result, err := s.store.Enqueue(
 		ctx,
 		sessionstore.Input{
-			SessionID:  sessionID,
-			Source:     sessionstore.InputSourceUser,
-			Content:    prompt,
-			Attributes: attributes,
+			SessionID:   sessionID,
+			Source:      sessionstore.InputSourceUser,
+			Content:     prompt,
+			Attributes:  attributes,
+			DeliveryKey: key,
 		},
 	)
 	if err != nil {

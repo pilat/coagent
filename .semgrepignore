@@ -1,3 +1,5 @@
 tmp/
 old/
 coagent-dir
+api/**/*.pb.go
+api/**/*.connect.go

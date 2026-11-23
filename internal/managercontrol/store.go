@@ -9,6 +9,7 @@ import (
 // Store is the persistence view required by managercontrol.
 type Store interface { //nolint:interfacebloat // Manager reads and chat state share one persistence boundary.
 	GetSession(context.Context, int64) (*sessionstore.SessionRecord, error)
+	ReplacementChain(context.Context, int64, string) ([]int64, error)
 	ListSessions(context.Context) ([]*sessionstore.SessionRecord, error)
 	GetOrCreateProject(context.Context, string) (int64, error)
 	GetProjectWorkDir(context.Context, int64) (string, error)

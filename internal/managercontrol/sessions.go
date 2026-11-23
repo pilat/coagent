@@ -80,7 +80,7 @@ func (s *service) sendSessionMessage(
 		return err
 	}
 
-	acceptedID, err := s.backend.SendToSessionResolved(ctx, data.SessionID, data.Message)
+	acceptedID, err := s.backend.SendToSessionResolved(ctx, data.SessionID, data.Message, data.IdempotencyKey)
 	if err != nil {
 		return fmt.Errorf("send resolved session message: %w", err)
 	}

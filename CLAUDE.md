@@ -1,11 +1,12 @@
 # coagent
 
-Coagent is a self-hosted headless coding agent. It runs as a daemon, receives tasks from its built-in Telegram manager or from schedules, executes them autonomously via a ReAct loop with tool calling and MCP support, and reports results back. Unlike interactive coding assistants (Claude Code, OpenCode, Roo Code), coagent is designed to work unattended — you send a task and get back the result. The daemon and the built-in manager share a private in-process `controllerapi.Controller` contract; coagent does not expose a public controller or plugin API. The binary opens no inbound *network* listener, and the only thing it listens on is a same-user unix socket (`~/.coagent/daemon.sock`, mode 0600) that carries the read-only `coagent status` method and nothing else.
+Coagent is a self-hosted headless coding agent. It runs as a daemon, receives tasks from its built-in Telegram manager or from schedules, executes them autonomously via a ReAct loop with tool calling and MCP support, and reports results back. Unlike interactive coding assistants (Claude Code, OpenCode, Roo Code), coagent is designed to work unattended — you send a task and get back the result. The daemon, the built-in manager and the local API server share a private in-process `controllerapi.Controller` contract. The public contract is the `coagent.v1` local API (Protocol Buffers, ConnectRPC) on `~/.coagent/api.sock`, bound only when API clients are configured and requiring a bearer token on every call; coagent exposes no plugin API. The binary opens no inbound *network* listener: besides the API socket it listens only on `~/.coagent/daemon.sock` (mode 0600), which carries the read-only `coagent status` method and nothing else.
 
 Key differentiators:
 - **Headless**: no TUI, no IDE extension, no web UI — pure daemon
 - **Multi-session**: each task runs in an isolated session with its own LLM client, tool registry, and conversation history
 - **Built-in manager**: the Telegram manager and future built-in managers share the daemon's private in-process controller contract
+- **Local API**: programs outside the daemon create sessions, send keyed input and tail output over `coagent.v1`, resuming from the last output id after a disconnect
 - **Pluggable LLM backends**: Anthropic, Google Gemini, OpenAI-compatible (including local models)
 - **Unattended execution**: sessions persist to SQLite, survive crashes, and resume automatically
 - **MCP-first**: each session stack owns its MCP clients and discovers their tools at startup
@@ -18,6 +19,7 @@ make build          # go build -o coagent ./cmd/coagent
 make test           # fast package suites; CI-owned packages excluded
 make lint           # golangci-lint run ./...
 make fmt            # golangci-lint fmt
+make generate       # regenerate api/coagent/v1 from coagent.proto
 make tools          # online bootstrap for modules and pinned development tools
 make all            # local handoff gate with architecture, Semgrep and fast tests
 make verify-offline # run the everyday gate with Go/uv resolution disabled

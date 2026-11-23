@@ -163,6 +163,10 @@ func (c *UnifiedConfig) validate() error {
 		return err
 	}
 
+	if err := c.validateAPI(); err != nil {
+		return err
+	}
+
 	if err := c.validateProviders(); err != nil {
 		return err
 	}
