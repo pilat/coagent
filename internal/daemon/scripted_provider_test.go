@@ -377,7 +377,7 @@ func scriptedBuildInput(
 
 func lifecycleInput(ctx context.Context, t *testing.T, s *Service, id int64, command string) *sessionstore.InboxInput {
 	t.Helper()
-	input, err := s.enqueueUserSessionInput(ctx, id, command)
+	input, err := s.enqueueUserSessionInput(ctx, id, command, "")
 	require.NoError(t, err)
 	return input
 }

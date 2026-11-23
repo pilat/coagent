@@ -6,6 +6,8 @@ chat transport, configuration mutations, secret protocol, restart operation and
 server pushes this socket once carried; what remains is greeting/readiness and
 one `status` method.
 
+The `coagent.v1` local API is a separate socket; see [local-api.md](local-api.md).
+
 - **Path:** `~/.coagent/daemon.sock`
 - **Mode:** `0600`, owned by the daemon's user; unlinked on shutdown
 - **Framing:** one JSON object per line
@@ -14,8 +16,9 @@ one `status` method.
 - **Liveness:** connecting successfully *is* the check — there is no ping op
 
 The constitution's "no inbound listener" rule is about **network** listeners. A
-same-user unix socket widens nothing: a process that can open it can already do
-anything the daemon can.
+process that connects to this status-only socket can read status but cannot
+mutate daemon state. The [local API socket](local-api.md) has a separate
+bearer-token boundary.
 
 ## Connecting
 
@@ -61,7 +64,7 @@ into the ready phase (ADR-0017).
 ### `status`
 
 The only method. No params, read-only by design: every configuration change
-travels through a manager session's `/config` flow, not through this socket.
+travels through a session's `/config` flow, not through this socket.
 
 ```json
 {

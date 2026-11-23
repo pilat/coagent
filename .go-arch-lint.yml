@@ -25,6 +25,8 @@ excludeFiles:
 
 components:
   main:           { in: cmd/coagent }
+  coagentv1:      { in: [api/coagent/v1, api/coagent/v1/coagentv1connect] }
+  localapi:       { in: internal/localapi }
 
   coagenthome:    { in: internal/coagenthome }
   config:         { in: internal/config }
@@ -88,6 +90,11 @@ components:
   ctl:        { in: internal/ctl }
 
 deps:
+  # The generated bindings import the generated messages.
+  coagentv1:
+    mayDependOn: [coagentv1]
+  localapi:
+    mayDependOn: [coagentv1, config, controllerapi, sessionevent]
   # Composition root — wires everything.
   main:
     anyProjectDeps: true

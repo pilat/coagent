@@ -1,0 +1,87 @@
+syntax = "proto3";
+
+package coagent.v1;
+
+option go_package = "github.com/pilat/coagent/api/coagent/v1;coagentv1";
+
+// SessionService creates the calling client's roots and accepts their input.
+service SessionService {
+  // CreateSession creates an empty root owned by the calling client.
+  rpc CreateSession(CreateSessionRequest) returns (CreateSessionResponse);
+  // SendInput appends text to a root's durable input as human input. A repeated idempotency_key
+  // for the same root appends nothing, so a retry never doubles an input; a retried /clear that
+  // already replaced the root clears its successor. A replaced root resolves to its successor;
+  // address the newest session_id received.
+  rpc SendInput(SendInputRequest) returns (SendInputResponse);
+}
+
+// OutputService reads the output log.
+service OutputService {
+  // TailOutput streams a root's rows above after_id, then follows live, continuing through /clear
+  // replacements. It ends without error only after a killed root's last row. On UNAVAILABLE or a
+  // transport error, call it again with the session_id and id of the last row received.
+  rpc TailOutput(TailOutputRequest) returns (stream TailOutputResponse);
+}
+
+message CreateSessionRequest {
+  // Absolute path of the project directory.
+  string work_dir = 1;
+  // A configured model id; empty selects the default model.
+  string model = 2;
+}
+
+message CreateSessionResponse {
+  int64 session_id = 1;
+}
+
+message SendInputRequest {
+  int64 session_id = 1;
+  string text = 2;
+  // 1-128 bytes, chosen by the client; reuse it only to retry the same input.
+  string idempotency_key = 3;
+}
+
+message SendInputResponse {}
+
+message TailOutputRequest {
+  int64 session_id = 1;
+  // The last id the client received; 0 streams the root's whole log.
+  int64 after_id = 2;
+}
+
+message TailOutputResponse {
+  oneof event {
+    OutputRow output = 1;
+    // Best-effort runtime state, sent when it changes; never the source of truth.
+    SessionState state = 2;
+  }
+}
+
+message OutputRow {
+  int64 id = 1;
+  int64 session_id = 2;
+  // "<project> · <title>", or the project name while the root is untitled.
+  string session_name = 3;
+  OutputType type = 4;
+  string content = 5;
+}
+
+enum OutputType {
+  OUTPUT_TYPE_UNSPECIFIED = 0;
+  OUTPUT_TYPE_MESSAGE = 1;
+  OUTPUT_TYPE_SESSION_OPENED = 2;
+  OUTPUT_TYPE_SESSION_REPLACED = 3;
+  OUTPUT_TYPE_SESSION_CLOSED = 4;
+}
+
+message SessionState {
+  int64 session_id = 1;
+  RuntimeState state = 2;
+}
+
+enum RuntimeState {
+  RUNTIME_STATE_UNSPECIFIED = 0;
+  RUNTIME_STATE_RUNNING = 1;
+  RUNTIME_STATE_IDLE = 2;
+  RUNTIME_STATE_ERROR = 3;
+}

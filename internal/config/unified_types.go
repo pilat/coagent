@@ -171,6 +171,7 @@ type (
 		ProjectsRoot       string                   `yaml:"projects_root,omitempty"`  // root for /new folder-projects; empty → ~/.coagent/projects (resolved in daemon)
 		WorktreesRoot      string                   `yaml:"worktrees_root,omitempty"` // root for /gwt worktrees; empty → ~/.coagent/worktrees (resolved in daemon)
 		Managers           []ManagerEntry           `yaml:"managers,omitempty"`
+		API                APIConfig                `yaml:"api,omitempty"`
 		Sandbox            SandboxConfig            `yaml:"sandbox"`
 		Tools              ToolsConfig              `yaml:"tools,omitempty"`
 		Browser            *BrowserConfig           `yaml:"browser,omitempty"`

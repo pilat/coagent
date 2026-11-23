@@ -16,6 +16,7 @@ const (
 	ConfigFileName       = "config.yaml"
 	SecretsFileName      = "secrets"
 	SocketFileName       = "daemon.sock"
+	APISocketFileName    = "api.sock"
 	LockFileName         = "daemon.lock"
 	DBFileName           = "daemon.db"
 	PendingApplyFileName = "pending-apply.json"

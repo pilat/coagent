@@ -11,8 +11,8 @@ finishes or needs a decision.
 
 Accepted input, conversations, schedules, and subagent links are persisted in
 SQLite and recovered from durable boundaries after a restart. Telegram uses
-outbound polling; local control stays on a same-user Unix socket. There is no
-TCP listener, web UI, IDE extension, or public controller API.
+outbound polling; local control and the `coagent.v1` local API stay on same-user
+Unix sockets. There is no TCP listener, web UI or IDE extension.
 
 > Interactive agents are built for steering. coagent is built for handoff.
 
@@ -31,11 +31,11 @@ mise exec -- go mod download
 mise exec -- make build
 ```
 
-There is no first-run wizard: a daemon without a valid model and Telegram
-configuration has nothing to talk to. Author `~/.coagent/config.yaml` by hand —
-at minimum one provider with a model and one Telegram manager — and keep the
-credential values in `~/.coagent/secrets`, referenced from the config as
-`${VAR}`. Then install and start the daemon as a system service:
+There is no first-run wizard. Author `~/.coagent/config.yaml` by hand — at minimum
+one provider with a model and either a Telegram manager or an
+[API client](docs/local-api.md) — and keep credential values in
+`~/.coagent/secrets`, referenced from the config as `${VAR}`. Then install and
+start the daemon as a system service:
 
 ```bash
 ./coagent install   # sets up and starts the service; auto-escalates via sudo
@@ -147,8 +147,10 @@ deliberately narrow and explicit.
 
 What is enforced:
 
-- **No TCP listener.** Telegram is outbound-only. Local operations use
-  `~/.coagent/daemon.sock`, a same-user Unix socket created with mode `0600`.
+- **No TCP listener.** Telegram is outbound-only. Local operations use same-user
+  Unix sockets created with mode `0600`: `~/.coagent/daemon.sock` for status and,
+  when API clients are configured, `~/.coagent/api.sock` for the local API, where
+  every call carries a bearer token whose SHA-256 is in `config.yaml`.
 - **Coagent-managed credentials are not injected into tool subprocesses.** The
   secrets file is parsed into memory rather than loaded into the environment.
   Ordinary environment variables inherited by the daemon remain visible to its

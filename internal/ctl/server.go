@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"net"
 	"os"
-	"path/filepath"
 	"sync"
 	"time"
 )
@@ -18,11 +17,6 @@ import (
 // maxLineBytes caps one request line. Control payloads are small; this stops a
 // runaway client from growing the read buffer without bound.
 const maxLineBytes = 8 << 20
-
-// maxSocketPath is the sun_path limit. The kernel reports an overrun as a bare
-// EINVAL from bind, which reads as a bug in the daemon rather than as "your home
-// directory is too deep" — so it is checked here where the number can be said.
-const maxSocketPath = 100
 
 var ErrAlreadyServing = errors.New("control server is already serving")
 
@@ -58,35 +52,9 @@ type Conn struct {
 // single-instance Lock: removing a stale socket is only safe for the process
 // that proved no other daemon is running.
 func NewServer(ctx context.Context, path, version string, deps Deps) (*Server, error) {
-	if len(path) > maxSocketPath {
-		return nil, fmt.Errorf(
-			"control socket path is %d bytes, over the %d-byte unix limit: %s",
-			len(path), maxSocketPath, path,
-		)
-	}
-
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return nil, fmt.Errorf("create socket dir: %w", err)
-	}
-
-	// Safe under the flock: whatever is here is a leftover, not a live daemon.
-	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-		return nil, fmt.Errorf("remove stale socket: %w", err)
-	}
-
-	var lc net.ListenConfig
-
-	ln, err := lc.Listen(ctx, "unix", path)
+	ln, err := ListenUnix(ctx, path)
 	if err != nil {
-		return nil, fmt.Errorf("listen on %s: %w", path, err)
-	}
-
-	// Bound to the owner before anyone can connect. net.Listen honours umask,
-	// which on a permissive umask would leave the socket group-writable.
-	if err := os.Chmod(path, 0o600); err != nil {
-		_ = ln.Close()
-
-		return nil, fmt.Errorf("chmod socket: %w", err)
+		return nil, err
 	}
 
 	return &Server{

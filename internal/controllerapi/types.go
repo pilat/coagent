@@ -55,6 +55,8 @@ type SessionCreateData struct {
 type SessionMessageData struct {
 	SessionID int64  `json:"session_id"`
 	Message   string `json:"message"`
+	// A repeated key appends nothing to the same root; empty means unkeyed.
+	IdempotencyKey string `json:"idempotency_key,omitempty"`
 }
 
 // SessionKillData defines input for killing a session.

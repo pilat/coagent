@@ -35,6 +35,7 @@ Usage:
   coagent start|stop|restart   control the service
   coagent daemon          run the daemon in the foreground
   coagent status          report daemon state
+  coagent token ID        mint a local API token for client ID
   coagent version         print the binary version
 
 The lifecycle verbs need root and re-exec themselves under sudo when they don't
@@ -64,6 +65,10 @@ func dispatch(ctx context.Context, args []string) int {
 		silenceLogs()
 
 		return runStatus(ctx)
+	case "token":
+		silenceLogs()
+
+		return runToken(args[1:], os.Stdout)
 	case "version":
 		fmt.Println(version.Version)
 

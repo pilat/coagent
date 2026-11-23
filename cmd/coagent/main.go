@@ -420,6 +420,8 @@ func runDaemon(
 
 	a.onStop("schedule.executor", func(context.Context) error { executor.Stop(); return nil })
 
+	startLocalAPI(ctx, a, cfg, core.controller)
+
 	mgrRuntime := managers.NewRuntime(cfg, core.controller)
 
 	ctlSrv, err := prepareControlSocket(ctx, cfg, mgrRuntime)

@@ -3,6 +3,7 @@ module github.com/pilat/coagent
 go 1.27.1
 
 require (
+	connectrpc.com/connect/v2 v2.0.2
 	github.com/anthropics/anthropic-sdk-go/v2 v2.9.0
 	github.com/bmatcuk/doublestar/v4 v4.10.4
 	github.com/caarlos0/env/v11 v11.4.2
@@ -16,6 +17,7 @@ require (
 	go.uber.org/zap v1.28.0
 	golang.org/x/oauth2 v0.38.0
 	golang.org/x/sys v0.50.0
+	google.golang.org/protobuf v1.36.12
 	gopkg.in/yaml.v3 v3.0.1
 	modernc.org/sqlite v1.62.0
 	mvdan.cc/sh/v3 v3.14.1
