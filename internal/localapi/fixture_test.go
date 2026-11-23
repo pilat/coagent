@@ -39,6 +39,7 @@ type apiBackend struct {
 	bus     *sessionbus.Bus
 	mu      sync.Mutex
 	creates int
+	create  func(context.Context)
 	sends   []apiSend
 	send    func(context.Context) error
 }
@@ -68,7 +69,13 @@ func (b *apiBackend) CreateSession(
 ) (int64, error) {
 	b.mu.Lock()
 	b.creates++
+	create := b.create
 	b.mu.Unlock()
+
+	if create != nil {
+		create(ctx)
+	}
+
 	workDir, err := b.store.GetProjectWorkDir(ctx, project)
 	if err != nil {
 		return 0, fmt.Errorf("load test project: %w", err)
@@ -185,14 +192,19 @@ func (h *apiServer) close(t *testing.T) {
 	}
 }
 
-func (h *apiServer) client(t *testing.T, authorization string) *connect.Client {
+func (h *apiServer) httpClient(t *testing.T) *http.Client {
 	t.Helper()
 	transport := &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 		var dialer net.Dialer
 		return dialer.DialContext(ctx, "unix", h.socket)
 	}}
 	t.Cleanup(transport.CloseIdleConnections)
-	return connect.NewClient(connecthttp.NewTransport(&http.Client{Transport: transport}, "http://localapi"),
+	return &http.Client{Transport: transport}
+}
+
+func (h *apiServer) client(t *testing.T, authorization string) *connect.Client {
+	t.Helper()
+	return connect.NewClient(connecthttp.NewTransport(h.httpClient(t), "http://localapi"),
 		func(next connect.ClientFunc) connect.ClientFunc {
 			return func(ctx context.Context, spec connect.Spec) (connect.ClientStream, error) {
 				info, ok := connect.CallInfoForClientContext(ctx)

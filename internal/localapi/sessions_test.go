@@ -2,6 +2,7 @@ package localapi
 
 import (
 	"context"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
@@ -53,11 +54,31 @@ func TestServer_RefusesMissingAndWrongToken(t *testing.T) {
 	}, &coagentv1.SendInputRequest{}, &coagentv1.SendInputResponse{})
 	require.Error(t, err)
 	assert.Equal(t, connect.CodeUnimplemented, connect.CodeOf(err))
-	require.ErrorContains(t, err, `procedure "/coagent.v1.SessionService/Nope" is not part of coagent.v1`)
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://localapi/", nil)
+	require.NoError(t, err)
+	response, err := h.httpClient(t).Do(request)
+	require.NoError(t, err)
+	defer func() { _ = response.Body.Close() }()
+	assert.Equal(t, http.StatusUnauthorized, response.StatusCode)
 	f.backend.mu.Lock()
 	defer f.backend.mu.Unlock()
 	assert.Zero(t, f.backend.creates)
 	assert.Empty(t, f.backend.sends)
+}
+
+func TestServer_RefusesGeneralOptionsWithoutToken(t *testing.T) {
+	t.Parallel()
+	f := newAPIFixture(t)
+	h := f.start(t)
+	ctx, cancel := context.WithTimeout(t.Context(), 4*time.Second)
+	defer cancel()
+	request, err := http.NewRequestWithContext(ctx, http.MethodOptions, "http://localapi/", nil)
+	require.NoError(t, err)
+	request.URL.Opaque = "*"
+	response, err := h.httpClient(t).Do(request)
+	require.NoError(t, err)
+	defer func() { _ = response.Body.Close() }()
+	assert.Equal(t, http.StatusUnauthorized, response.StatusCode)
 }
 
 func TestServer_ClientCannotReachAnotherClientsRoot(t *testing.T) {

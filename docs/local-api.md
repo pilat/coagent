@@ -23,8 +23,9 @@ api:
 ```
 
 Paste the printed block into `~/.coagent/config.yaml` and restart. Client ids must be unique and distinct
-from manager ids; hashes must be unique. Only `operator` is accepted. Every call needs
-`Authorization: Bearer <token>`, even on the Unix socket. Config keeps only the token's SHA-256.
+from manager ids; hashes must be unique. Only `operator` is accepted. Every request on the socket,
+RPC or not, is refused without a valid token in `Authorization: Bearer <token>`.
+Config keeps only the token's SHA-256.
 Removing the entry and restarting revokes it. The client owns and sees only the roots it creates.
 
 `operator` names the person who owns the machine, config and sandbox rules. Its input is human input,

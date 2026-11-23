@@ -67,7 +67,7 @@ lines internal/llm 4569
 lines internal/llm/llmtest 56
 lines internal/llmwire 180
 lines internal/loader 1605
-lines internal/localapi 621
+lines internal/localapi 635
 lines internal/logger 369
 lines internal/lsp 3093
 lines internal/managercontrol 685

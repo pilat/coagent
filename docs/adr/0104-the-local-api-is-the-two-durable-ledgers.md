@@ -27,7 +27,8 @@ socket, so the socket's mode cannot be what keeps a session from acting as the o
   greeting is written before anything is read ([ADR-0017](0017-a-bound-control-socket-answers.md)), so HTTP cannot
   share that socket without changing status clients.
 - The API is the two ledgers. `SendInput` appends human input to `session_inbox` under a client-chosen idempotency
-  key, stored as the existing delivery key `user:<key>`; a repeated key for the same root appends nothing.
+  key, stored as the existing delivery key `user:<key>`; a repeated key for the same root appends nothing. An
+  accepted send runs under the server's lifetime, not its client's connection or deadline, as a manager's does.
   `TailOutput` streams `session_outbox` rows above an id the client holds: catch-up from SQLite, then live, woken by
   the client's session events with a fallback read. It continues through `/clear` replacements and ends cleanly
   only after a killed root's last row. Reconnecting is the same call with the `session_id` and id of the last row
@@ -35,7 +36,9 @@ socket, so the socket's mode cannot be what keeps a session from acting as the o
   `CreateSession` creates an empty root, so the first input also goes through the keyed send.
 - Every call carries `Authorization: Bearer <token>`. `coagent token <id>` mints a 256-bit random token, prints it
   once with the config lines to paste, and edits nothing. `config.yaml` keeps only `token_sha256`; comparison is
-  constant-time; removing the entry revokes the token at the next config apply.
+  constant-time; removing the entry revokes the token at the next config apply. The server checks the token in
+  front of the RPC layer, on every request to the socket, and removes the bearer value from the request before any
+  handler runs, so nothing an accepted call hands on can yield it.
 - Authority follows the source the host stamps on an input, as it already does inside the core. Every call has
   an author: the operator, an app, a session or a schedule. An author acts either with human authority or with
   authority a human delegated, and a delegation may be limited to projects: `/orchestrate` delegates to a session,
@@ -74,11 +77,16 @@ socket, so the socket's mode cannot be what keeps a session from acting as the o
 - Accepted: a repeated key whose first attempt committed its input but failed to start the runner returns success
   without starting it; the input waits for the next fresh input or a restart.
 - Accepted: a repeated `/clear` under one key, after the first replaced the root, clears the empty successor too.
+  A repeated `/kill`, or `/stop` while the root is still stopping, is refused because the root no longer accepts
+  input. A repeated key reports that the input is on the root, not whether its command finished.
 - Accepted: a row a replaced root commits after its replacement is not streamed, as a chat never shows it.
+- Accepted: if a replacement and such a late row both commit between two adjacent reads of one tail pass, the tail
+  sends the late row and skips the successor's rows below it.
 - Accepted: runtime state is best effort and sent only on change; a dropped event delays a live row until the
   fallback read.
-- Accepted: a root id more than 16 replacements old stops resolving; clients address the newest `session_id`
+- Accepted: a root id 16 or more replacements old stops resolving; clients address the newest `session_id`
   they received.
+- Accepted: a tail on a quiet root sends no response headers until its first row or state change.
 - Accepted: a first tail read that fails for a transient store reason reads as a refusal.
 - Accepted: a stale `api.sock` left by a crash stays on disk after the clients are removed; connecting is refused.
 - Accepted: there is no `buf breaking` gate until a published v1 message first changes.
@@ -93,8 +101,11 @@ socket, so the socket's mode cannot be what keeps a session from acting as the o
   and readiness contract every status client relies on.
 - **gRPC on grpc-go.** It needs HTTP/2, browsers need a proxy, and it brings a second HTTP stack.
 - **Hand-written REST plus server-sent events.** No schema or generated clients, and two encodings to keep in step.
-- **connect-go v1.** v2 is the current major; its interceptors run before the payload is decoded, so token
-  checks precede any work, and its in-process transport lets a built-in manager use the same contract.
+- **connect-go v1.** v2 is the current major, and its in-process transport lets a built-in manager use the same
+  contract.
+- **Checking the token in a connect interceptor.** connect copies the request headers into the call and keeps the
+  request, so an interceptor can hide the bearer value from handlers but cannot remove it; net/http middleware in
+  front of connect can, and it also covers requests that are not RPCs.
 - **A server-side cursor per client.** It needs a new table and its transitions; an id the client holds suffices
   because output ids are table-wide and only grow.
 - **One stream over all of a client's roots.** It needs a new store read; a per-root tail reuses the existing one

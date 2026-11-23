@@ -44,10 +44,7 @@ func New(ctx context.Context, listener net.Listener, entries []config.APIClientE
 
 	base, cancel := context.WithCancel(ctx)
 
-	server := connect.NewServer(authenticate(clients))
-	server.SetUnknownHandler(func(_ context.Context, spec connect.Spec, _ connect.ServerStream) error {
-		return connect.Errorf(connect.CodeUnimplemented, "procedure %q is not part of coagent.v1", spec.Procedure)
-	})
+	server := connect.NewServer()
 
 	var sessions coagentv1connect.SessionServiceHandler = sessionService{closing: base.Done()}
 	var outputs coagentv1connect.OutputServiceHandler = outputService{}
@@ -62,9 +59,11 @@ func New(ctx context.Context, listener net.Listener, entries []config.APIClientE
 		listener: listener,
 		cancel:   cancel,
 		http: &http.Server{
-			Handler:           mux,
-			ReadHeaderTimeout: 10 * time.Second,
-			BaseContext:       func(net.Listener) context.Context { return base },
+			// net/http would otherwise answer OPTIONS * before the token check.
+			DisableGeneralOptionsHandler: true,
+			Handler:                      authenticate(clients, mux),
+			ReadHeaderTimeout:            10 * time.Second,
+			BaseContext:                  func(net.Listener) context.Context { return base },
 		},
 	}, nil
 }

@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"connectrpc.com/connect/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -62,12 +63,19 @@ func TestSendInput_OutlivesItsClientAndEndsWithTheServer(t *testing.T) {
 			case <-time.After(2 * time.Second):
 				t.Fatal("send never reached the backend")
 			}
-			author, err := clientFrom(sendCtx)
-			require.NoError(t, err)
-			assert.NotNil(t, author, "accepted send must retain request values")
+			info, hasInfo := connect.CallInfoForServerContext(sendCtx)
+			require.True(t, hasInfo)
+			assert.False(t, info.RequestHeader().Has("Authorization"))
 			if tc.closing {
 				h.close(t)
 				require.ErrorIs(t, sendCtx.Err(), context.Canceled)
+				select {
+				case err := <-result:
+					require.Error(t, err)
+					assert.Equal(t, connect.CodeUnavailable, connect.CodeOf(err))
+				case <-time.After(2 * time.Second):
+					t.Fatal("server close did not end the call")
+				}
 			} else {
 				select {
 				case err := <-result:

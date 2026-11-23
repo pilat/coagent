@@ -910,8 +910,10 @@ The API socket `~/.coagent/api.sock` is a second mode-0600 same-user Unix socket
 Only the single-instance lock holder binds it, and only when `api.clients` is
 non-empty. It serves `coagent.v1` with ConnectRPC over HTTP/1.1. Every call
 carries `Authorization: Bearer <token>`. The daemon keeps only each client's
-SHA-256 token hash from `config.yaml`, compares in constant time, and binds the
-call to that client's id through the manager-bound controller. A sandboxed
+SHA-256 token hash from `config.yaml`. The server checks the token in front of
+the RPC layer on every request to the socket, compares in constant time, and
+removes the bearer value from the request before any handler runs. It binds
+each authenticated call to that client's id through the manager-bound controller. A sandboxed
 session can connect through the read-only host bind, so the token, not the
 socket mode, is the boundary. The token authenticates an author and grants
 nothing itself: as everywhere in the core, authority follows the source the
@@ -1300,8 +1302,8 @@ The local API server binds each authenticated client to its manager-bound
 controller and adds no session creation, inbox enqueue or output read of its
 own. `CreateSession` creates an empty root. `SendInput` sends human input through
 the managers' send path with the client's idempotency key, resolving a replaced
-root to its successor. Accepted sends keep request values and outlive client
-disconnects and deadlines, ending only with completion or API shutdown.
+root to its successor. Accepted sends outlive client disconnects and deadlines,
+ending only with completion or API shutdown.
 `TailOutput` reads the output log above the client's id in pages and continues
 through `/clear` replacements, sending a replaced root's rows only up to its
 successor's first row. It ends after a killed root's closing row and wakes on

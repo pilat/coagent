@@ -47,6 +47,42 @@ func TestTailOutput_ReconnectWithTheReplacedIDContinuesOnTheSuccessor(t *testing
 	assert.Equal(t, root.ID, live.GetSessionId())
 }
 
+func TestTailOutput_ReconnectWithTheReplacedIDAndASuccessorCursor(t *testing.T) {
+	t.Parallel()
+	f := newAPIFixture(t)
+	h := f.start(t)
+	id := f.root(t, h, "alpha")
+	before := f.tail(t, h, id, 0)
+	_ = nextOutput(t, before)
+	root, replacement, err := f.store.ReplaceManagerRoot(t.Context(), id, "test", "/project")
+	require.NoError(t, err)
+	_, err = f.store.MarkSessionKilledWithOutput(t.Context(), id, 0)
+	require.NoError(t, err)
+	f.wake(id)
+	row := nextOutput(t, before)
+	require.Equal(t, replacement.OutputID, row.GetId())
+	require.Equal(t, root.ID, row.GetSessionId())
+	seenID := f.append(t, root.ID, "already received")
+	f.wake(root.ID)
+	seen := nextOutput(t, before)
+	require.Equal(t, seenID, seen.GetId())
+	require.Equal(t, root.ID, seen.GetSessionId())
+	require.NoError(t, before.Close())
+	unread := []int64{f.append(t, root.ID, "unread one"), f.append(t, root.ID, "unread two")}
+	resumed := f.tail(t, h, id, seen.GetId())
+	for _, wantID := range unread {
+		output := nextOutput(t, resumed)
+		require.Equal(t, wantID, output.GetId())
+		assert.Equal(t, root.ID, output.GetSessionId())
+	}
+	liveID := f.append(t, root.ID, "live after reconnect")
+	f.wake(root.ID)
+	live := nextOutput(t, resumed)
+	assert.Equal(t, liveID, live.GetId())
+	assert.Equal(t, root.ID, live.GetSessionId())
+	assert.Equal(t, "live after reconnect", live.GetContent())
+}
+
 func TestTailOutput_SkipsARowTheReplacedRootCommitsAfterItsReplacement(t *testing.T) {
 	t.Parallel()
 	f := newAPIFixture(t)

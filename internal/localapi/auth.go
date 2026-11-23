@@ -6,9 +6,11 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"fmt"
+	"net/http"
 	"strings"
 
 	"connectrpc.com/connect/v2"
+	"connectrpc.com/connect/v2/connecthttp"
 
 	"github.com/pilat/coagent/internal/config"
 	"github.com/pilat/coagent/internal/controllerapi"
@@ -48,35 +50,48 @@ func bindClient(entry config.APIClientEntry, controllers controllerapi.ManagerCo
 	return &client{hash: [32]byte(raw), control: control, chat: chat, lineage: lineage}, nil
 }
 
-func authenticate(clients []*client) connect.ServerInterceptor {
-	return func(next connect.ServerFunc) connect.ServerFunc {
-		return func(ctx context.Context, spec connect.Spec, stream connect.ServerStream) error {
-			info, ok := connect.CallInfoForServerContext(ctx)
-			if !ok {
-				return connect.Errorf(connect.CodeUnauthenticated, "missing bearer token")
+func authenticate(clients []*client, next http.Handler) http.Handler {
+	errorWriter := connecthttp.NewErrorWriter()
+
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		author, err := authenticateHeader(clients, r.Header.Get("Authorization"))
+		if err != nil {
+			if errorWriter.IsSupported(r) {
+				_ = errorWriter.Write(w, r, err)
+				return
 			}
 
-			token, present := strings.CutPrefix(info.RequestHeader().Get("Authorization"), "Bearer ")
-			if !present || token == "" {
-				return connect.Errorf(connect.CodeUnauthenticated, "missing bearer token")
-			}
+			http.Error(w, err.Message(), http.StatusUnauthorized)
 
-			hash := sha256.Sum256([]byte(token))
-			var author *client
+			return
+		}
 
-			for _, candidate := range clients {
-				if subtle.ConstantTimeCompare(hash[:], candidate.hash[:]) == 1 {
-					author = candidate
-				}
-			}
+		// Connect copies headers and retains the request, so remove the credential first.
+		r.Header.Del("Authorization")
+		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), clientKey{}, author)))
+	})
+}
 
-			if author == nil {
-				return connect.Errorf(connect.CodeUnauthenticated, "invalid bearer token")
-			}
+func authenticateHeader(clients []*client, header string) (*client, *connect.Error) {
+	token, present := strings.CutPrefix(header, "Bearer ")
+	if !present || token == "" {
+		return nil, connect.Errorf(connect.CodeUnauthenticated, "missing bearer token")
+	}
 
-			return next(context.WithValue(ctx, clientKey{}, author), spec, stream)
+	hash := sha256.Sum256([]byte(token))
+	var author *client
+
+	for _, candidate := range clients {
+		if subtle.ConstantTimeCompare(hash[:], candidate.hash[:]) == 1 {
+			author = candidate
 		}
 	}
+
+	if author == nil {
+		return nil, connect.Errorf(connect.CodeUnauthenticated, "invalid bearer token")
+	}
+
+	return author, nil
 }
 
 func clientFrom(ctx context.Context) (*client, error) {
