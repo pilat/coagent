@@ -73,7 +73,7 @@ func TestMessageAndLifecycleOutputsDoNotStampGeneration(t *testing.T) {
 	// Lifecycle outputs carry no generation.
 	opened, _, err := store.CreateManagerRoot(ctx, sessionstore.ManagerRootCreate{
 		ProjectID: projectID, Attributes: map[string]any{"manager_id": "mgr"},
-		Name: "n", WorkDir: "/tmp/wd", Prompt: "go",
+		Name: "n", WorkDir: "/tmp/wd", Input: sessionstore.Input{Source: sessionstore.InputSourceUser, Content: "go"},
 	})
 	require.NoError(t, err)
 	var openedAttrs string

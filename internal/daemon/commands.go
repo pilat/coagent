@@ -7,10 +7,7 @@ import (
 	"slices"
 	"strings"
 
-	"go.uber.org/zap"
-
 	"github.com/pilat/coagent/internal/controllerapi"
-	"github.com/pilat/coagent/internal/logger"
 	"github.com/pilat/coagent/internal/sessionbuild"
 	"github.com/pilat/coagent/internal/sessionevent"
 	"github.com/pilat/coagent/internal/sessionstore"
@@ -347,78 +344,4 @@ func (s *Service) sessionInputAttributes(ctx context.Context, sessionID int64, p
 	}
 
 	return attributes, nil
-}
-
-func (s *Service) Send(
-	ctx context.Context,
-	projectID int64,
-	prompt, model string,
-	attrs map[string]any,
-) (int64, error) {
-	workDir, err := s.store.GetProjectWorkDir(ctx, projectID)
-	if err != nil {
-		return 0, fmt.Errorf("resolve project %d: %w", projectID, err)
-	}
-
-	if model == "" {
-		model = s.models.defaultModel
-	}
-
-	level, err := s.models.effort(model, "", "")
-	if err != nil {
-		return 0, fmt.Errorf("resolve reasoning level for model %s: %w", model, err)
-	}
-
-	owner, _ := attrs[controllerapi.SessionAttributeManagerID].(string)
-	var rec *sessionstore.SessionRecord
-	createdWithInput := false
-
-	if owner != "" {
-		projectName, nameErr := s.store.GetProjectName(ctx, projectID)
-		if nameErr != nil {
-			return 0, fmt.Errorf("resolve project name: %w", nameErr)
-		}
-
-		rec, _, err = s.store.CreateManagerRoot(ctx, sessionstore.ManagerRootCreate{
-			ProjectID: projectID, Model: model, ReasoningLevel: level, Attributes: attrs,
-			Prompt: prompt, StartEpisode: prompt != "" && !isReadOnlyCommand(prompt) && !isEnqueueCommand(prompt),
-			Name: projectName, WorkDir: workDir,
-		})
-		if err != nil {
-			return 0, fmt.Errorf("create manager session record: %w", err)
-		}
-
-		createdWithInput = prompt != ""
-	} else {
-		rec, err = s.store.CreateSession(ctx, projectID, model, level, attrs)
-		if err != nil {
-			return 0, fmt.Errorf("create session record: %w", err)
-		}
-	}
-
-	if prompt != "" && !createdWithInput {
-		if _, err := s.store.Enqueue(
-			ctx,
-			sessionstore.Input{SessionID: rec.ID, Source: sessionstore.InputSourceUser, Content: prompt},
-		); err != nil {
-			return 0, fmt.Errorf("persist initial session input: %w", err)
-		}
-	}
-
-	if err := s.start(ctx, rec.ID); err != nil {
-		// A failed launch must not leave a live record pointing at a removed worktree.
-		// The kill marker must persist even if the request was cancelled.
-		if _, killErr := s.store.MarkSessionKilledWithOutput(
-			context.WithoutCancel(ctx),
-			rec.ID,
-			0,
-		); killErr != nil {
-			logger.Ctx(ctx).Named("daemon.manager").Warn("cleanup_orphaned_session",
-				zap.Int64("session_id", rec.ID), zap.Error(killErr))
-		}
-
-		return 0, err
-	}
-
-	return rec.ID, nil
 }

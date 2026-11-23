@@ -2,7 +2,6 @@ package daemon
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"os"
@@ -14,7 +13,6 @@ import (
 	"github.com/pilat/coagent/internal/projectpath"
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/subagent"
-	"github.com/pilat/coagent/internal/worktree"
 )
 
 func (h orchestratorHost) SpawnSession(
@@ -56,46 +54,17 @@ func (h orchestratorHost) SpawnSession(
 		attrs[controllerapi.SessionAttributeTitle] = title
 	}
 
-	var created worktree.Result
-	if request.Worktree != "" {
-		created, err = worktree.Create(ctx, h.s.build.Config.UnifiedConfig, selected.WorkDir, request.Worktree, true)
-		if err != nil {
-			return 0, "", fmt.Errorf("worktree: %w", err)
-		}
-
-		selected.WorkDir = created.Path
-		selected.Name = created.DisplayName
-
-		selected.ID, err = h.s.store.GetOrCreateNamedProject(ctx, selected.WorkDir, selected.Name)
-		if err != nil {
-			return 0, "", fmt.Errorf("register spawned worktree: %w", created.Abandon(err))
-		}
-
-		created.StampAttributes(attrs)
-	}
-
-	var sessionID int64
-
-	err = h.s.store.WithTx(ctx, func(tx *sql.Tx) error {
-		var err error
-
-		sessionID, err = h.createSpawnTx(ctx, tx, selected, request, attrs, sender)
-		if err != nil {
-			return err
-		}
-
-		_, err = sessionstore.ArmWatchTx(ctx, tx, callerID, sessionID, false)
-		if err != nil {
-			return fmt.Errorf("arm spawned session watch: %w", err)
-		}
-
-		return nil
+	return h.s.createManagerRoot(ctx, rootRequest{
+		Root: sessionstore.ManagerRootCreate{
+			ProjectID: selected.ID, Name: selected.Name, WorkDir: selected.WorkDir,
+			Model: request.Model, ReasoningLevel: request.Effort, Attributes: attrs,
+			Input: sessionstore.Input{
+				Source: sessionstore.InputSourceAgent, Content: request.Prompt, Attributes: sender,
+			},
+			Watcher: callerID,
+		},
+		Worktree: request.Worktree, NoExecution: true,
 	})
-	if err != nil {
-		return 0, "", fmt.Errorf("spawn session: %w", created.Abandon(err))
-	}
-
-	return sessionID, selected.Name, nil
 }
 
 // modelChoice settles the new root's model and reasoning effort before anything is created.
@@ -139,38 +108,6 @@ func (h orchestratorHost) spawnModel(requested string) (string, error) {
 		requested,
 		strings.Join(ids, ", "),
 	)
-}
-
-func (h orchestratorHost) createSpawnTx(
-	ctx context.Context,
-	tx *sql.Tx,
-	project sessionstore.ProjectRow,
-	request orchestrator.SpawnRequest,
-	attrs, sender map[string]any,
-) (int64, error) {
-	record, _, err := sessionstore.CreateManagerRootTx(ctx, tx, sessionstore.ManagerRootCreate{
-		ProjectID:      project.ID,
-		Name:           project.Name,
-		WorkDir:        project.WorkDir,
-		Model:          request.Model,
-		ReasoningLevel: request.Effort,
-		Attributes:     attrs,
-	})
-	if err != nil {
-		return 0, fmt.Errorf("create spawned root: %w", err)
-	}
-
-	_, err = sessionstore.EnqueueTx(ctx, tx, sessionstore.Input{
-		SessionID:  record.ID,
-		Source:     sessionstore.InputSourceAgent,
-		Content:    request.Prompt,
-		Attributes: sender,
-	})
-	if err != nil {
-		return 0, fmt.Errorf("enqueue spawn prompt: %w", err)
-	}
-
-	return record.ID, nil
 }
 
 func (h orchestratorHost) project(ctx context.Context, selection string) (sessionstore.ProjectRow, error) {

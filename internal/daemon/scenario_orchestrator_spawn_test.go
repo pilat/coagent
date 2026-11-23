@@ -229,6 +229,13 @@ func assertSpawnedRoot(t *testing.T, h *harness, caller, id, project int64, prom
 		h.db.QueryRowContext(h.ctx, "SELECT count(*) FROM session_inbox WHERE session_id = ?", id).Scan(&rows),
 	)
 	assert.Equal(t, 1, rows)
+	var started bool
+	require.NoError(t, h.db.QueryRowContext(h.ctx,
+		"SELECT episode_started_at IS NOT NULL FROM sessions WHERE id = ?", id).Scan(&started))
+	assert.True(t, started)
+	require.NoError(t, h.db.QueryRowContext(h.ctx,
+		"SELECT count(*) FROM session_watches WHERE watcher_id = ? AND target_id = ?", caller, id).Scan(&rows))
+	assert.Equal(t, 1, rows)
 }
 
 func orchestratorProject(t *testing.T, h *harness, name string) (int64, string) {

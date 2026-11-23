@@ -62,8 +62,8 @@ type ManagerRootCreate struct {
 	Model          string
 	ReasoningLevel string
 	Attributes     map[string]any
-	Prompt         string
-	StartEpisode   bool
+	Input          Input // The first input when Content is set; SessionID is filled in.
+	Watcher        int64 // When set, gets a one-shot watch on the new root.
 	Name           string
 	WorkDir        string
 }

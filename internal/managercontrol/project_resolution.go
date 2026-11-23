@@ -3,28 +3,11 @@ package managercontrol
 import (
 	"context"
 	"fmt"
-
-	"github.com/pilat/coagent/internal/controllerapi"
 )
 
-// resolveSessionProject resolves the project a session runs in. worktreeName,
-// when set, is the /gwt display name ("<repo>/<branch>") registered against the
-// worktree directory instead of deriving the project name from its basename.
-func (s *service) resolveSessionProject(
-	ctx context.Context,
-	data controllerapi.SessionCreateData,
-	worktreeName string,
-) (int64, error) {
-	if worktreeName != "" {
-		projectID, err := s.store.GetOrCreateNamedProject(ctx, data.WorkDir, worktreeName)
-		if err != nil {
-			return 0, fmt.Errorf("get worktree project: resolve named project: %w", err)
-		}
-
-		return projectID, nil
-	}
-
-	projectID, err := s.store.GetOrCreateProject(ctx, data.WorkDir)
+// resolveSessionProject resolves the registered project a session runs in or forks a worktree from.
+func (s *service) resolveSessionProject(ctx context.Context, workDir string) (int64, error) {
+	projectID, err := s.store.GetOrCreateProject(ctx, workDir)
 	if err != nil {
 		return 0, fmt.Errorf("get project: resolve project: %w", err)
 	}

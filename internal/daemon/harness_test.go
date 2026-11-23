@@ -224,6 +224,16 @@ models:
 //nolint:gosec // fake credentials
 const toolSecrets = "WORK_API_KEY=sk-ant-work-0000000000\n"
 
+// Send keeps the pre-worktree signature daemon tests create roots with.
+func (s *Service) Send(
+	ctx context.Context,
+	projectID int64,
+	prompt, model string,
+	attrs map[string]any,
+) (int64, error) {
+	return s.CreateSession(ctx, projectID, "", prompt, model, attrs)
+}
+
 func newTestController(svc *Service) controllerapi.ManagerControllerFactory {
 	cfg := &config.Config{}
 	var outputs *sessionstore.Store
@@ -231,7 +241,7 @@ func newTestController(svc *Service) controllerapi.ManagerControllerFactory {
 		outputs, _ = svc.store.(*sessionstore.Store)
 	}
 	return managercontrol.New(
-		svc, outputs, managerdiscovery.New(outputs, cfg, nil), svc.bus, cfg, nil,
+		svc, outputs, managerdiscovery.New(outputs, cfg, nil), svc.bus, nil,
 	)
 }
 

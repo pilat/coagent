@@ -41,14 +41,16 @@ func TestManagerInputAttributesRemainSessionOnly(t *testing.T) {
 	}
 }
 
-func (b *inputBackend) Send(
+func (b *inputBackend) CreateSession(
 	ctx context.Context,
 	project int64,
+	_ string,
 	prompt, model string,
 	attrs map[string]any,
 ) (int64, error) {
 	root, _, err := b.store.CreateManagerRoot(ctx, sessionstore.ManagerRootCreate{
-		ProjectID: project, Prompt: prompt, Model: "model", Attributes: attrs, Name: "project", WorkDir: "/project",
+		ProjectID: project, Model: "model", Attributes: attrs, Name: "project", WorkDir: "/project",
+		Input: sessionstore.Input{Source: sessionstore.InputSourceUser, Content: prompt},
 	})
 	if err != nil {
 		return 0, err

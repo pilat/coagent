@@ -940,8 +940,16 @@ The daemon, session and session-store boundary divides global coordination,
 per-task execution and SQLite transaction ownership. The daemon supplies owner
 tools to session assembly and routes session events. `managercontrol` implements
 the manager controller over the daemon's command backend and reads persistence
-and subscriptions directly from their owners. The daemon owns capacity
-decisions and `sessionbus` owns fan-out.
+and subscriptions directly from their owners. The daemon creates every new
+manager-owned root through one path, whoever asks: the human's `/new`, `/spawn`
+and `/gwt` through the controller, or an orchestrator's `spawn_session`. A
+`/clear` replacement root is written by its own replacement transaction instead.
+An optional fresh worktree comes first (guarded no-execution only for a spawn),
+then one session-store transaction writes the root, its `session_opened` row,
+its first input and the spawner's one-shot watch. A human's root starts at once
+and is killed, its worktree removed, if it cannot start; a spawned root is woken
+by its first input. The daemon owns capacity decisions and `sessionbus` owns
+fan-out.
 The daemon owns concrete runner state, one synchronized runner set with capacity
 counters and a FIFO waiting queue, and one joined lifetime for daemon workers.
 Tree operations read only the root and its descendants into one snapshot. The

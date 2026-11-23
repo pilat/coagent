@@ -8,10 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/pilat/coagent/internal/config"
 	"github.com/pilat/coagent/internal/controllerapi"
-	"github.com/pilat/coagent/internal/git"
-	"github.com/pilat/coagent/internal/projectpath"
 	"github.com/pilat/coagent/internal/sessionevent"
 	"github.com/pilat/coagent/internal/sessionstore"
 )
@@ -20,29 +17,32 @@ type stubWorktreeBackend struct {
 	Backend
 	Store
 	sendErr       error
-	namedProject  string
+	workDir       string
 	sentProjectID int64
+	sentWorktree  string
+	sentPrompt    string
 	sentAttrs     map[string]any
 	session       *sessionstore.SessionRecord
 }
 
-func (f *stubWorktreeBackend) Send(
-	_ context.Context, projectID int64, _, _ string, attrs map[string]any,
+func (f *stubWorktreeBackend) CreateSession(
+	_ context.Context, projectID int64, worktree, prompt, _ string, attrs map[string]any,
 ) (int64, error) {
+	f.sentProjectID = projectID
+	f.sentWorktree = worktree
+	f.sentPrompt = prompt
+	f.sentAttrs = attrs
 	if f.sendErr != nil {
 		return 0, f.sendErr
 	}
 
-	f.sentProjectID = projectID
-	f.sentAttrs = attrs
-
 	return 77, nil
 }
 
-func (f *stubWorktreeBackend) GetOrCreateNamedProject(_ context.Context, _, name string) (int64, error) {
-	f.namedProject = name
+func (f *stubWorktreeBackend) GetOrCreateProject(_ context.Context, workDir string) (int64, error) {
+	f.workDir = workDir
 
-	return 5, nil
+	return 9, nil
 }
 
 func (f *stubWorktreeBackend) SendToSessionResolved(context.Context, int64, string) (int64, error) {
@@ -62,69 +62,37 @@ func (f *stubWorktreeBackend) NotifySession(int64, sessionevent.Notification) {}
 func worktreeSessionService(t *testing.T, backend *stubWorktreeBackend) *service {
 	t.Helper()
 
-	return &service{backend: backend, store: backend, cfg: &config.Config{
-		UnifiedConfig: &config.UnifiedConfig{WorktreesRoot: t.TempDir()},
-	}}
+	return &service{backend: backend, store: backend}
 }
 
-func TestCreateSession_WorktreeRollsBackWhenLaunchFails(t *testing.T) {
-	clone := setupClone(t)
-	backend := &stubWorktreeBackend{sendErr: errors.New("boom")}
-	s := worktreeSessionService(t, backend)
-
-	sessionID, err := s.createSession(context.Background(), "telegram", controllerapi.SessionCreateData{
-		WorkDir:      clone,
-		WorktreeName: "api",
-	})
-	require.Error(t, err)
-	assert.Zero(t, sessionID)
-
-	client := git.NewWorktreeClient()
-	ctx := context.Background()
-	repoRoot, err := client.RepoRoot(ctx, clone)
-	require.NoError(t, err)
-
-	assert.NoDirExists(t, projectpath.WorktreePath(
-		projectpath.ResolveWorktreesRoot(s.unifiedConfig()), repoRoot, "api",
-	), "the worktree must roll back when launch fails after project registration")
-
-	exists, err := client.BranchExists(ctx, clone, "api")
-	require.NoError(t, err)
-	assert.False(t, exists, "the branch must roll back too")
-}
-
-func TestCreateSession_WorktreeHappyPath(t *testing.T) {
-	clone := setupClone(t)
+func TestCreateSession_HandsTheWorktreeToTheBackend(t *testing.T) {
 	backend := &stubWorktreeBackend{}
 	s := worktreeSessionService(t, backend)
-
-	sessionID, err := s.createSession(context.Background(), "telegram", controllerapi.SessionCreateData{
-		WorkDir:      clone,
-		WorktreeName: "api",
-	})
+	data := controllerapi.SessionCreateData{
+		WorkDir: "/repo/work", WorktreeName: "api", Attributes: map[string]any{"channel": "telegram"},
+	}
+	id, err := s.createSession(t.Context(), "telegram", data)
 	require.NoError(t, err)
-	assert.Equal(t, int64(77), sessionID)
-
-	assert.Equal(t, int64(5), backend.sentProjectID, "Send must target the named worktree project")
-	assert.Equal(t, projectpath.RepoNamespace(clone)+"/api", backend.namedProject,
-		"the worktree project must register under its <repo>/<branch> display name")
-
-	client := git.NewWorktreeClient()
-	repoRoot, err := client.RepoRoot(context.Background(), clone)
-	require.NoError(t, err)
-	assert.DirExists(t, projectpath.WorktreePath(
-		projectpath.ResolveWorktreesRoot(s.unifiedConfig()), repoRoot, "api",
-	))
-	assert.Equal(t, repoRoot, backend.sentAttrs["repo_root"])
-	assert.Equal(t, controllerapi.WorktreeOriginController,
-		backend.sentAttrs[controllerapi.SessionAttributeWorktreeOrigin])
+	assert.Equal(t, int64(77), id)
+	assert.Equal(t, int64(9), backend.sentProjectID)
+	assert.Equal(t, "/repo/work", backend.workDir)
+	assert.Equal(t, "api", backend.sentWorktree)
+	assert.Empty(t, backend.sentPrompt)
+	assert.Equal(t, "telegram", backend.sentAttrs[controllerapi.SessionAttributeManagerID])
+	assert.Equal(t, "telegram", backend.sentAttrs["channel"])
+	assert.NotContains(t, backend.sentAttrs, "repo_root")
+	assert.NotContains(t, backend.sentAttrs, controllerapi.SessionAttributeWorktreeOrigin)
+	assert.NotContains(t, data.Attributes, controllerapi.SessionAttributeManagerID)
+	backend.sendErr = errors.New(`worktree: branch "api" already exists`)
+	id, err = s.createSession(t.Context(), "telegram", data)
+	require.EqualError(t, err, `worktree: branch "api" already exists`)
+	assert.Zero(t, id)
 }
 
 func TestCreateSession_RejectsCallerSuppliedRepoRoot(t *testing.T) {
 	backend := &stubWorktreeBackend{}
 	s := worktreeSessionService(t, backend)
 	for _, data := range []controllerapi.SessionCreateData{
-		{WorkDir: t.TempDir(), RepoRoot: "/elsewhere"},
 		{WorkDir: t.TempDir(), Attributes: map[string]any{"repo_root": "/elsewhere"}},
 		{WorkDir: t.TempDir(), Attributes: map[string]any{
 			controllerapi.SessionAttributeWorktreeOrigin: controllerapi.WorktreeOriginController,
