@@ -21,7 +21,7 @@ const (
 	sendDescription  = "Write a message to another of the owner's root sessions, including a stopped one, which this wakes. The message is plain text with no human authority: commands and skills are not executed. When that session's turn is over you get one signal line; then read it with read_session. Do not poll. Refused for killed sessions, subagents, this session itself, and sessions parked at a budget checkpoint."
 	sendParameters   = `{"type":"object","properties":{"session_id":{"type":"integer","description":"Root session id from list_sessions"},"message":{"type":"string","description":"Plain text for that session's agent; it sees which session sent it"}},"required":["session_id","message"]}`
 	spawnDescription = "Start a new root session in one of the owner's existing projects, optionally in a fresh git worktree. The prompt is delivered as a message from this session, not from the human. The new session is independent: its own budget, not your subagent, and the human sees it in /sessions. You get one signal when its first turn is over; then read it with read_session. Do not poll."
-	spawnParameters  = `{"type":"object","properties":{"project":{"type":"string","description":"Existing project name, or its exact work directory"},"prompt":{"type":"string","description":"The first message for the new session; also names it"},"worktree":{"type":"string","description":"Create a fresh git worktree with this branch name off the remote default branch and run there"},"model":{"type":"string","description":"Optional tagged model ID from the models the task tool lists for subagents (not inherit); omit to start on the daemon's default model"}},"required":["project","prompt"]}`
+	spawnParameters  = `{"type":"object","properties":{"project":{"type":"string","description":"Existing project name, or its exact work directory"},"prompt":{"type":"string","description":"The first message for the new session; also names it"},"worktree":{"type":"string","description":"Create a fresh git worktree with this branch name off the remote default branch and run there"},"model":{"type":"string","description":"Optional tagged model ID from the models the task tool lists for subagents (not inherit); omit to start on the daemon's default model"},"effort":{"type":"string","description":"Optional reasoning effort for the new session. Set only when the user explicitly names a level; omit to take the model's default. If the model rejects it, the error lists accepted levels."}},"required":["project","prompt"]}`
 
 	sendAcknowledgementPrefix      = "Message queued for session #%d. "
 	subscribeAcknowledgementPrefix = "Subscribed to session #%d. "
@@ -63,12 +63,14 @@ type Entry struct {
 	Subscribed, Armed, Signalled bool
 }
 
-// SpawnRequest is one spawn_session call; an empty Worktree or Model means none or the default model.
+// SpawnRequest is one spawn_session call. An empty Worktree, Model or Effort means no worktree,
+// the default model, or that model's default level.
 type SpawnRequest struct {
 	Project  string
 	Worktree string
 	Prompt   string
 	Model    string
+	Effort   string
 }
 
 type arguments struct {
@@ -79,6 +81,7 @@ type arguments struct {
 	Worktree  string `json:"worktree"`
 	Prompt    string `json:"prompt"`
 	Model     string `json:"model"`
+	Effort    string `json:"effort"`
 	Latest    bool   `json:"latest"`
 }
 
@@ -223,6 +226,7 @@ func (t *sessionTool) spawn(ctx context.Context, args arguments) (*tool.Result, 
 		Worktree: args.Worktree,
 		Prompt:   args.Prompt,
 		Model:    args.Model,
+		Effort:   args.Effort,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("%w", err)

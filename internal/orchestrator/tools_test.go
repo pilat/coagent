@@ -19,6 +19,7 @@ type hostCall struct {
 	filter, message           string
 	project, worktree, prompt string
 	model                     string
+	effort                    string
 	latest                    bool
 }
 
@@ -81,6 +82,7 @@ func (h *fakeHost) SpawnSession(
 		worktree: request.Worktree,
 		prompt:   request.Prompt,
 		model:    request.Model,
+		effort:   request.Effort,
 	})
 	return 26, "api — login", h.err
 }
@@ -105,6 +107,7 @@ func TestToolsValidateParameters(t *testing.T) {
 		{IDSpawnSession, `{"project":1,"prompt":"hi"}`, "invalid parameters"},
 		{IDSpawnSession, `{"project":"api","worktree":1,"prompt":"hi"}`, "invalid parameters"},
 		{IDSpawnSession, `{"project":"api","prompt":"hi","model":1}`, "invalid parameters"},
+		{IDSpawnSession, `{"project":"api","prompt":"hi","effort":1}`, "invalid parameters"},
 	} {
 		t.Run(tc.id+tc.args, func(t *testing.T) {
 			host := &fakeHost{}
@@ -137,6 +140,11 @@ func TestToolsResultsAndHostArguments(t *testing.T) {
 			"Started session #26 in api — login. You get one signal when its first turn is over; then read it with read_session.",
 			hostCall{caller: 12, project: "api", prompt: "solve login", model: "fast"},
 		},
+		{
+			IDSpawnSession, `{"project":"api","prompt":"solve login","model":"fast","effort":"high"}`, "spawned #26",
+			"Started session #26 in api — login. You get one signal when its first turn is over; then read it with read_session.",
+			hostCall{caller: 12, project: "api", prompt: "solve login", model: "fast", effort: "high"},
+		},
 	} {
 		t.Run(tc.id+tc.args, func(t *testing.T) {
 			host := &fakeHost{}
@@ -164,6 +172,22 @@ func TestSpawnSessionOffersOptionalModel(t *testing.T) {
 	require.NoError(t, json.Unmarshal(findTool(t, &fakeHost{}, IDSpawnSession).Parameters(), &schema))
 	require.Contains(t, schema.Properties, "model")
 	assert.Equal(t, "string", schema.Properties["model"].Type)
+	assert.Equal(t, []string{"project", "prompt"}, schema.Required)
+}
+
+func TestSpawnSessionOffersOptionalEffort(t *testing.T) {
+	t.Parallel()
+	var schema struct {
+		Properties map[string]struct {
+			Type        string `json:"type"`
+			Description string `json:"description"`
+		} `json:"properties"`
+		Required []string `json:"required"`
+	}
+	require.NoError(t, json.Unmarshal(findTool(t, &fakeHost{}, IDSpawnSession).Parameters(), &schema))
+	require.Contains(t, schema.Properties, "effort")
+	assert.Equal(t, "string", schema.Properties["effort"].Type)
+	assert.Contains(t, schema.Properties["effort"].Description, "Set only when the user explicitly names a level")
 	assert.Equal(t, []string{"project", "prompt"}, schema.Required)
 }
 

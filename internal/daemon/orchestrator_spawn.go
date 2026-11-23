@@ -27,7 +27,7 @@ func (h orchestratorHost) SpawnSession(
 		return 0, "", err
 	}
 
-	request.Model, err = h.spawnModel(request.Model)
+	request.Model, request.Effort, err = h.modelChoice(request.Model, request.Effort)
 	if err != nil {
 		return 0, "", err
 	}
@@ -98,6 +98,21 @@ func (h orchestratorHost) SpawnSession(
 	return sessionID, selected.Name, nil
 }
 
+// modelChoice settles the new root's model and reasoning effort before anything is created.
+func (h orchestratorHost) modelChoice(requested, effort string) (string, string, error) {
+	model, err := h.spawnModel(requested)
+	if err != nil {
+		return "", "", err
+	}
+
+	level, err := h.s.models.effort(model, effort, "")
+	if err != nil {
+		return "", "", err
+	}
+
+	return model, level, nil
+}
+
 func (h orchestratorHost) spawnModel(requested string) (string, error) {
 	if requested == "" {
 		return h.s.models.defaultModel, nil
@@ -133,17 +148,12 @@ func (h orchestratorHost) createSpawnTx(
 	request orchestrator.SpawnRequest,
 	attrs, sender map[string]any,
 ) (int64, error) {
-	level, err := h.s.models.effort(request.Model, "", "")
-	if err != nil {
-		return 0, err
-	}
-
 	record, _, err := sessionstore.CreateManagerRootTx(ctx, tx, sessionstore.ManagerRootCreate{
 		ProjectID:      project.ID,
 		Name:           project.Name,
 		WorkDir:        project.WorkDir,
 		Model:          request.Model,
-		ReasoningLevel: level,
+		ReasoningLevel: request.Effort,
 		Attributes:     attrs,
 	})
 	if err != nil {

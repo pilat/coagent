@@ -211,7 +211,7 @@ func (s *Service) createChildSession(ctx context.Context, req subagent.SpawnRequ
 
 	reasoning, err := s.models.effort(model, req.ReasoningLevel, parentRec.ReasoningLevel)
 	if err != nil {
-		return 0, "", 0, err
+		return 0, "", 0, fmt.Errorf("spawn subagent on model %s: %w", model, err)
 	}
 
 	childID, err := s.links.Create(ctx, subagent.Create{
