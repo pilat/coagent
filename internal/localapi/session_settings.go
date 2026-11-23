@@ -42,10 +42,10 @@ func (sessionService) SetSessionTitle(
 	return &coagentv1.SetSessionTitleResponse{}, nil
 }
 
-func (sessionService) SetOrchestrator(
+func (sessionService) SetOrchestratorMode(
 	ctx context.Context,
-	req *coagentv1.SetOrchestratorRequest,
-) (*coagentv1.SetOrchestratorResponse, error) {
+	req *coagentv1.SetOrchestratorModeRequest,
+) (*coagentv1.SetOrchestratorModeResponse, error) {
 	author, err := clientFrom(ctx)
 	if err != nil {
 		return nil, err
@@ -56,5 +56,5 @@ func (sessionService) SetOrchestrator(
 		return nil, refusal(ctx, err)
 	}
 
-	return &coagentv1.SetOrchestratorResponse{Changed: changed}, nil
+	return &coagentv1.SetOrchestratorModeResponse{Changed: changed}, nil
 }

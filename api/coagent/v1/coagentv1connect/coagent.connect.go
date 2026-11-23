@@ -50,21 +50,21 @@ const (
 	// SessionServiceSetSessionTitleProcedure is the procedure name of the SessionService's
 	// SetSessionTitle RPC.
 	SessionServiceSetSessionTitleProcedure = "/coagent.v1.SessionService/SetSessionTitle"
-	// SessionServiceGetOrchestratorProcedure is the procedure name of the SessionService's
-	// GetOrchestrator RPC.
-	SessionServiceGetOrchestratorProcedure = "/coagent.v1.SessionService/GetOrchestrator"
-	// SessionServiceSetOrchestratorProcedure is the procedure name of the SessionService's
-	// SetOrchestrator RPC.
-	SessionServiceSetOrchestratorProcedure = "/coagent.v1.SessionService/SetOrchestrator"
+	// SessionServiceGetOrchestratorModeProcedure is the procedure name of the SessionService's
+	// GetOrchestratorMode RPC.
+	SessionServiceGetOrchestratorModeProcedure = "/coagent.v1.SessionService/GetOrchestratorMode"
+	// SessionServiceSetOrchestratorModeProcedure is the procedure name of the SessionService's
+	// SetOrchestratorMode RPC.
+	SessionServiceSetOrchestratorModeProcedure = "/coagent.v1.SessionService/SetOrchestratorMode"
 	// OutputServiceTailOutputProcedure is the procedure name of the OutputService's TailOutput RPC.
 	OutputServiceTailOutputProcedure = "/coagent.v1.OutputService/TailOutput"
 	// OutputServiceListOutputProcedure is the procedure name of the OutputService's ListOutput RPC.
 	OutputServiceListOutputProcedure = "/coagent.v1.OutputService/ListOutput"
 	// OutputServiceReadEntryProcedure is the procedure name of the OutputService's ReadEntry RPC.
 	OutputServiceReadEntryProcedure = "/coagent.v1.OutputService/ReadEntry"
-	// OutputServiceWatchSessionsProcedure is the procedure name of the OutputService's WatchSessions
-	// RPC.
-	OutputServiceWatchSessionsProcedure = "/coagent.v1.OutputService/WatchSessions"
+	// OutputServiceStreamSessionEventsProcedure is the procedure name of the OutputService's
+	// StreamSessionEvents RPC.
+	OutputServiceStreamSessionEventsProcedure = "/coagent.v1.OutputService/StreamSessionEvents"
 	// ChatServiceBindChatProcedure is the procedure name of the ChatService's BindChat RPC.
 	ChatServiceBindChatProcedure = "/coagent.v1.ChatService/BindChat"
 	// ChatServiceGetChatFocusProcedure is the procedure name of the ChatService's GetChatFocus RPC.
@@ -146,18 +146,18 @@ var (
 			Procedure:  SessionServiceSetSessionTitleProcedure,
 		}
 	})
-	sessionServiceGetOrchestratorSpec = sync.OnceValue(func() connect.Spec {
+	sessionServiceGetOrchestratorModeSpec = sync.OnceValue(func() connect.Spec {
 		return connect.Spec{
 			StreamType: connect.StreamTypeUnary,
-			Schema:     v1.File_coagent_v1_coagent_proto.Services().ByName("SessionService").Methods().ByName("GetOrchestrator"),
-			Procedure:  SessionServiceGetOrchestratorProcedure,
+			Schema:     v1.File_coagent_v1_coagent_proto.Services().ByName("SessionService").Methods().ByName("GetOrchestratorMode"),
+			Procedure:  SessionServiceGetOrchestratorModeProcedure,
 		}
 	})
-	sessionServiceSetOrchestratorSpec = sync.OnceValue(func() connect.Spec {
+	sessionServiceSetOrchestratorModeSpec = sync.OnceValue(func() connect.Spec {
 		return connect.Spec{
 			StreamType: connect.StreamTypeUnary,
-			Schema:     v1.File_coagent_v1_coagent_proto.Services().ByName("SessionService").Methods().ByName("SetOrchestrator"),
-			Procedure:  SessionServiceSetOrchestratorProcedure,
+			Schema:     v1.File_coagent_v1_coagent_proto.Services().ByName("SessionService").Methods().ByName("SetOrchestratorMode"),
+			Procedure:  SessionServiceSetOrchestratorModeProcedure,
 		}
 	})
 )
@@ -181,10 +181,10 @@ type SessionServiceClient interface {
 	SetSessionModel(context.Context, *v1.SetSessionModelRequest) (*v1.SetSessionModelResponse, error)
 	// SetSessionTitle renames a live owned root.
 	SetSessionTitle(context.Context, *v1.SetSessionTitleRequest) (*v1.SetSessionTitleResponse, error)
-	// GetOrchestrator reports whether a live owned root has orchestrator mode.
-	GetOrchestrator(context.Context, *v1.GetOrchestratorRequest) (*v1.GetOrchestratorResponse, error)
-	// SetOrchestrator turns orchestrator mode on or off for a live owned root.
-	SetOrchestrator(context.Context, *v1.SetOrchestratorRequest) (*v1.SetOrchestratorResponse, error)
+	// GetOrchestratorMode reports whether a live owned root has orchestrator mode.
+	GetOrchestratorMode(context.Context, *v1.GetOrchestratorModeRequest) (*v1.GetOrchestratorModeResponse, error)
+	// SetOrchestratorMode turns orchestrator mode on or off for a live owned root.
+	SetOrchestratorMode(context.Context, *v1.SetOrchestratorModeRequest) (*v1.SetOrchestratorModeResponse, error)
 }
 
 // NewSessionServiceClient constructs a client for the coagent.v1.SessionService service. Multiple
@@ -212,10 +212,10 @@ type SessionServiceHandler interface {
 	SetSessionModel(context.Context, *v1.SetSessionModelRequest) (*v1.SetSessionModelResponse, error)
 	// SetSessionTitle renames a live owned root.
 	SetSessionTitle(context.Context, *v1.SetSessionTitleRequest) (*v1.SetSessionTitleResponse, error)
-	// GetOrchestrator reports whether a live owned root has orchestrator mode.
-	GetOrchestrator(context.Context, *v1.GetOrchestratorRequest) (*v1.GetOrchestratorResponse, error)
-	// SetOrchestrator turns orchestrator mode on or off for a live owned root.
-	SetOrchestrator(context.Context, *v1.SetOrchestratorRequest) (*v1.SetOrchestratorResponse, error)
+	// GetOrchestratorMode reports whether a live owned root has orchestrator mode.
+	GetOrchestratorMode(context.Context, *v1.GetOrchestratorModeRequest) (*v1.GetOrchestratorModeResponse, error)
+	// SetOrchestratorMode turns orchestrator mode on or off for a live owned root.
+	SetOrchestratorMode(context.Context, *v1.SetOrchestratorModeRequest) (*v1.SetOrchestratorModeResponse, error)
 }
 
 // RegisterSessionServiceHandler registers svc as the coagent.v1.SessionService implementation on
@@ -230,8 +230,8 @@ func RegisterSessionServiceHandler(server *connect.Server, svc SessionServiceHan
 		connect.Method{Spec: sessionServiceGetSessionKilledSpec(), Handler: adapter.getSessionKilled},
 		connect.Method{Spec: sessionServiceSetSessionModelSpec(), Handler: adapter.setSessionModel},
 		connect.Method{Spec: sessionServiceSetSessionTitleSpec(), Handler: adapter.setSessionTitle},
-		connect.Method{Spec: sessionServiceGetOrchestratorSpec(), Handler: adapter.getOrchestrator},
-		connect.Method{Spec: sessionServiceSetOrchestratorSpec(), Handler: adapter.setOrchestrator},
+		connect.Method{Spec: sessionServiceGetOrchestratorModeSpec(), Handler: adapter.getOrchestratorMode},
+		connect.Method{Spec: sessionServiceSetOrchestratorModeSpec(), Handler: adapter.setOrchestratorMode},
 	)
 }
 
@@ -266,12 +266,12 @@ func (UnimplementedSessionServiceHandler) SetSessionTitle(context.Context, *v1.S
 	return nil, connect.NewError(connect.CodeUnimplemented, "coagent.v1.SessionService.SetSessionTitle is not implemented")
 }
 
-func (UnimplementedSessionServiceHandler) GetOrchestrator(context.Context, *v1.GetOrchestratorRequest) (*v1.GetOrchestratorResponse, error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, "coagent.v1.SessionService.GetOrchestrator is not implemented")
+func (UnimplementedSessionServiceHandler) GetOrchestratorMode(context.Context, *v1.GetOrchestratorModeRequest) (*v1.GetOrchestratorModeResponse, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "coagent.v1.SessionService.GetOrchestratorMode is not implemented")
 }
 
-func (UnimplementedSessionServiceHandler) SetOrchestrator(context.Context, *v1.SetOrchestratorRequest) (*v1.SetOrchestratorResponse, error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, "coagent.v1.SessionService.SetOrchestrator is not implemented")
+func (UnimplementedSessionServiceHandler) SetOrchestratorMode(context.Context, *v1.SetOrchestratorModeRequest) (*v1.SetOrchestratorModeResponse, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "coagent.v1.SessionService.SetOrchestratorMode is not implemented")
 }
 
 type sessionServiceClient struct {
@@ -334,17 +334,17 @@ func (c *sessionServiceClient) SetSessionTitle(ctx context.Context, req *v1.SetS
 	return &res, nil
 }
 
-func (c *sessionServiceClient) GetOrchestrator(ctx context.Context, req *v1.GetOrchestratorRequest) (*v1.GetOrchestratorResponse, error) {
-	var res v1.GetOrchestratorResponse
-	if err := c.client.CallUnary(ctx, sessionServiceGetOrchestratorSpec(), req, &res); err != nil {
+func (c *sessionServiceClient) GetOrchestratorMode(ctx context.Context, req *v1.GetOrchestratorModeRequest) (*v1.GetOrchestratorModeResponse, error) {
+	var res v1.GetOrchestratorModeResponse
+	if err := c.client.CallUnary(ctx, sessionServiceGetOrchestratorModeSpec(), req, &res); err != nil {
 		return nil, err
 	}
 	return &res, nil
 }
 
-func (c *sessionServiceClient) SetOrchestrator(ctx context.Context, req *v1.SetOrchestratorRequest) (*v1.SetOrchestratorResponse, error) {
-	var res v1.SetOrchestratorResponse
-	if err := c.client.CallUnary(ctx, sessionServiceSetOrchestratorSpec(), req, &res); err != nil {
+func (c *sessionServiceClient) SetOrchestratorMode(ctx context.Context, req *v1.SetOrchestratorModeRequest) (*v1.SetOrchestratorModeResponse, error) {
+	var res v1.SetOrchestratorModeResponse
+	if err := c.client.CallUnary(ctx, sessionServiceSetOrchestratorModeSpec(), req, &res); err != nil {
 		return nil, err
 	}
 	return &res, nil
@@ -436,24 +436,24 @@ func (h sessionServiceHandler) setSessionTitle(ctx context.Context, _ connect.Sp
 	return stream.Send(res)
 }
 
-func (h sessionServiceHandler) getOrchestrator(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
-	var req v1.GetOrchestratorRequest
+func (h sessionServiceHandler) getOrchestratorMode(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.GetOrchestratorModeRequest
 	if err := stream.Receive(&req); err != nil {
 		return err
 	}
-	res, err := h.svc.GetOrchestrator(ctx, &req)
+	res, err := h.svc.GetOrchestratorMode(ctx, &req)
 	if err != nil {
 		return err
 	}
 	return stream.Send(res)
 }
 
-func (h sessionServiceHandler) setOrchestrator(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
-	var req v1.SetOrchestratorRequest
+func (h sessionServiceHandler) setOrchestratorMode(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.SetOrchestratorModeRequest
 	if err := stream.Receive(&req); err != nil {
 		return err
 	}
-	res, err := h.svc.SetOrchestrator(ctx, &req)
+	res, err := h.svc.SetOrchestratorMode(ctx, &req)
 	if err != nil {
 		return err
 	}
@@ -482,11 +482,11 @@ var (
 			Procedure:  OutputServiceReadEntryProcedure,
 		}
 	})
-	outputServiceWatchSessionsSpec = sync.OnceValue(func() connect.Spec {
+	outputServiceStreamSessionEventsSpec = sync.OnceValue(func() connect.Spec {
 		return connect.Spec{
 			StreamType: connect.StreamTypeServer,
-			Schema:     v1.File_coagent_v1_coagent_proto.Services().ByName("OutputService").Methods().ByName("WatchSessions"),
-			Procedure:  OutputServiceWatchSessionsProcedure,
+			Schema:     v1.File_coagent_v1_coagent_proto.Services().ByName("OutputService").Methods().ByName("StreamSessionEvents"),
+			Procedure:  OutputServiceStreamSessionEventsProcedure,
 		}
 	})
 )
@@ -501,10 +501,10 @@ type OutputServiceClient interface {
 	ListOutput(context.Context, *v1.ListOutputRequest) (*v1.ListOutputResponse, error)
 	// ReadEntry returns a root's newest renderable rows and its newest output id from one read.
 	ReadEntry(context.Context, *v1.ReadEntryRequest) (*v1.ReadEntryResponse, error)
-	// WatchSessions streams wake hints for the caller's roots. The first event, with session_id 0, means the
+	// StreamSessionEvents streams wake hints for the caller's roots. The first event, with session_id 0, means the
 	// subscription is live: state read after it misses no later change. Events carry no content and may be
 	// dropped under load; re-read state on any event and periodically.
-	WatchSessions(context.Context, *v1.WatchSessionsRequest) (OutputServiceWatchSessionsClientStream, error)
+	StreamSessionEvents(context.Context, *v1.StreamSessionEventsRequest) (OutputServiceStreamSessionEventsClientStream, error)
 }
 
 // NewOutputServiceClient constructs a client for the coagent.v1.OutputService service. Multiple
@@ -533,15 +533,15 @@ func (s OutputServiceTailOutputClientStream) Close() error {
 	return s.stream.Close()
 }
 
-// OutputServiceWatchSessionsClientStream is the client stream for the OutputService's WatchSessions
-// RPC.
-type OutputServiceWatchSessionsClientStream struct {
+// OutputServiceStreamSessionEventsClientStream is the client stream for the OutputService's
+// StreamSessionEvents RPC.
+type OutputServiceStreamSessionEventsClientStream struct {
 	stream connect.ClientStream
 }
 
 // Receive returns the next response message from the server.
-func (s OutputServiceWatchSessionsClientStream) Receive() (*v1.WatchSessionsResponse, error) {
-	var res v1.WatchSessionsResponse
+func (s OutputServiceStreamSessionEventsClientStream) Receive() (*v1.StreamSessionEventsResponse, error) {
+	var res v1.StreamSessionEventsResponse
 	if err := s.stream.Receive(&res); err != nil {
 		return nil, err
 	}
@@ -550,7 +550,7 @@ func (s OutputServiceWatchSessionsClientStream) Receive() (*v1.WatchSessionsResp
 
 // Close releases the stream's resources. It is idempotent and is typically deferred to clean up a
 // stream abandoned before io.EOF.
-func (s OutputServiceWatchSessionsClientStream) Close() error {
+func (s OutputServiceStreamSessionEventsClientStream) Close() error {
 	return s.stream.Close()
 }
 
@@ -564,10 +564,10 @@ type OutputServiceHandler interface {
 	ListOutput(context.Context, *v1.ListOutputRequest) (*v1.ListOutputResponse, error)
 	// ReadEntry returns a root's newest renderable rows and its newest output id from one read.
 	ReadEntry(context.Context, *v1.ReadEntryRequest) (*v1.ReadEntryResponse, error)
-	// WatchSessions streams wake hints for the caller's roots. The first event, with session_id 0, means the
+	// StreamSessionEvents streams wake hints for the caller's roots. The first event, with session_id 0, means the
 	// subscription is live: state read after it misses no later change. Events carry no content and may be
 	// dropped under load; re-read state on any event and periodically.
-	WatchSessions(context.Context, *v1.WatchSessionsRequest, OutputServiceWatchSessionsServerStream) error
+	StreamSessionEvents(context.Context, *v1.StreamSessionEventsRequest, OutputServiceStreamSessionEventsServerStream) error
 }
 
 // RegisterOutputServiceHandler registers svc as the coagent.v1.OutputService implementation on
@@ -578,7 +578,7 @@ func RegisterOutputServiceHandler(server *connect.Server, svc OutputServiceHandl
 		connect.Method{Spec: outputServiceTailOutputSpec(), Handler: adapter.tailOutput},
 		connect.Method{Spec: outputServiceListOutputSpec(), Handler: adapter.listOutput},
 		connect.Method{Spec: outputServiceReadEntrySpec(), Handler: adapter.readEntry},
-		connect.Method{Spec: outputServiceWatchSessionsSpec(), Handler: adapter.watchSessions},
+		connect.Method{Spec: outputServiceStreamSessionEventsSpec(), Handler: adapter.streamSessionEvents},
 	)
 }
 
@@ -597,19 +597,19 @@ func (s OutputServiceTailOutputServerStream) Send(res *v1.TailOutputResponse) er
 	return s.stream.Send(res)
 }
 
-// OutputServiceWatchSessionsServerStream is the server stream for the OutputService's WatchSessions
-// RPC.
-type OutputServiceWatchSessionsServerStream struct {
+// OutputServiceStreamSessionEventsServerStream is the server stream for the OutputService's
+// StreamSessionEvents RPC.
+type OutputServiceStreamSessionEventsServerStream struct {
 	stream connect.ServerStream
 }
 
 // SendHeaders flushes the response headers without a message. The first Send does this implicitly.
-func (s OutputServiceWatchSessionsServerStream) SendHeaders() error {
+func (s OutputServiceStreamSessionEventsServerStream) SendHeaders() error {
 	return s.stream.SendHeaders()
 }
 
 // Send sends a response message to the client.
-func (s OutputServiceWatchSessionsServerStream) Send(res *v1.WatchSessionsResponse) error {
+func (s OutputServiceStreamSessionEventsServerStream) Send(res *v1.StreamSessionEventsResponse) error {
 	return s.stream.Send(res)
 }
 
@@ -628,8 +628,8 @@ func (UnimplementedOutputServiceHandler) ReadEntry(context.Context, *v1.ReadEntr
 	return nil, connect.NewError(connect.CodeUnimplemented, "coagent.v1.OutputService.ReadEntry is not implemented")
 }
 
-func (UnimplementedOutputServiceHandler) WatchSessions(context.Context, *v1.WatchSessionsRequest, OutputServiceWatchSessionsServerStream) error {
-	return connect.NewError(connect.CodeUnimplemented, "coagent.v1.OutputService.WatchSessions is not implemented")
+func (UnimplementedOutputServiceHandler) StreamSessionEvents(context.Context, *v1.StreamSessionEventsRequest, OutputServiceStreamSessionEventsServerStream) error {
+	return connect.NewError(connect.CodeUnimplemented, "coagent.v1.OutputService.StreamSessionEvents is not implemented")
 }
 
 type outputServiceClient struct {
@@ -660,12 +660,12 @@ func (c *outputServiceClient) ReadEntry(ctx context.Context, req *v1.ReadEntryRe
 	return &res, nil
 }
 
-func (c *outputServiceClient) WatchSessions(ctx context.Context, req *v1.WatchSessionsRequest) (OutputServiceWatchSessionsClientStream, error) {
-	stream, err := c.client.CallServerStream(ctx, outputServiceWatchSessionsSpec(), req)
+func (c *outputServiceClient) StreamSessionEvents(ctx context.Context, req *v1.StreamSessionEventsRequest) (OutputServiceStreamSessionEventsClientStream, error) {
+	stream, err := c.client.CallServerStream(ctx, outputServiceStreamSessionEventsSpec(), req)
 	if err != nil {
-		return OutputServiceWatchSessionsClientStream{}, err
+		return OutputServiceStreamSessionEventsClientStream{}, err
 	}
-	return OutputServiceWatchSessionsClientStream{stream: stream}, nil
+	return OutputServiceStreamSessionEventsClientStream{stream: stream}, nil
 }
 
 type outputServiceHandler struct{ svc OutputServiceHandler }
@@ -702,12 +702,12 @@ func (h outputServiceHandler) readEntry(ctx context.Context, _ connect.Spec, str
 	return stream.Send(res)
 }
 
-func (h outputServiceHandler) watchSessions(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
-	var req v1.WatchSessionsRequest
+func (h outputServiceHandler) streamSessionEvents(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.StreamSessionEventsRequest
 	if err := stream.Receive(&req); err != nil {
 		return err
 	}
-	return h.svc.WatchSessions(ctx, &req, OutputServiceWatchSessionsServerStream{stream: stream})
+	return h.svc.StreamSessionEvents(ctx, &req, OutputServiceStreamSessionEventsServerStream{stream: stream})
 }
 
 var (

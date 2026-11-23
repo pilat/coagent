@@ -28,7 +28,7 @@ func TestServer_ServesTheNewServicesBehindTheToken(t *testing.T) {
 	require.Error(t, err)
 	assert.Equal(t, connect.CodeUnauthenticated, connect.CodeOf(err))
 	stream, err := coagentv1connect.NewOutputServiceClient(unauthenticated).
-		WatchSessions(ctx, &coagentv1.WatchSessionsRequest{})
+		StreamSessionEvents(ctx, &coagentv1.StreamSessionEventsRequest{})
 	if err == nil {
 		_, err = stream.Receive()
 		_ = stream.Close()
@@ -41,7 +41,7 @@ func TestServer_ServesTheNewServicesBehindTheToken(t *testing.T) {
 	require.NoError(t, err)
 	assert.Zero(t, focus.GetSessionId())
 	stream, err = coagentv1connect.NewOutputServiceClient(authenticated).
-		WatchSessions(ctx, &coagentv1.WatchSessionsRequest{})
+		StreamSessionEvents(ctx, &coagentv1.StreamSessionEventsRequest{})
 	require.NoError(t, err)
 	defer func() { _ = stream.Close() }()
 	sync, err := stream.Receive()

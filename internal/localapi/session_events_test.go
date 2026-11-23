@@ -30,14 +30,14 @@ func (s *closedSubscriptionStub) Subscribe() <-chan controllerapi.SessionNotific
 
 func (s *closedSubscriptionStub) Unsubscribe(<-chan controllerapi.SessionNotification) {}
 
-func TestWatchSessions_FirstEventMarksTheSubscriptionLive(t *testing.T) {
+func TestStreamSessionEvents_FirstEventMarksTheSubscriptionLive(t *testing.T) {
 	t.Parallel()
 	f := newAPIFixture(t)
 	id := inProcessRoot(t, f, "alpha")
 	ctx, cancel := context.WithTimeout(t.Context(), 4*time.Second)
 	defer cancel()
 	outputs := coagentv1connect.NewOutputServiceClient(inProcessClient(t, f, "alpha"))
-	stream, err := outputs.WatchSessions(ctx, &coagentv1.WatchSessionsRequest{})
+	stream, err := outputs.StreamSessionEvents(ctx, &coagentv1.StreamSessionEventsRequest{})
 	require.NoError(t, err)
 	defer func() { _ = stream.Close() }()
 	sync, err := stream.Receive()
@@ -51,7 +51,7 @@ func TestWatchSessions_FirstEventMarksTheSubscriptionLive(t *testing.T) {
 	assert.Equal(t, coagentv1.SessionEventType_SESSION_EVENT_TYPE_HEARTBEAT, next.GetType())
 }
 
-func TestWatchSessions_CarriesOnlyOwnedHeartbeatsAndActivity(t *testing.T) {
+func TestStreamSessionEvents_CarriesOnlyOwnedHeartbeatsAndActivity(t *testing.T) {
 	t.Parallel()
 	f := newAPIFixture(t)
 	owned := inProcessRoot(t, f, "alpha")
@@ -59,7 +59,7 @@ func TestWatchSessions_CarriesOnlyOwnedHeartbeatsAndActivity(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 4*time.Second)
 	defer cancel()
 	outputs := coagentv1connect.NewOutputServiceClient(inProcessClient(t, f, "alpha"))
-	stream, err := outputs.WatchSessions(ctx, &coagentv1.WatchSessionsRequest{})
+	stream, err := outputs.StreamSessionEvents(ctx, &coagentv1.StreamSessionEventsRequest{})
 	require.NoError(t, err)
 	defer func() { _ = stream.Close() }()
 	_, err = stream.Receive()
@@ -78,14 +78,14 @@ func TestWatchSessions_CarriesOnlyOwnedHeartbeatsAndActivity(t *testing.T) {
 	}
 }
 
-func TestWatchSessions_EndsWhenTheSubscriptionCloses(t *testing.T) {
+func TestStreamSessionEvents_EndsWhenTheSubscriptionCloses(t *testing.T) {
 	t.Parallel()
 	transport, err := NewInProcess(t.Context(), apiStubFactory{control: &closedSubscriptionStub{}}).Transport("alpha")
 	require.NoError(t, err)
 	ctx, cancel := context.WithTimeout(t.Context(), 4*time.Second)
 	defer cancel()
 	outputs := coagentv1connect.NewOutputServiceClient(connect.NewClient(transport))
-	stream, err := outputs.WatchSessions(ctx, &coagentv1.WatchSessionsRequest{})
+	stream, err := outputs.StreamSessionEvents(ctx, &coagentv1.StreamSessionEventsRequest{})
 	require.NoError(t, err)
 	defer func() { _ = stream.Close() }()
 	sync, err := stream.Receive()

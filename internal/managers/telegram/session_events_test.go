@@ -36,9 +36,9 @@ func TestNotificationsLoop_ResubscribesWhenTheStreamEnds(t *testing.T) {
 		manager.delivery = loop
 		ctx, cancel := context.WithCancel(t.Context())
 		defer cancel()
-		watch, err := manager.api.outputs.WatchSessions(ctx, &coagentv1.WatchSessionsRequest{})
+		events, err := manager.api.outputs.StreamSessionEvents(ctx, &coagentv1.StreamSessionEventsRequest{})
 		require.NoError(t, err)
-		go manager.notificationsLoop(ctx, watch)
+		go manager.notificationsLoop(ctx, events)
 		time.Sleep(4 * time.Second)
 		synctest.Wait()
 		assert.GreaterOrEqual(t, wrapper.subscriptions.Load(), int64(2))

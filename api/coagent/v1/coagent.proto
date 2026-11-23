@@ -25,10 +25,10 @@ service SessionService {
   rpc SetSessionModel(SetSessionModelRequest) returns (SetSessionModelResponse);
   // SetSessionTitle renames a live owned root.
   rpc SetSessionTitle(SetSessionTitleRequest) returns (SetSessionTitleResponse);
-  // GetOrchestrator reports whether a live owned root has orchestrator mode.
-  rpc GetOrchestrator(GetOrchestratorRequest) returns (GetOrchestratorResponse);
-  // SetOrchestrator turns orchestrator mode on or off for a live owned root.
-  rpc SetOrchestrator(SetOrchestratorRequest) returns (SetOrchestratorResponse);
+  // GetOrchestratorMode reports whether a live owned root has orchestrator mode.
+  rpc GetOrchestratorMode(GetOrchestratorModeRequest) returns (GetOrchestratorModeResponse);
+  // SetOrchestratorMode turns orchestrator mode on or off for a live owned root.
+  rpc SetOrchestratorMode(SetOrchestratorModeRequest) returns (SetOrchestratorModeResponse);
 }
 
 // OutputService reads the output log.
@@ -41,10 +41,10 @@ service OutputService {
   rpc ListOutput(ListOutputRequest) returns (ListOutputResponse);
   // ReadEntry returns a root's newest renderable rows and its newest output id from one read.
   rpc ReadEntry(ReadEntryRequest) returns (ReadEntryResponse);
-  // WatchSessions streams wake hints for the caller's roots. The first event, with session_id 0, means the
+  // StreamSessionEvents streams wake hints for the caller's roots. The first event, with session_id 0, means the
   // subscription is live: state read after it misses no later change. Events carry no content and may be
   // dropped under load; re-read state on any event and periodically.
-  rpc WatchSessions(WatchSessionsRequest) returns (stream WatchSessionsResponse);
+  rpc StreamSessionEvents(StreamSessionEventsRequest) returns (stream StreamSessionEventsResponse);
 }
 
 message CreateSessionRequest {
@@ -203,20 +203,20 @@ message SetSessionTitleRequest {
 
 message SetSessionTitleResponse {}
 
-message GetOrchestratorRequest {
+message GetOrchestratorModeRequest {
   int64 session_id = 1;
 }
 
-message GetOrchestratorResponse {
+message GetOrchestratorModeResponse {
   bool on = 1;
 }
 
-message SetOrchestratorRequest {
+message SetOrchestratorModeRequest {
   int64 session_id = 1;
   bool on = 2;
 }
 
-message SetOrchestratorResponse {
+message SetOrchestratorModeResponse {
   // False when the mode already had the requested value.
   bool changed = 1;
 }
@@ -245,9 +245,9 @@ message ReadEntryResponse {
   int64 newest_id = 2;
 }
 
-message WatchSessionsRequest {}
+message StreamSessionEventsRequest {}
 
-message WatchSessionsResponse {
+message StreamSessionEventsResponse {
   // 0 on the first event of the stream.
   int64 session_id = 1;
   SessionEventType type = 2;

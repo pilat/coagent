@@ -77,20 +77,23 @@ func TestSessionService_OrchestratorReadAndWrite(t *testing.T) {
 	f := newAPIFixture(t)
 	id := inProcessRoot(t, f, "alpha")
 	client := coagentv1connect.NewSessionServiceClient(inProcessClient(t, f, "alpha"))
-	mode, err := client.GetOrchestrator(t.Context(), &coagentv1.GetOrchestratorRequest{SessionId: id})
+	mode, err := client.GetOrchestratorMode(t.Context(), &coagentv1.GetOrchestratorModeRequest{SessionId: id})
 	require.NoError(t, err)
 	assert.False(t, mode.GetOn())
 	for _, changed := range []bool{true, false} {
-		response, err := client.SetOrchestrator(t.Context(), &coagentv1.SetOrchestratorRequest{SessionId: id, On: true})
+		response, err := client.SetOrchestratorMode(
+			t.Context(),
+			&coagentv1.SetOrchestratorModeRequest{SessionId: id, On: true},
+		)
 		require.NoError(t, err)
 		assert.Equal(t, changed, response.GetChanged())
 	}
-	mode, err = client.GetOrchestrator(t.Context(), &coagentv1.GetOrchestratorRequest{SessionId: id})
+	mode, err = client.GetOrchestratorMode(t.Context(), &coagentv1.GetOrchestratorModeRequest{SessionId: id})
 	require.NoError(t, err)
 	assert.True(t, mode.GetOn())
 	_, err = f.store.MarkSessionKilledWithOutput(t.Context(), id, 0)
 	require.NoError(t, err)
-	_, err = client.GetOrchestrator(t.Context(), &coagentv1.GetOrchestratorRequest{SessionId: id})
+	_, err = client.GetOrchestratorMode(t.Context(), &coagentv1.GetOrchestratorModeRequest{SessionId: id})
 	require.Error(t, err)
 	refused, ok := errors.AsType[*connect.Error](err)
 	require.True(t, ok)

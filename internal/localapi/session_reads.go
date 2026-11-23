@@ -68,10 +68,10 @@ func (sessionService) GetSessionKilled(
 	return &coagentv1.GetSessionKilledResponse{Killed: killed}, nil
 }
 
-func (sessionService) GetOrchestrator(
+func (sessionService) GetOrchestratorMode(
 	ctx context.Context,
-	req *coagentv1.GetOrchestratorRequest,
-) (*coagentv1.GetOrchestratorResponse, error) {
+	req *coagentv1.GetOrchestratorModeRequest,
+) (*coagentv1.GetOrchestratorModeResponse, error) {
 	author, err := clientFrom(ctx)
 	if err != nil {
 		return nil, err
@@ -82,7 +82,7 @@ func (sessionService) GetOrchestrator(
 		return nil, refusal(ctx, err)
 	}
 
-	return &coagentv1.GetOrchestratorResponse{On: on}, nil
+	return &coagentv1.GetOrchestratorModeResponse{On: on}, nil
 }
 
 func sessionSummary(session controllerapi.ChatSessionInfo) *coagentv1.SessionSummary {

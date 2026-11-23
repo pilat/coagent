@@ -172,13 +172,13 @@ func (m *Manager) Start(ctx context.Context) error {
 		return fmt.Errorf("bind chat: %w", err)
 	}
 
-	watch, err := m.api.outputs.WatchSessions(runCtx, &coagentv1.WatchSessionsRequest{})
+	events, err := m.api.outputs.StreamSessionEvents(runCtx, &coagentv1.StreamSessionEventsRequest{})
 	if err != nil {
-		return fmt.Errorf("watch sessions: %w", err)
+		return fmt.Errorf("stream session events: %w", err)
 	}
 
-	if _, err := watch.Receive(); err != nil {
-		return fmt.Errorf("watch sessions: %w", err)
+	if _, err := events.Receive(); err != nil {
+		return fmt.Errorf("stream session events: %w", err)
 	}
 
 	if err := m.tg(runCtx, "setMyCommands", map[string]any{"commands": publishedCommands}, nil); err != nil {
@@ -202,7 +202,7 @@ func (m *Manager) Start(ctx context.Context) error {
 
 		var wg sync.WaitGroup
 
-		wg.Go(func() { m.notificationsLoop(runCtx, watch) })
+		wg.Go(func() { m.notificationsLoop(runCtx, events) })
 		wg.Go(func() { m.pollLoop(runCtx) })
 		wg.Wait()
 	}()

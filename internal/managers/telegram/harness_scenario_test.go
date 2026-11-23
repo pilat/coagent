@@ -84,10 +84,10 @@ func TestHarnessScenario_ForeignConversationIsNotRenderedInTelegram(t *testing.T
 	var calls []telegramHarnessCall
 	manager := newTelegramHarnessManager(t, &fakeController{}, &calls)
 
-	manager.handleNotification(t.Context(), &coagentv1.WatchSessionsResponse{
+	manager.handleNotification(t.Context(), &coagentv1.StreamSessionEventsResponse{
 		SessionId: harnessSessionID, Type: coagentv1.SessionEventType_SESSION_EVENT_TYPE_ACTIVITY,
 	})
-	manager.handleNotification(t.Context(), &coagentv1.WatchSessionsResponse{
+	manager.handleNotification(t.Context(), &coagentv1.StreamSessionEventsResponse{
 		SessionId: harnessSessionID, Type: coagentv1.SessionEventType_SESSION_EVENT_TYPE_ACTIVITY,
 	})
 

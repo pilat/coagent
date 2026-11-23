@@ -15,8 +15,8 @@ func (m *Manager) handleOrchestrate(ctx context.Context, focus int64, arg string
 
 	switch arg {
 	case "":
-		var result *coagentv1.GetOrchestratorResponse
-		result, err = m.api.sessions.GetOrchestrator(ctx, &coagentv1.GetOrchestratorRequest{SessionId: focus})
+		var result *coagentv1.GetOrchestratorModeResponse
+		result, err = m.api.sessions.GetOrchestratorMode(ctx, &coagentv1.GetOrchestratorModeRequest{SessionId: focus})
 
 		state := "off. Use /orchestrate on to enable."
 		if result.GetOn() {
@@ -25,10 +25,10 @@ func (m *Manager) handleOrchestrate(ctx context.Context, focus int64, arg string
 
 		text = fmt.Sprintf("#%d: orchestrator %s", focus, state)
 	case "on", "off":
-		var result *coagentv1.SetOrchestratorResponse
-		result, err = m.api.sessions.SetOrchestrator(
+		var result *coagentv1.SetOrchestratorModeResponse
+		result, err = m.api.sessions.SetOrchestratorMode(
 			ctx,
-			&coagentv1.SetOrchestratorRequest{SessionId: focus, On: arg == "on"},
+			&coagentv1.SetOrchestratorModeRequest{SessionId: focus, On: arg == "on"},
 		)
 		text = orchestrateChangeText(focus, arg == "on", result.GetChanged())
 	default:

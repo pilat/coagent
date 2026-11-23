@@ -740,7 +740,7 @@ sessions fail closed. Subagent events remain inside their tree; parent
 completion is the explicit cross-boundary signal.
 The daemon resolves and caches that route; `sessionbus` owns subscriber state
 and bounded non-blocking fan-out after the route is known.
-Managers receive wake hints through `WatchSessions`, fed by the local API server's
+Managers receive wake hints through `StreamSessionEvents`, fed by the local API server's
 `sessionbus` subscription. Hints carry no content: output reaches a chat only by
 reading the output log. The control socket carries no event traffic or server pushes
 ([ADR-0060](docs/adr/0060-telegram-service-topics-own-daemon-management.md)).
@@ -751,7 +751,7 @@ reading the output log. The control socket carries no event traffic or server pu
 
 Orchestrator mode is a durable attribute on an ordinary manager-owned root,
 granted and revoked only by a human through `/orchestrate on|off` in a chat or
-`SetOrchestrator` from an operator client; it survives restart and `/clear`.
+`SetOrchestratorMode` from an operator client; it survives restart and `/clear`.
 From its next run, that root alone gets list, send, spawn, read, subscribe, unsubscribe, stop and kill tools, with mode and
 ownership checked on every call; its subagents and targets receive no new tool.
 Sent messages carry host-authored sender provenance at acceptance and appear in
@@ -927,7 +927,7 @@ session's `/config` flow; no RPC mutates configuration, carries secrets or
 streams model tokens. With the sandbox off a session already has the user's
 authority. A client's plaintext token file is as readable from the sandbox as
 any operator credential, and with it a session can reach `/config` and every
-other `coagent.v1` call as that client, `SetOrchestrator` and `CreateProject` included
+other `coagent.v1` call as that client, `SetOrchestratorMode` and `CreateProject` included
 ([ADR-0104](docs/adr/0104-the-local-api-is-the-two-durable-ledgers.md),
 [ADR-0105](docs/adr/0105-built-in-managers-are-local-api-clients-in-process.md)).
 Built-in managers use the same services over an in-process connection with no
@@ -1257,7 +1257,7 @@ composition root supplies the daemon backend, store, discovery and session bus.
 
 Each Telegram manager owns one private chat with its sole allowed user. Startup
 validates the bot and chat, binds the chat without overwriting its selection or
-cursor, waits for the `WatchSessions` sync event, and starts polling and
+cursor, waits for the `StreamSessionEvents` sync event, and starts polling and
 the send-only chat loop. NULL focus creates no session. Plain text, captions,
 media, voice and focus-scoped commands receive
 exactly one local line:
@@ -1313,7 +1313,7 @@ The local API server binds each authenticated author to its manager-bound
 controller and adds no session creation, inbox enqueue or output read of its
 own. The composition root binds a configured manager id to an in-process server;
 it registers the same handlers as the API socket without a socket or token.
-`WatchSessions` carries only wake hints; its first event, with session id 0,
+`StreamSessionEvents` carries only wake hints; its first event, with session id 0,
 marks the subscription live before the client reads state. Telegram waits for
 that event before delivery starts and resubscribes when a stream ends.
 `CreateSession` creates an empty root. `SendInput` sends human input through

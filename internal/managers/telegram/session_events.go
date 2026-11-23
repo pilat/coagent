@@ -10,16 +10,16 @@ import (
 
 func (m *Manager) notificationsLoop(
 	ctx context.Context,
-	watch coagentv1connect.OutputServiceWatchSessionsClientStream,
+	events coagentv1connect.OutputServiceStreamSessionEventsClientStream,
 ) {
 	for ctx.Err() == nil {
-		event, err := watch.Receive()
+		event, err := events.Receive()
 		if err == nil {
 			m.handleNotification(ctx, event)
 			continue
 		}
 
-		_ = watch.Close()
+		_ = events.Close()
 
 		for {
 			select {
@@ -28,16 +28,16 @@ func (m *Manager) notificationsLoop(
 			case <-time.After(reconnectBackoffBase):
 			}
 
-			next, err := m.api.outputs.WatchSessions(ctx, &coagentv1.WatchSessionsRequest{})
+			next, err := m.api.outputs.StreamSessionEvents(ctx, &coagentv1.StreamSessionEventsRequest{})
 			if err == nil {
-				watch = next
+				events = next
 				break
 			}
 		}
 	}
 }
 
-func (m *Manager) handleNotification(ctx context.Context, event *coagentv1.WatchSessionsResponse) {
+func (m *Manager) handleNotification(ctx context.Context, event *coagentv1.StreamSessionEventsResponse) {
 	m.wakeDelivery()
 
 	if event.GetType() != coagentv1.SessionEventType_SESSION_EVENT_TYPE_HEARTBEAT {

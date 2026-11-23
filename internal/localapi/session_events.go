@@ -12,8 +12,8 @@ import (
 	"github.com/pilat/coagent/internal/sessionevent"
 )
 
-func (outputService) WatchSessions(ctx context.Context, _ *coagentv1.WatchSessionsRequest,
-	stream coagentv1connect.OutputServiceWatchSessionsServerStream,
+func (outputService) StreamSessionEvents(ctx context.Context, _ *coagentv1.StreamSessionEventsRequest,
+	stream coagentv1connect.OutputServiceStreamSessionEventsServerStream,
 ) error {
 	author, err := clientFrom(ctx)
 	if err != nil {
@@ -24,9 +24,9 @@ func (outputService) WatchSessions(ctx context.Context, _ *coagentv1.WatchSessio
 	defer author.control.Unsubscribe(events)
 
 	if err := stream.Send(
-		&coagentv1.WatchSessionsResponse{Type: coagentv1.SessionEventType_SESSION_EVENT_TYPE_ACTIVITY},
+		&coagentv1.StreamSessionEventsResponse{Type: coagentv1.SessionEventType_SESSION_EVENT_TYPE_ACTIVITY},
 	); err != nil {
-		return fmt.Errorf("send watch event: %w", err)
+		return fmt.Errorf("send session event: %w", err)
 	}
 
 	for {
@@ -38,18 +38,18 @@ func (outputService) WatchSessions(ctx context.Context, _ *coagentv1.WatchSessio
 				return connect.Errorf(connect.CodeUnavailable, "session events ended")
 			}
 
-			if err := stream.Send(watchEvent(event)); err != nil {
-				return fmt.Errorf("send watch event: %w", err)
+			if err := stream.Send(sessionEvent(event)); err != nil {
+				return fmt.Errorf("send session event: %w", err)
 			}
 		}
 	}
 }
 
-func watchEvent(event controllerapi.SessionNotification) *coagentv1.WatchSessionsResponse {
+func sessionEvent(event controllerapi.SessionNotification) *coagentv1.StreamSessionEventsResponse {
 	kind := coagentv1.SessionEventType_SESSION_EVENT_TYPE_ACTIVITY
 	if event.Notification.Type == sessionevent.NotifyHeartbeat {
 		kind = coagentv1.SessionEventType_SESSION_EVENT_TYPE_HEARTBEAT
 	}
 
-	return &coagentv1.WatchSessionsResponse{SessionId: event.SessionID, Type: kind}
+	return &coagentv1.StreamSessionEventsResponse{SessionId: event.SessionID, Type: kind}
 }

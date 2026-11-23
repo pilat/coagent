@@ -9,7 +9,7 @@ The shared vocabulary of coagent — the words that name its concepts, so code, 
 ## Actors & entities
 
 - **orchestrator mode**: A durable capability on one manager-owned root, granted and revoked only by the human with
-  `/orchestrate on|off` in a chat or `SetOrchestrator` from an operator client. It gives that root `list_sessions`, `send_to_session`, `spawn_session`, `read_session`, `subscribe` and `unsubscribe` over roots
+  `/orchestrate on|off` in a chat or `SetOrchestratorMode` from an operator client. It gives that root `list_sessions`, `send_to_session`, `spawn_session`, `read_session`, `subscribe` and `unsubscribe` over roots
   of its manager, plus `stop_session` and `kill_session` only over sessions it spawned; its subagents never get them. It is not a session kind, agent type or role
   ([ADR-0097](adr/0097-orchestrator-mode-is-a-human-granted-capability-on-an-ordinary-root.md)).
   _Avoid_: assistant, desk, coordinator, supervisor; "orchestrator" for the daemon.
@@ -163,7 +163,7 @@ socket or token.
 _Avoid_: API client (a token holder).
 
 **wake hint**:
-One `WatchSessions` event: a root id plus activity or heartbeat, carrying no
+One `StreamSessionEvents` event: a root id plus activity or heartbeat, carrying no
 content. The client re-reads state.
 _Avoid_: notification (the daemon-internal session event), push.
 

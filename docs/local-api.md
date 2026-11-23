@@ -63,12 +63,12 @@ See [ADR-0104](adr/0104-the-local-api-is-the-two-durable-ledgers.md) and
 - `SessionService` also serves session reads and settings. `ListSessions` lists the caller's live roots,
   newest activity first; `ListSessionDetails` lists every owned root, killed ones included;
   `GetSessionKilled` reports whether an owned root has been killed. `SetSessionModel` switches an owned root's
-  model and reasoning effort; `SetSessionTitle` renames a live owned root. `GetOrchestrator` reports whether
-  a live owned root has orchestrator mode; `SetOrchestrator` turns it on or off.
+  model and reasoning effort; `SetSessionTitle` renames a live owned root. `GetOrchestratorMode` reports whether
+  a live owned root has orchestrator mode; `SetOrchestratorMode` turns it on or off.
 - `OutputService` also serves bounded reads and wake hints. `ListOutput` returns up to `limit` rows of a root
   above `after_id`, oldest first. `ReadEntry` returns the newest renderable rows and newest output id from one
   read, oldest first, leaving out `session_opened` and `session_replaced` rows. Both require `limit` in 1–100.
-  `WatchSessions` streams root ids with activity or heartbeat, never content. Its first event is `ACTIVITY`
+  `StreamSessionEvents` streams root ids with activity or heartbeat, never content. Its first event is `ACTIVITY`
   with `session_id` 0: the subscription is live, so state read after it misses no later change. Hints may be
   dropped under load; re-read state on any event and periodically.
 - `ChatService` keeps one chat's focus and delivery cursor as durable server state. `BindChat` creates its row,

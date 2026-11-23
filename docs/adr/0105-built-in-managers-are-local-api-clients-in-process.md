@@ -30,7 +30,7 @@ type, so text is the whole error contract. connect-go v2 ships an in-process tra
 - New handlers validate nothing but page limits (1-100). Every refusal is the controller's text as a
   `FailedPrecondition` message. Telegram's client interceptor turns a connect error back into its message, so every
   reply is byte-identical.
-- `WatchSessions` carries wake hints only: a root id and activity or heartbeat, never content. Its first event, with
+- `StreamSessionEvents` carries wake hints only: a root id and activity or heartbeat, never content. Its first event, with
   session id 0, marks the subscription live. Telegram waits for it before delivery starts, which keeps the order in
   which it used to subscribe, and resubscribes after 3 seconds if a stream ends.
 - Killed, orchestrator mode and session details are separate reads. A killed read must succeed on a dying root while
@@ -53,7 +53,7 @@ type, so text is the whole error contract. connect-go v2 ships an in-process tra
 - Accepted: an external watcher that stops reading makes the bus drop that author's events with a warning.
 - Accepted: listing session details reads every owned root, killed ones included.
 - Accepted: with a client's token file a sandboxed session can also use the new chat, settings and discovery calls
-  on that client's roots, `SetOrchestrator` and `CreateProject` included, inside the already accepted `/config` route.
+  on that client's roots, `SetOrchestratorMode` and `CreateProject` included, inside the already accepted `/config` route.
 - Accepted: `ListProjects` shows an API client every daemon project's last activity, whoever owns its sessions, as
   Telegram's `/new` picker already sees it.
 - Accepted: the resubscribe path does not run in production in process.

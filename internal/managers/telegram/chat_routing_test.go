@@ -21,12 +21,12 @@ func TestHeartbeatTypingUsesOnlyLoopChatFocus(t *testing.T) {
 	loop := &chatLoopStub{focus: 42}
 	manager.delivery = loop
 	for _, id := range []int64{42, 9, 99001} {
-		manager.handleNotification(t.Context(), &coagentv1.WatchSessionsResponse{
+		manager.handleNotification(t.Context(), &coagentv1.StreamSessionEventsResponse{
 			SessionId: id, Type: coagentv1.SessionEventType_SESSION_EVENT_TYPE_HEARTBEAT,
 		})
 	}
 	loop.focus = 0
-	manager.handleNotification(t.Context(), &coagentv1.WatchSessionsResponse{
+	manager.handleNotification(t.Context(), &coagentv1.StreamSessionEventsResponse{
 		SessionId: 0, Type: coagentv1.SessionEventType_SESSION_EVENT_TYPE_HEARTBEAT,
 	})
 	assert.Equal(t, 4, loop.wakes)
