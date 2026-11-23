@@ -11,6 +11,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/pilat/coagent/api/coagent/v1"
 	"github.com/pilat/coagent/internal/logger"
 )
 
@@ -116,23 +117,26 @@ func (m *Manager) processChatUpdate(ctx context.Context, msg *telegramMessage) {
 		return
 	}
 
-	focus, err := m.chat.ChatFocus(ctx, strconv.FormatInt(m.effectiveChatID(), 10))
+	focus, err := m.api.chats.GetChatFocus(
+		ctx,
+		&coagentv1.GetChatFocusRequest{ChatId: strconv.FormatInt(m.effectiveChatID(), 10)},
+	)
 	if err != nil {
 		m.reply(ctx, "", strings.ReplaceAll(err.Error(), "\n", " "))
 		return
 	}
 
-	if focus == 0 {
+	if focus.GetSessionId() == 0 {
 		m.reply(ctx, "", noFocusHint)
 		return
 	}
 
 	if msg.Voice != nil {
-		m.handleVoiceMessage(ctx, msg, focus)
+		m.handleVoiceMessage(ctx, msg, focus.GetSessionId())
 		return
 	}
 
-	m.handleAttachment(ctx, msg, attachmentOf(msg), focus)
+	m.handleAttachment(ctx, msg, attachmentOf(msg), focus.GetSessionId())
 }
 
 func textPreview(value string) string {

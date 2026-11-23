@@ -288,7 +288,7 @@ func newChatTelegramManager(t *testing.T, h *delayedTelegramHarness) *Manager {
 	t.Helper()
 	m, err := New(config.ManagerEntry{
 		ID: delayedTelegramManagerID, BotToken: "test-token", AllowedUserIDs: []int64{harnessChatID},
-	}, nil, h.controller)
+	}, nil, h.transport)
 	require.NoError(t, err)
 	m.httpClient = &http.Client{Transport: h.recorder}
 	return m

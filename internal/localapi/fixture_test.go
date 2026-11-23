@@ -35,13 +35,15 @@ type apiSend struct {
 }
 
 type apiBackend struct {
-	store   *sessionstore.Store
-	bus     *sessionbus.Bus
-	mu      sync.Mutex
-	creates int
-	create  func(context.Context)
-	sends   []apiSend
-	send    func(context.Context) error
+	store     *sessionstore.Store
+	bus       *sessionbus.Bus
+	mu        sync.Mutex
+	creates   int
+	create    func(context.Context)
+	worktrees []string
+	models    []controllerapi.SessionSetModelData
+	sends     []apiSend
+	send      func(context.Context) error
 }
 
 type apiFixture struct {
@@ -63,12 +65,13 @@ type apiServer struct {
 func (b *apiBackend) CreateSession(
 	ctx context.Context,
 	project int64,
-	_, _ string,
+	worktree, _ string,
 	model string,
 	attrs map[string]any,
 ) (int64, error) {
 	b.mu.Lock()
 	b.creates++
+	b.worktrees = append(b.worktrees, worktree)
 	create := b.create
 	b.mu.Unlock()
 
@@ -106,7 +109,12 @@ func (b *apiBackend) SendToSessionResolved(ctx context.Context, id int64, text, 
 	return id, nil
 }
 
-func (b *apiBackend) SetModel(context.Context, int64, string, string) error { return nil }
+func (b *apiBackend) SetModel(_ context.Context, id int64, model, effort string) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.models = append(b.models, controllerapi.SessionSetModelData{SessionID: id, Model: model, ReasoningLevel: effort})
+	return nil
+}
 
 func (b *apiBackend) HasActiveLoop(int64) bool { return false }
 

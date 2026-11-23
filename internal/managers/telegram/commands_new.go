@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pilat/coagent/internal/controllerapi"
+	"github.com/pilat/coagent/api/coagent/v1"
 )
 
 func parseNewCommand(text string) (string, bool) {
@@ -28,30 +28,30 @@ func (m *Manager) handleNew(ctx context.Context, name string) {
 		return
 	}
 
-	result, err := m.controller.CreateProject(ctx, controllerapi.ProjectCreateData{Name: name})
+	result, err := m.api.discovery.CreateProject(ctx, &coagentv1.CreateProjectRequest{Name: name})
 	if err != nil {
 		m.reply(ctx, "/new", strings.ReplaceAll(err.Error(), "\n", " "))
 		return
 	}
 
-	m.handleLaunch(ctx, "/new", result.Path)
+	m.handleLaunch(ctx, "/new", result.GetPath())
 }
 
 func (m *Manager) listProjects(ctx context.Context) {
-	result, err := m.controller.ListRecentProjects(ctx)
+	result, err := m.api.discovery.ListProjects(ctx, &coagentv1.ListProjectsRequest{})
 	if err != nil {
 		m.reply(ctx, "/new", strings.ReplaceAll("Failed to list projects: "+err.Error(), "\n", " "))
 		return
 	}
 
-	if len(result.Projects) == 0 {
+	if len(result.GetProjects()) == 0 {
 		m.reply(ctx, "/new", strings.ReplaceAll("No projects yet. Create one with /new <name>.", "\n", " "))
 		return
 	}
 
 	lines := []string{"Projects — open with /new <name>:"}
-	for i, project := range result.Projects {
-		lines = append(lines, fmt.Sprintf("%d. %s · %s", i+1, project.Name, relativeAge(project.LastActivity)))
+	for i, project := range result.GetProjects() {
+		lines = append(lines, fmt.Sprintf("%d. %s · %s", i+1, project.GetName(), relativeAge(projectActivity(project))))
 	}
 
 	m.reply(ctx, "/new", strings.Join(lines, "\n"))
@@ -63,35 +63,35 @@ func (m *Manager) handleSpawn(ctx context.Context, path string) {
 		return
 	}
 
-	favorites, err := m.controller.SpawnFavorites(ctx)
+	favorites, err := m.api.discovery.ListSpawnFavorites(ctx, &coagentv1.ListSpawnFavoritesRequest{})
 	if err != nil {
 		m.reply(ctx, "/spawn", strings.ReplaceAll("Failed to list favorites: "+err.Error(), "\n", " "))
 		return
 	}
 
 	lines := []string{"Usage: /spawn <path>."}
-	if len(favorites) > 0 {
+	if len(favorites.GetPaths()) > 0 {
 		lines = append(lines, "Favorites:")
-		lines = append(lines, favorites...)
+		lines = append(lines, favorites.GetPaths()...)
 	}
 
 	m.reply(ctx, "/spawn", strings.Join(lines, "\n"))
 }
 
 func (m *Manager) handleLaunch(ctx context.Context, command, path string) {
-	m.createAndSwitch(ctx, command, controllerapi.SessionCreateData{
-		WorkDir: path, Attributes: map[string]any{"channel": telegramChannel},
+	m.createAndSwitch(ctx, command, &coagentv1.CreateSessionRequest{
+		WorkDir: path,
 	})
 }
 
-func (m *Manager) createAndSwitch(ctx context.Context, command string, data controllerapi.SessionCreateData) {
-	id, err := m.controller.CreateSession(ctx, data)
+func (m *Manager) createAndSwitch(ctx context.Context, command string, data *coagentv1.CreateSessionRequest) {
+	result, err := m.api.sessions.CreateSession(ctx, data)
 	if err != nil {
 		m.reply(ctx, command, strings.ReplaceAll(err.Error(), "\n", " "))
 		return
 	}
 
-	m.switchChat(ctx, command, id)
+	m.switchChat(ctx, command, result.GetSessionId())
 }
 
 func relativeAge(t *time.Time) string {
@@ -111,4 +111,14 @@ func formatAge(d time.Duration) string {
 	default:
 		return strconv.Itoa(int(d.Hours()/24)) + "d"
 	}
+}
+
+func projectActivity(project *coagentv1.Project) *time.Time {
+	if project.GetLastActivity() == nil {
+		return nil
+	}
+
+	activity := project.GetLastActivity().AsTime()
+
+	return &activity
 }

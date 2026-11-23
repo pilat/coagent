@@ -9,7 +9,7 @@ The shared vocabulary of coagent — the words that name its concepts, so code, 
 ## Actors & entities
 
 - **orchestrator mode**: A durable capability on one manager-owned root, granted and revoked only by the human with
-  `/orchestrate on|off`. It gives that root `list_sessions`, `send_to_session`, `spawn_session`, `read_session`, `subscribe` and `unsubscribe` over roots
+  `/orchestrate on|off` in a chat or `SetOrchestrator` from an operator client. It gives that root `list_sessions`, `send_to_session`, `spawn_session`, `read_session`, `subscribe` and `unsubscribe` over roots
   of its manager, plus `stop_session` and `kill_session` only over sessions it spawned; its subagents never get them. It is not a session kind, agent type or role
   ([ADR-0097](adr/0097-orchestrator-mode-is-a-human-granted-capability-on-an-ordinary-root.md)).
   _Avoid_: assistant, desk, coordinator, supervisor; "orchestrator" for the daemon.
@@ -97,29 +97,29 @@ _Avoid_: job, request (for the work-unit); unqualified "task" in code.
 
 **Controller** (`controllerapi.Controller`):
 The private manager-bound in-process capability `managercontrol` implements over
-the daemon backend for built-in managers and the local API server — create
-sessions, durably send messages, stop/kill them, and subscribe to their owned
-session events. The composition root binds one capability to each manager and
-**API client** ID; session-addressed operations reject every other owner. It is
-an internal package boundary, not a supported external API. The external
-contract is the **local API**.
+the daemon backend for the local API server — create sessions, durably send
+messages, stop/kill them, and subscribe to their owned session events. The
+composition root binds one capability to each manager and **API client** ID;
+session-addressed operations reject every other owner. It is
+an internal package boundary; built-in managers reach it only through the
+**local API**.
 _Avoid_: using "controller" for a front-end integration — that is a manager.
 
 **manager**:
-A built-in front end that drives the daemon through its private controller.
-A Telegram manager owns one durable manager ID, one bot account, one private chat
-with its sole allowed user and one polling instance. Enabled managers cannot
+A built-in front end that drives the daemon through `coagent.v1` over an
+**in-process connection**. A Telegram manager owns one durable manager ID, one bot
+account, one private chat with its sole allowed user and one polling instance. Enabled managers cannot
 reuse a bot token. Adding a manager is a source-level contribution, not a
 third-party plugin.
 _Avoid_: controller, bot, adapter, integration; manager for an **API client**.
 
 **manager ownership**:
 The durable routing identity of a root session: the unique manager or
-**API client** ID stored as `manager_id`. A manager subscribes with that same ID
-and receives only its own session events. Its bound Controller also stamps new
-sessions and rejects reads or mutations of any other owner; a driver or channel
-name is not ownership because several managers may share it. In code an API
-client's root is still a manager-owned root (`manager_id`, `ForManager`): the
+**API client** ID stored as `manager_id`. The local API server subscribes with
+that same ID and sends only its owner's wake hints. The server's bound Controller
+also stamps new sessions and rejects reads or mutations of any other owner; a
+driver or channel name is not ownership because several managers may share it.
+In code an API client's root is still a manager-owned root (`manager_id`, `ForManager`): the
 identifiers name the ownership slot, not the kind of owner.
 _Avoid_: channel ownership, transport ownership.
 
@@ -148,11 +148,24 @@ _Avoid_: RPC server, API server, IPC channel; local API (that is `coagent.v1` on
 
 **local API**:
 `coagent.v1`, the daemon's public contract: the Protocol Buffers schema
-`api/coagent/v1/coagent.proto`, served with ConnectRPC on the **API socket** by
-`internal/localapi`. It is the two durable ledgers (keyed input into
-`session_inbox`, a tail of `session_outbox`), not RPC plus pushes
-([ADR-0104](adr/0104-the-local-api-is-the-two-durable-ledgers.md)).
+`api/coagent/v1/coagent.proto`, served with ConnectRPC on the **API socket** and
+over **in-process connections** by `internal/localapi`. It exposes the two durable
+ledgers (keyed input into `session_inbox`, a tail of `session_outbox`), chat focus
+and cursor, session settings and discovery. **Wake hints** tell clients to re-read state
+([ADR-0104](adr/0104-the-local-api-is-the-two-durable-ledgers.md),
+[ADR-0105](adr/0105-built-in-managers-are-local-api-clients-in-process.md)).
 _Avoid_: control API, controller API, RPC server.
+
+**in-process connection**:
+A manager's `coagent.v1` connection inside the daemon, through Connect's in-process
+transport to a server that stamps the configured manager id as author. It uses no
+socket or token.
+_Avoid_: API client (a token holder).
+
+**wake hint**:
+One `WatchSessions` event: a root id plus activity or heartbeat, carrying no
+content. The client re-reads state.
+_Avoid_: notification (the daemon-internal session event), push.
 
 **API socket**:
 `~/.coagent/api.sock`, mode 0600, bound only when `api.clients` is non-empty;
@@ -170,7 +183,7 @@ who owns the machine, `config.yaml` and the sandbox rules. Its input is
 _Avoid_: manager (a built-in front end), user.
 
 **idempotency key**:
-The string an **API client** sends with each input. A repeated send of the same
+The string a local API caller sends with each input. A repeated send of the same
 input to the same root appends nothing. Stored as the inbox delivery key
 `user:<key>`.
 _Avoid_: request id, dedup key.
@@ -464,7 +477,7 @@ tool activation grant.
 Session commands are read only from human input and scheduled turns; other
 sources reach the model as text.
 The orchestrator host also writes one: the fixed `/stop` or `/kill` an orchestrator issues on a session it spawned,
-with sender attributes naming it — authority the human delegated with `/orchestrate`.
+with sender attributes naming it — authority the human delegated through orchestrator mode.
 _Avoid_: real user message (authority follows the source field).
 
 **tool activation grant**:

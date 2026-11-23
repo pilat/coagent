@@ -135,12 +135,12 @@ func replayDaemonTraceThroughOutbox(t *testing.T, trace harnessTraceFile) []tele
 
 	manager, err := New(config.ManagerEntry{
 		ID: replayManagerID, BotToken: "test-token", AllowedUserIDs: []int64{harnessChatID},
-	}, nil, controller)
+	}, nil, servedTransport(t, controller, controller))
 	require.NoError(t, err)
 	recorder := &delayedTelegramRecorder{}
 	manager.httpClient = &http.Client{Transport: recorder}
 	loop := managerdelivery.NewChat(
-		&chatPort{controller: controller, chatID: "chat"},
+		&chatPort{api: manager.api, chatID: "chat"},
 		&outputTransport{manager: manager},
 	)
 	loop.Start(t.Context())

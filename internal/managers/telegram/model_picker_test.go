@@ -7,6 +7,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/pilat/coagent/api/coagent/v1"
 	"github.com/pilat/coagent/internal/controllerapi"
 )
 
@@ -128,17 +129,17 @@ func TestFormatPrice(t *testing.T) {
 }
 
 func TestModelPriceTag(t *testing.T) {
-	assert.Equal(t, "free", modelPriceTag(controllerapi.ConfigModelInfo{}))
-	assert.Equal(t, "$0/$2", modelPriceTag(controllerapi.ConfigModelInfo{OutputPrice: 2}))
-	assert.Equal(t, "$0.8/$4", modelPriceTag(controllerapi.ConfigModelInfo{InputPrice: 0.8, OutputPrice: 4}))
+	assert.Equal(t, "free", modelPriceTag(&coagentv1.Model{}))
+	assert.Equal(t, "$0/$2", modelPriceTag(&coagentv1.Model{OutputPrice: 2}))
+	assert.Equal(t, "$0.8/$4", modelPriceTag(&coagentv1.Model{InputPrice: 0.8, OutputPrice: 4}))
 }
 
 func TestModelDisplayNameFallsBack(t *testing.T) {
 	assert.Equal(
 		t,
 		"p/Name",
-		modelDisplayName(controllerapi.ConfigModelInfo{ID: "x", Name: "Name", DisplayName: "p/Name"}),
+		modelDisplayName(&coagentv1.Model{Id: "x", Name: "Name", DisplayName: "p/Name"}),
 	)
-	assert.Equal(t, "Name", modelDisplayName(controllerapi.ConfigModelInfo{ID: "x", Name: "Name"}))
-	assert.Equal(t, "x", modelDisplayName(controllerapi.ConfigModelInfo{ID: "x"}))
+	assert.Equal(t, "Name", modelDisplayName(&coagentv1.Model{Id: "x", Name: "Name"}))
+	assert.Equal(t, "x", modelDisplayName(&coagentv1.Model{Id: "x"}))
 }

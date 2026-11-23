@@ -17,7 +17,7 @@ func newCmdTestManager(t *testing.T, ctrl *fakeController, messages *[]string) *
 	t.Helper()
 	m, err := New(config.ManagerEntry{
 		ID: "telegram-main", BotToken: "test-token", AllowedUserIDs: []int64{harnessChatID},
-	}, nil, ctrl)
+	}, nil, servedTransport(t, ctrl, ctrl))
 	require.NoError(t, err)
 	m.httpClient = &http.Client{Transport: telegramMessageRecorder(t, messages)}
 	return m
@@ -84,7 +84,6 @@ func TestHandleNew_CreatesAndLaunches(t *testing.T) {
 	assert.Equal(t, "посты", ctrl.createProjectCalls[0].Name)
 	require.Len(t, ctrl.createSessionCalls, 1)
 	assert.Equal(t, "/root/посты", ctrl.createSessionCalls[0].WorkDir)
-	assert.Equal(t, "telegram", ctrl.createSessionCalls[0].Attributes["channel"])
 	assert.Equal(t, int64(1), ctrl.focus)
 	assert.Empty(t, messages, "the delivery loop owns the switch confirmation")
 }

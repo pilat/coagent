@@ -6,8 +6,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
+	"github.com/pilat/coagent/api/coagent/v1"
 	"github.com/pilat/coagent/internal/controllerapi"
-	"github.com/pilat/coagent/internal/sessionevent"
 )
 
 type chatLoopStub struct {
@@ -21,13 +21,13 @@ func TestHeartbeatTypingUsesOnlyLoopChatFocus(t *testing.T) {
 	loop := &chatLoopStub{focus: 42}
 	manager.delivery = loop
 	for _, id := range []int64{42, 9, 99001} {
-		manager.handleNotification(t.Context(), controllerapi.SessionNotification{
-			SessionID: id, Notification: sessionevent.Notification{Type: sessionevent.NotifyHeartbeat},
+		manager.handleNotification(t.Context(), &coagentv1.WatchSessionsResponse{
+			SessionId: id, Type: coagentv1.SessionEventType_SESSION_EVENT_TYPE_HEARTBEAT,
 		})
 	}
 	loop.focus = 0
-	manager.handleNotification(t.Context(), controllerapi.SessionNotification{
-		SessionID: 0, Notification: sessionevent.Notification{Type: sessionevent.NotifyHeartbeat},
+	manager.handleNotification(t.Context(), &coagentv1.WatchSessionsResponse{
+		SessionId: 0, Type: coagentv1.SessionEventType_SESSION_EVENT_TYPE_HEARTBEAT,
 	})
 	assert.Equal(t, 4, loop.wakes)
 	assert.Equal(t, []telegramHarnessCall{

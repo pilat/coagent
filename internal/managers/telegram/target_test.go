@@ -50,9 +50,10 @@ func TestNew_RequiresOnePositiveAllowedUser(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
+			controller := &fakeController{}
 			manager, err := New(config.ManagerEntry{
 				BotToken: "test-token", AllowedUserIDs: tt.ids,
-			}, nil, &fakeController{})
+			}, nil, servedTransport(t, controller, controller))
 			require.EqualError(t, err, "private chat requires exactly one positive allowed user id")
 			assert.Nil(t, manager)
 		})

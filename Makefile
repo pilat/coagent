@@ -247,6 +247,8 @@ generate.check:
 			go version -m "$$(command -v "$$plugin")" | awk -v module="$$module" -v version="$$version" '$$1 == "mod" && $$2 == module && $$3 == version { found = 1 } END { exit !found }' || { echo "✋ $$plugin must match go.mod; run make tools"; exit 1; }; \
 		done
 	buf lint
+	@set -eu; base="$$(git merge-base HEAD origin/main)" || { echo "✋ buf breaking needs origin/main; run git fetch origin main"; exit 1; }; \
+		buf breaking --against ".git#ref=$$base"
 	@set -eu; out="$$(mktemp -d)"; trap 'rm -rf "$$out"' EXIT HUP INT TERM; \
 		buf generate --output "$$out"; \
 		diff -r -x '*.proto' api "$$out/api" || { echo "✋ generated code is stale; run make generate"; exit 1; }

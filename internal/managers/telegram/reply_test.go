@@ -104,8 +104,7 @@ func TestCommandReplyLogsCommand(t *testing.T) {
 			ctrl := &replyLoggingController{fakeController: &fakeController{focus: 42, listModels: pickerModels}}
 			m := &Manager{
 				cfg:        config.ManagerEntry{BotToken: "fake", AllowedUserIDs: []int64{1}},
-				controller: ctrl,
-				chat:       ctrl,
+				api:        servedAPI(t, ctrl, ctrl),
 				httpClient: &http.Client{Transport: &failingTransport{err: context.Canceled}},
 			}
 

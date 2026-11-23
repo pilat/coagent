@@ -7,30 +7,35 @@ import (
 	"slices"
 	"sync"
 
+	"connectrpc.com/connect/v2"
 	"go.uber.org/zap"
 
 	"github.com/pilat/coagent/internal/config"
-	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/logger"
 	"github.com/pilat/coagent/internal/managers/telegram"
 )
 
+// Connector opens a built-in manager's coagent.v1 connection, authenticated as that manager.
+type Connector interface {
+	Transport(managerID string) (connect.Transport, error)
+}
+
 // Runtime owns enabled managers and records their startup failures.
 type Runtime struct {
-	cfg         *config.Config
-	controllers controllerapi.ManagerControllerFactory
-	builder     func(config.ManagerEntry) (Manager, error)
+	cfg       *config.Config
+	connector Connector
+	builder   func(config.ManagerEntry) (Manager, error)
 
 	mu        sync.Mutex
 	managers  []Manager
 	startErrs map[string]error
 }
 
-func NewRuntime(cfg *config.Config, controllers controllerapi.ManagerControllerFactory) *Runtime {
+func NewRuntime(cfg *config.Config, connector Connector) *Runtime {
 	r := &Runtime{
-		cfg:         cfg,
-		controllers: controllers,
-		builder:     nil,
+		cfg:       cfg,
+		connector: connector,
+		builder:   nil,
 	}
 	r.builder = r.buildManager
 
@@ -171,7 +176,12 @@ func (r *Runtime) stopManagers(ctx context.Context, list []Manager) error {
 func (r *Runtime) buildManager(entry config.ManagerEntry) (Manager, error) {
 	switch entry.Driver {
 	case "telegram":
-		mgr, err := telegram.New(entry, r.cfg.UnifiedConfig, r.controllers.ForManager(entry.ID))
+		transport, err := r.connector.Transport(entry.ID)
+		if err != nil {
+			return nil, fmt.Errorf("connect manager %q: %w", entry.ID, err)
+		}
+
+		mgr, err := telegram.New(entry, r.cfg.UnifiedConfig, transport)
 		if err != nil {
 			return nil, fmt.Errorf("create telegram manager: %w", err)
 		}

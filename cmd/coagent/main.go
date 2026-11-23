@@ -26,6 +26,7 @@ import (
 	"github.com/pilat/coagent/internal/git"
 	"github.com/pilat/coagent/internal/llm"
 	"github.com/pilat/coagent/internal/loader"
+	"github.com/pilat/coagent/internal/localapi"
 	"github.com/pilat/coagent/internal/logger"
 	"github.com/pilat/coagent/internal/managercontrol"
 	"github.com/pilat/coagent/internal/managerdiscovery"
@@ -422,7 +423,8 @@ func runDaemon(
 
 	startLocalAPI(ctx, a, cfg, core.controller)
 
-	mgrRuntime := managers.NewRuntime(cfg, core.controller)
+	var connector managers.Connector = localapi.NewInProcess(ctx, core.controller)
+	mgrRuntime := managers.NewRuntime(cfg, connector)
 
 	ctlSrv, err := prepareControlSocket(ctx, cfg, mgrRuntime)
 	if err != nil {

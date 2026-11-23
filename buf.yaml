@@ -3,3 +3,5 @@ modules:
   - path: api
 lint:
   use: [STANDARD]
+breaking:
+  use: [FILE]

@@ -2,6 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-11-23
+- **Amended by:** [ADR-0105](0105-built-in-managers-are-local-api-clients-in-process.md)
 
 ## Context
 

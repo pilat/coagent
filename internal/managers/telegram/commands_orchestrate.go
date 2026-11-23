@@ -3,31 +3,34 @@ package telegram
 import (
 	"context"
 	"fmt"
-	"strconv"
 	"strings"
+
+	"github.com/pilat/coagent/api/coagent/v1"
 )
 
 func (m *Manager) handleOrchestrate(ctx context.Context, focus int64, arg string) {
 	arg = strings.ToLower(strings.TrimSpace(arg))
-	chatID := strconv.FormatInt(m.effectiveChatID(), 10)
 	var text string
 	var err error
 
 	switch arg {
 	case "":
-		var on bool
-		on, err = m.chat.Orchestrator(ctx, chatID, focus)
+		var result *coagentv1.GetOrchestratorResponse
+		result, err = m.api.sessions.GetOrchestrator(ctx, &coagentv1.GetOrchestratorRequest{SessionId: focus})
 
 		state := "off. Use /orchestrate on to enable."
-		if on {
+		if result.GetOn() {
 			state = "on."
 		}
 
 		text = fmt.Sprintf("#%d: orchestrator %s", focus, state)
 	case "on", "off":
-		var changed bool
-		changed, err = m.chat.SetOrchestrator(ctx, chatID, focus, arg == "on")
-		text = orchestrateChangeText(focus, arg == "on", changed)
+		var result *coagentv1.SetOrchestratorResponse
+		result, err = m.api.sessions.SetOrchestrator(
+			ctx,
+			&coagentv1.SetOrchestratorRequest{SessionId: focus, On: arg == "on"},
+		)
+		text = orchestrateChangeText(focus, arg == "on", result.GetChanged())
 	default:
 		text = "Usage: /orchestrate on|off."
 	}

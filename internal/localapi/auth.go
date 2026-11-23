@@ -35,19 +35,30 @@ func bindClient(entry config.APIClientEntry, controllers controllerapi.ManagerCo
 		return nil, fmt.Errorf("api client %q has invalid token hash length", entry.ID)
 	}
 
-	control := controllers.ForManager(entry.ID)
+	author, err := bindAuthor(entry.ID, controllers)
+	if err != nil {
+		return nil, err
+	}
+
+	author.hash = [32]byte(raw)
+
+	return author, nil
+}
+
+func bindAuthor(managerID string, controllers controllerapi.ManagerControllerFactory) (*client, error) {
+	control := controllers.ForManager(managerID)
 
 	chat, ok := control.(controllerapi.ChatFocusController)
 	if !ok {
-		return nil, fmt.Errorf("controller for api client %q lacks ChatFocusController", entry.ID)
+		return nil, fmt.Errorf("controller for api client %q lacks ChatFocusController", managerID)
 	}
 
 	lineage, ok := control.(controllerapi.LineageController)
 	if !ok {
-		return nil, fmt.Errorf("controller for api client %q lacks LineageController", entry.ID)
+		return nil, fmt.Errorf("controller for api client %q lacks LineageController", managerID)
 	}
 
-	return &client{hash: [32]byte(raw), control: control, chat: chat, lineage: lineage}, nil
+	return &client{control: control, chat: chat, lineage: lineage}, nil
 }
 
 func authenticate(clients []*client, next http.Handler) http.Handler {

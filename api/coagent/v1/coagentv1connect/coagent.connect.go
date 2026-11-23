@@ -16,6 +16,10 @@ const (
 	SessionServiceName = "coagent.v1.SessionService"
 	// OutputServiceName is the fully-qualified name of the OutputService service.
 	OutputServiceName = "coagent.v1.OutputService"
+	// ChatServiceName is the fully-qualified name of the ChatService service.
+	ChatServiceName = "coagent.v1.ChatService"
+	// DiscoveryServiceName is the fully-qualified name of the DiscoveryService service.
+	DiscoveryServiceName = "coagent.v1.DiscoveryService"
 )
 
 // These constants are the procedure names of the RPCs defined in this package. They're exposed at
@@ -31,8 +35,65 @@ const (
 	SessionServiceCreateSessionProcedure = "/coagent.v1.SessionService/CreateSession"
 	// SessionServiceSendInputProcedure is the procedure name of the SessionService's SendInput RPC.
 	SessionServiceSendInputProcedure = "/coagent.v1.SessionService/SendInput"
+	// SessionServiceListSessionsProcedure is the procedure name of the SessionService's ListSessions
+	// RPC.
+	SessionServiceListSessionsProcedure = "/coagent.v1.SessionService/ListSessions"
+	// SessionServiceListSessionDetailsProcedure is the procedure name of the SessionService's
+	// ListSessionDetails RPC.
+	SessionServiceListSessionDetailsProcedure = "/coagent.v1.SessionService/ListSessionDetails"
+	// SessionServiceGetSessionKilledProcedure is the procedure name of the SessionService's
+	// GetSessionKilled RPC.
+	SessionServiceGetSessionKilledProcedure = "/coagent.v1.SessionService/GetSessionKilled"
+	// SessionServiceSetSessionModelProcedure is the procedure name of the SessionService's
+	// SetSessionModel RPC.
+	SessionServiceSetSessionModelProcedure = "/coagent.v1.SessionService/SetSessionModel"
+	// SessionServiceSetSessionTitleProcedure is the procedure name of the SessionService's
+	// SetSessionTitle RPC.
+	SessionServiceSetSessionTitleProcedure = "/coagent.v1.SessionService/SetSessionTitle"
+	// SessionServiceGetOrchestratorProcedure is the procedure name of the SessionService's
+	// GetOrchestrator RPC.
+	SessionServiceGetOrchestratorProcedure = "/coagent.v1.SessionService/GetOrchestrator"
+	// SessionServiceSetOrchestratorProcedure is the procedure name of the SessionService's
+	// SetOrchestrator RPC.
+	SessionServiceSetOrchestratorProcedure = "/coagent.v1.SessionService/SetOrchestrator"
 	// OutputServiceTailOutputProcedure is the procedure name of the OutputService's TailOutput RPC.
 	OutputServiceTailOutputProcedure = "/coagent.v1.OutputService/TailOutput"
+	// OutputServiceListOutputProcedure is the procedure name of the OutputService's ListOutput RPC.
+	OutputServiceListOutputProcedure = "/coagent.v1.OutputService/ListOutput"
+	// OutputServiceReadEntryProcedure is the procedure name of the OutputService's ReadEntry RPC.
+	OutputServiceReadEntryProcedure = "/coagent.v1.OutputService/ReadEntry"
+	// OutputServiceWatchSessionsProcedure is the procedure name of the OutputService's WatchSessions
+	// RPC.
+	OutputServiceWatchSessionsProcedure = "/coagent.v1.OutputService/WatchSessions"
+	// ChatServiceBindChatProcedure is the procedure name of the ChatService's BindChat RPC.
+	ChatServiceBindChatProcedure = "/coagent.v1.ChatService/BindChat"
+	// ChatServiceGetChatFocusProcedure is the procedure name of the ChatService's GetChatFocus RPC.
+	ChatServiceGetChatFocusProcedure = "/coagent.v1.ChatService/GetChatFocus"
+	// ChatServiceGetChatCursorProcedure is the procedure name of the ChatService's GetChatCursor RPC.
+	ChatServiceGetChatCursorProcedure = "/coagent.v1.ChatService/GetChatCursor"
+	// ChatServiceEnterChatProcedure is the procedure name of the ChatService's EnterChat RPC.
+	ChatServiceEnterChatProcedure = "/coagent.v1.ChatService/EnterChat"
+	// ChatServiceAdvanceChatProcedure is the procedure name of the ChatService's AdvanceChat RPC.
+	ChatServiceAdvanceChatProcedure = "/coagent.v1.ChatService/AdvanceChat"
+	// ChatServiceSetChatFocusProcedure is the procedure name of the ChatService's SetChatFocus RPC.
+	ChatServiceSetChatFocusProcedure = "/coagent.v1.ChatService/SetChatFocus"
+	// ChatServiceResetChatFocusProcedure is the procedure name of the ChatService's ResetChatFocus RPC.
+	ChatServiceResetChatFocusProcedure = "/coagent.v1.ChatService/ResetChatFocus"
+	// DiscoveryServiceListModelsProcedure is the procedure name of the DiscoveryService's ListModels
+	// RPC.
+	DiscoveryServiceListModelsProcedure = "/coagent.v1.DiscoveryService/ListModels"
+	// DiscoveryServiceListSkillsProcedure is the procedure name of the DiscoveryService's ListSkills
+	// RPC.
+	DiscoveryServiceListSkillsProcedure = "/coagent.v1.DiscoveryService/ListSkills"
+	// DiscoveryServiceListProjectsProcedure is the procedure name of the DiscoveryService's
+	// ListProjects RPC.
+	DiscoveryServiceListProjectsProcedure = "/coagent.v1.DiscoveryService/ListProjects"
+	// DiscoveryServiceListSpawnFavoritesProcedure is the procedure name of the DiscoveryService's
+	// ListSpawnFavorites RPC.
+	DiscoveryServiceListSpawnFavoritesProcedure = "/coagent.v1.DiscoveryService/ListSpawnFavorites"
+	// DiscoveryServiceCreateProjectProcedure is the procedure name of the DiscoveryService's
+	// CreateProject RPC.
+	DiscoveryServiceCreateProjectProcedure = "/coagent.v1.DiscoveryService/CreateProject"
 )
 
 var (
@@ -50,6 +111,55 @@ var (
 			Procedure:  SessionServiceSendInputProcedure,
 		}
 	})
+	sessionServiceListSessionsSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_coagent_v1_coagent_proto.Services().ByName("SessionService").Methods().ByName("ListSessions"),
+			Procedure:  SessionServiceListSessionsProcedure,
+		}
+	})
+	sessionServiceListSessionDetailsSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_coagent_v1_coagent_proto.Services().ByName("SessionService").Methods().ByName("ListSessionDetails"),
+			Procedure:  SessionServiceListSessionDetailsProcedure,
+		}
+	})
+	sessionServiceGetSessionKilledSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_coagent_v1_coagent_proto.Services().ByName("SessionService").Methods().ByName("GetSessionKilled"),
+			Procedure:  SessionServiceGetSessionKilledProcedure,
+		}
+	})
+	sessionServiceSetSessionModelSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_coagent_v1_coagent_proto.Services().ByName("SessionService").Methods().ByName("SetSessionModel"),
+			Procedure:  SessionServiceSetSessionModelProcedure,
+		}
+	})
+	sessionServiceSetSessionTitleSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_coagent_v1_coagent_proto.Services().ByName("SessionService").Methods().ByName("SetSessionTitle"),
+			Procedure:  SessionServiceSetSessionTitleProcedure,
+		}
+	})
+	sessionServiceGetOrchestratorSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_coagent_v1_coagent_proto.Services().ByName("SessionService").Methods().ByName("GetOrchestrator"),
+			Procedure:  SessionServiceGetOrchestratorProcedure,
+		}
+	})
+	sessionServiceSetOrchestratorSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_coagent_v1_coagent_proto.Services().ByName("SessionService").Methods().ByName("SetOrchestrator"),
+			Procedure:  SessionServiceSetOrchestratorProcedure,
+		}
+	})
 )
 
 // SessionServiceClient is a client for the coagent.v1.SessionService service.
@@ -61,6 +171,20 @@ type SessionServiceClient interface {
 	// already replaced the root clears its successor. A replaced root resolves to its successor;
 	// address the newest session_id received.
 	SendInput(context.Context, *v1.SendInputRequest) (*v1.SendInputResponse, error)
+	// ListSessions lists the caller's live roots, newest activity first.
+	ListSessions(context.Context, *v1.ListSessionsRequest) (*v1.ListSessionsResponse, error)
+	// ListSessionDetails lists every root the caller owns, killed ones included.
+	ListSessionDetails(context.Context, *v1.ListSessionDetailsRequest) (*v1.ListSessionDetailsResponse, error)
+	// GetSessionKilled reports whether an owned root has been killed.
+	GetSessionKilled(context.Context, *v1.GetSessionKilledRequest) (*v1.GetSessionKilledResponse, error)
+	// SetSessionModel switches an owned root's model and reasoning effort.
+	SetSessionModel(context.Context, *v1.SetSessionModelRequest) (*v1.SetSessionModelResponse, error)
+	// SetSessionTitle renames a live owned root.
+	SetSessionTitle(context.Context, *v1.SetSessionTitleRequest) (*v1.SetSessionTitleResponse, error)
+	// GetOrchestrator reports whether a live owned root has orchestrator mode.
+	GetOrchestrator(context.Context, *v1.GetOrchestratorRequest) (*v1.GetOrchestratorResponse, error)
+	// SetOrchestrator turns orchestrator mode on or off for a live owned root.
+	SetOrchestrator(context.Context, *v1.SetOrchestratorRequest) (*v1.SetOrchestratorResponse, error)
 }
 
 // NewSessionServiceClient constructs a client for the coagent.v1.SessionService service. Multiple
@@ -78,6 +202,20 @@ type SessionServiceHandler interface {
 	// already replaced the root clears its successor. A replaced root resolves to its successor;
 	// address the newest session_id received.
 	SendInput(context.Context, *v1.SendInputRequest) (*v1.SendInputResponse, error)
+	// ListSessions lists the caller's live roots, newest activity first.
+	ListSessions(context.Context, *v1.ListSessionsRequest) (*v1.ListSessionsResponse, error)
+	// ListSessionDetails lists every root the caller owns, killed ones included.
+	ListSessionDetails(context.Context, *v1.ListSessionDetailsRequest) (*v1.ListSessionDetailsResponse, error)
+	// GetSessionKilled reports whether an owned root has been killed.
+	GetSessionKilled(context.Context, *v1.GetSessionKilledRequest) (*v1.GetSessionKilledResponse, error)
+	// SetSessionModel switches an owned root's model and reasoning effort.
+	SetSessionModel(context.Context, *v1.SetSessionModelRequest) (*v1.SetSessionModelResponse, error)
+	// SetSessionTitle renames a live owned root.
+	SetSessionTitle(context.Context, *v1.SetSessionTitleRequest) (*v1.SetSessionTitleResponse, error)
+	// GetOrchestrator reports whether a live owned root has orchestrator mode.
+	GetOrchestrator(context.Context, *v1.GetOrchestratorRequest) (*v1.GetOrchestratorResponse, error)
+	// SetOrchestrator turns orchestrator mode on or off for a live owned root.
+	SetOrchestrator(context.Context, *v1.SetOrchestratorRequest) (*v1.SetOrchestratorResponse, error)
 }
 
 // RegisterSessionServiceHandler registers svc as the coagent.v1.SessionService implementation on
@@ -87,6 +225,13 @@ func RegisterSessionServiceHandler(server *connect.Server, svc SessionServiceHan
 	server.Register(
 		connect.Method{Spec: sessionServiceCreateSessionSpec(), Handler: adapter.createSession},
 		connect.Method{Spec: sessionServiceSendInputSpec(), Handler: adapter.sendInput},
+		connect.Method{Spec: sessionServiceListSessionsSpec(), Handler: adapter.listSessions},
+		connect.Method{Spec: sessionServiceListSessionDetailsSpec(), Handler: adapter.listSessionDetails},
+		connect.Method{Spec: sessionServiceGetSessionKilledSpec(), Handler: adapter.getSessionKilled},
+		connect.Method{Spec: sessionServiceSetSessionModelSpec(), Handler: adapter.setSessionModel},
+		connect.Method{Spec: sessionServiceSetSessionTitleSpec(), Handler: adapter.setSessionTitle},
+		connect.Method{Spec: sessionServiceGetOrchestratorSpec(), Handler: adapter.getOrchestrator},
+		connect.Method{Spec: sessionServiceSetOrchestratorSpec(), Handler: adapter.setOrchestrator},
 	)
 }
 
@@ -99,6 +244,34 @@ func (UnimplementedSessionServiceHandler) CreateSession(context.Context, *v1.Cre
 
 func (UnimplementedSessionServiceHandler) SendInput(context.Context, *v1.SendInputRequest) (*v1.SendInputResponse, error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, "coagent.v1.SessionService.SendInput is not implemented")
+}
+
+func (UnimplementedSessionServiceHandler) ListSessions(context.Context, *v1.ListSessionsRequest) (*v1.ListSessionsResponse, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "coagent.v1.SessionService.ListSessions is not implemented")
+}
+
+func (UnimplementedSessionServiceHandler) ListSessionDetails(context.Context, *v1.ListSessionDetailsRequest) (*v1.ListSessionDetailsResponse, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "coagent.v1.SessionService.ListSessionDetails is not implemented")
+}
+
+func (UnimplementedSessionServiceHandler) GetSessionKilled(context.Context, *v1.GetSessionKilledRequest) (*v1.GetSessionKilledResponse, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "coagent.v1.SessionService.GetSessionKilled is not implemented")
+}
+
+func (UnimplementedSessionServiceHandler) SetSessionModel(context.Context, *v1.SetSessionModelRequest) (*v1.SetSessionModelResponse, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "coagent.v1.SessionService.SetSessionModel is not implemented")
+}
+
+func (UnimplementedSessionServiceHandler) SetSessionTitle(context.Context, *v1.SetSessionTitleRequest) (*v1.SetSessionTitleResponse, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "coagent.v1.SessionService.SetSessionTitle is not implemented")
+}
+
+func (UnimplementedSessionServiceHandler) GetOrchestrator(context.Context, *v1.GetOrchestratorRequest) (*v1.GetOrchestratorResponse, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "coagent.v1.SessionService.GetOrchestrator is not implemented")
+}
+
+func (UnimplementedSessionServiceHandler) SetOrchestrator(context.Context, *v1.SetOrchestratorRequest) (*v1.SetOrchestratorResponse, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "coagent.v1.SessionService.SetOrchestrator is not implemented")
 }
 
 type sessionServiceClient struct {
@@ -116,6 +289,62 @@ func (c *sessionServiceClient) CreateSession(ctx context.Context, req *v1.Create
 func (c *sessionServiceClient) SendInput(ctx context.Context, req *v1.SendInputRequest) (*v1.SendInputResponse, error) {
 	var res v1.SendInputResponse
 	if err := c.client.CallUnary(ctx, sessionServiceSendInputSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *sessionServiceClient) ListSessions(ctx context.Context, req *v1.ListSessionsRequest) (*v1.ListSessionsResponse, error) {
+	var res v1.ListSessionsResponse
+	if err := c.client.CallUnary(ctx, sessionServiceListSessionsSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *sessionServiceClient) ListSessionDetails(ctx context.Context, req *v1.ListSessionDetailsRequest) (*v1.ListSessionDetailsResponse, error) {
+	var res v1.ListSessionDetailsResponse
+	if err := c.client.CallUnary(ctx, sessionServiceListSessionDetailsSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *sessionServiceClient) GetSessionKilled(ctx context.Context, req *v1.GetSessionKilledRequest) (*v1.GetSessionKilledResponse, error) {
+	var res v1.GetSessionKilledResponse
+	if err := c.client.CallUnary(ctx, sessionServiceGetSessionKilledSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *sessionServiceClient) SetSessionModel(ctx context.Context, req *v1.SetSessionModelRequest) (*v1.SetSessionModelResponse, error) {
+	var res v1.SetSessionModelResponse
+	if err := c.client.CallUnary(ctx, sessionServiceSetSessionModelSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *sessionServiceClient) SetSessionTitle(ctx context.Context, req *v1.SetSessionTitleRequest) (*v1.SetSessionTitleResponse, error) {
+	var res v1.SetSessionTitleResponse
+	if err := c.client.CallUnary(ctx, sessionServiceSetSessionTitleSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *sessionServiceClient) GetOrchestrator(ctx context.Context, req *v1.GetOrchestratorRequest) (*v1.GetOrchestratorResponse, error) {
+	var res v1.GetOrchestratorResponse
+	if err := c.client.CallUnary(ctx, sessionServiceGetOrchestratorSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *sessionServiceClient) SetOrchestrator(ctx context.Context, req *v1.SetOrchestratorRequest) (*v1.SetOrchestratorResponse, error) {
+	var res v1.SetOrchestratorResponse
+	if err := c.client.CallUnary(ctx, sessionServiceSetOrchestratorSpec(), req, &res); err != nil {
 		return nil, err
 	}
 	return &res, nil
@@ -147,12 +376,117 @@ func (h sessionServiceHandler) sendInput(ctx context.Context, _ connect.Spec, st
 	return stream.Send(res)
 }
 
+func (h sessionServiceHandler) listSessions(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.ListSessionsRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.ListSessions(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
+}
+
+func (h sessionServiceHandler) listSessionDetails(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.ListSessionDetailsRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.ListSessionDetails(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
+}
+
+func (h sessionServiceHandler) getSessionKilled(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.GetSessionKilledRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.GetSessionKilled(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
+}
+
+func (h sessionServiceHandler) setSessionModel(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.SetSessionModelRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.SetSessionModel(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
+}
+
+func (h sessionServiceHandler) setSessionTitle(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.SetSessionTitleRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.SetSessionTitle(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
+}
+
+func (h sessionServiceHandler) getOrchestrator(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.GetOrchestratorRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.GetOrchestrator(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
+}
+
+func (h sessionServiceHandler) setOrchestrator(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.SetOrchestratorRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.SetOrchestrator(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
+}
+
 var (
 	outputServiceTailOutputSpec = sync.OnceValue(func() connect.Spec {
 		return connect.Spec{
 			StreamType: connect.StreamTypeServer,
 			Schema:     v1.File_coagent_v1_coagent_proto.Services().ByName("OutputService").Methods().ByName("TailOutput"),
 			Procedure:  OutputServiceTailOutputProcedure,
+		}
+	})
+	outputServiceListOutputSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_coagent_v1_coagent_proto.Services().ByName("OutputService").Methods().ByName("ListOutput"),
+			Procedure:  OutputServiceListOutputProcedure,
+		}
+	})
+	outputServiceReadEntrySpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_coagent_v1_coagent_proto.Services().ByName("OutputService").Methods().ByName("ReadEntry"),
+			Procedure:  OutputServiceReadEntryProcedure,
+		}
+	})
+	outputServiceWatchSessionsSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeServer,
+			Schema:     v1.File_coagent_v1_coagent_proto.Services().ByName("OutputService").Methods().ByName("WatchSessions"),
+			Procedure:  OutputServiceWatchSessionsProcedure,
 		}
 	})
 )
@@ -163,6 +497,14 @@ type OutputServiceClient interface {
 	// replacements. It ends without error only after a killed root's last row. On UNAVAILABLE or a
 	// transport error, call it again with the session_id and id of the last row received.
 	TailOutput(context.Context, *v1.TailOutputRequest) (OutputServiceTailOutputClientStream, error)
+	// ListOutput returns up to limit rows of a root above after_id, oldest first.
+	ListOutput(context.Context, *v1.ListOutputRequest) (*v1.ListOutputResponse, error)
+	// ReadEntry returns a root's newest renderable rows and its newest output id from one read.
+	ReadEntry(context.Context, *v1.ReadEntryRequest) (*v1.ReadEntryResponse, error)
+	// WatchSessions streams wake hints for the caller's roots. The first event, with session_id 0, means the
+	// subscription is live: state read after it misses no later change. Events carry no content and may be
+	// dropped under load; re-read state on any event and periodically.
+	WatchSessions(context.Context, *v1.WatchSessionsRequest) (OutputServiceWatchSessionsClientStream, error)
 }
 
 // NewOutputServiceClient constructs a client for the coagent.v1.OutputService service. Multiple
@@ -191,12 +533,41 @@ func (s OutputServiceTailOutputClientStream) Close() error {
 	return s.stream.Close()
 }
 
+// OutputServiceWatchSessionsClientStream is the client stream for the OutputService's WatchSessions
+// RPC.
+type OutputServiceWatchSessionsClientStream struct {
+	stream connect.ClientStream
+}
+
+// Receive returns the next response message from the server.
+func (s OutputServiceWatchSessionsClientStream) Receive() (*v1.WatchSessionsResponse, error) {
+	var res v1.WatchSessionsResponse
+	if err := s.stream.Receive(&res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+// Close releases the stream's resources. It is idempotent and is typically deferred to clean up a
+// stream abandoned before io.EOF.
+func (s OutputServiceWatchSessionsClientStream) Close() error {
+	return s.stream.Close()
+}
+
 // OutputServiceHandler is an implementation of the coagent.v1.OutputService service.
 type OutputServiceHandler interface {
 	// TailOutput streams a root's rows above after_id, then follows live, continuing through /clear
 	// replacements. It ends without error only after a killed root's last row. On UNAVAILABLE or a
 	// transport error, call it again with the session_id and id of the last row received.
 	TailOutput(context.Context, *v1.TailOutputRequest, OutputServiceTailOutputServerStream) error
+	// ListOutput returns up to limit rows of a root above after_id, oldest first.
+	ListOutput(context.Context, *v1.ListOutputRequest) (*v1.ListOutputResponse, error)
+	// ReadEntry returns a root's newest renderable rows and its newest output id from one read.
+	ReadEntry(context.Context, *v1.ReadEntryRequest) (*v1.ReadEntryResponse, error)
+	// WatchSessions streams wake hints for the caller's roots. The first event, with session_id 0, means the
+	// subscription is live: state read after it misses no later change. Events carry no content and may be
+	// dropped under load; re-read state on any event and periodically.
+	WatchSessions(context.Context, *v1.WatchSessionsRequest, OutputServiceWatchSessionsServerStream) error
 }
 
 // RegisterOutputServiceHandler registers svc as the coagent.v1.OutputService implementation on
@@ -205,6 +576,9 @@ func RegisterOutputServiceHandler(server *connect.Server, svc OutputServiceHandl
 	adapter := outputServiceHandler{svc: svc}
 	server.Register(
 		connect.Method{Spec: outputServiceTailOutputSpec(), Handler: adapter.tailOutput},
+		connect.Method{Spec: outputServiceListOutputSpec(), Handler: adapter.listOutput},
+		connect.Method{Spec: outputServiceReadEntrySpec(), Handler: adapter.readEntry},
+		connect.Method{Spec: outputServiceWatchSessionsSpec(), Handler: adapter.watchSessions},
 	)
 }
 
@@ -223,11 +597,39 @@ func (s OutputServiceTailOutputServerStream) Send(res *v1.TailOutputResponse) er
 	return s.stream.Send(res)
 }
 
+// OutputServiceWatchSessionsServerStream is the server stream for the OutputService's WatchSessions
+// RPC.
+type OutputServiceWatchSessionsServerStream struct {
+	stream connect.ServerStream
+}
+
+// SendHeaders flushes the response headers without a message. The first Send does this implicitly.
+func (s OutputServiceWatchSessionsServerStream) SendHeaders() error {
+	return s.stream.SendHeaders()
+}
+
+// Send sends a response message to the client.
+func (s OutputServiceWatchSessionsServerStream) Send(res *v1.WatchSessionsResponse) error {
+	return s.stream.Send(res)
+}
+
 // UnimplementedOutputServiceHandler returns CodeUnimplemented from all methods.
 type UnimplementedOutputServiceHandler struct{}
 
 func (UnimplementedOutputServiceHandler) TailOutput(context.Context, *v1.TailOutputRequest, OutputServiceTailOutputServerStream) error {
 	return connect.NewError(connect.CodeUnimplemented, "coagent.v1.OutputService.TailOutput is not implemented")
+}
+
+func (UnimplementedOutputServiceHandler) ListOutput(context.Context, *v1.ListOutputRequest) (*v1.ListOutputResponse, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "coagent.v1.OutputService.ListOutput is not implemented")
+}
+
+func (UnimplementedOutputServiceHandler) ReadEntry(context.Context, *v1.ReadEntryRequest) (*v1.ReadEntryResponse, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "coagent.v1.OutputService.ReadEntry is not implemented")
+}
+
+func (UnimplementedOutputServiceHandler) WatchSessions(context.Context, *v1.WatchSessionsRequest, OutputServiceWatchSessionsServerStream) error {
+	return connect.NewError(connect.CodeUnimplemented, "coagent.v1.OutputService.WatchSessions is not implemented")
 }
 
 type outputServiceClient struct {
@@ -242,6 +644,30 @@ func (c *outputServiceClient) TailOutput(ctx context.Context, req *v1.TailOutput
 	return OutputServiceTailOutputClientStream{stream: stream}, nil
 }
 
+func (c *outputServiceClient) ListOutput(ctx context.Context, req *v1.ListOutputRequest) (*v1.ListOutputResponse, error) {
+	var res v1.ListOutputResponse
+	if err := c.client.CallUnary(ctx, outputServiceListOutputSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *outputServiceClient) ReadEntry(ctx context.Context, req *v1.ReadEntryRequest) (*v1.ReadEntryResponse, error) {
+	var res v1.ReadEntryResponse
+	if err := c.client.CallUnary(ctx, outputServiceReadEntrySpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *outputServiceClient) WatchSessions(ctx context.Context, req *v1.WatchSessionsRequest) (OutputServiceWatchSessionsClientStream, error) {
+	stream, err := c.client.CallServerStream(ctx, outputServiceWatchSessionsSpec(), req)
+	if err != nil {
+		return OutputServiceWatchSessionsClientStream{}, err
+	}
+	return OutputServiceWatchSessionsClientStream{stream: stream}, nil
+}
+
 type outputServiceHandler struct{ svc OutputServiceHandler }
 
 func (h outputServiceHandler) tailOutput(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
@@ -250,4 +676,535 @@ func (h outputServiceHandler) tailOutput(ctx context.Context, _ connect.Spec, st
 		return err
 	}
 	return h.svc.TailOutput(ctx, &req, OutputServiceTailOutputServerStream{stream: stream})
+}
+
+func (h outputServiceHandler) listOutput(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.ListOutputRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.ListOutput(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
+}
+
+func (h outputServiceHandler) readEntry(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.ReadEntryRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.ReadEntry(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
+}
+
+func (h outputServiceHandler) watchSessions(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.WatchSessionsRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	return h.svc.WatchSessions(ctx, &req, OutputServiceWatchSessionsServerStream{stream: stream})
+}
+
+var (
+	chatServiceBindChatSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_coagent_v1_coagent_proto.Services().ByName("ChatService").Methods().ByName("BindChat"),
+			Procedure:  ChatServiceBindChatProcedure,
+		}
+	})
+	chatServiceGetChatFocusSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_coagent_v1_coagent_proto.Services().ByName("ChatService").Methods().ByName("GetChatFocus"),
+			Procedure:  ChatServiceGetChatFocusProcedure,
+		}
+	})
+	chatServiceGetChatCursorSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_coagent_v1_coagent_proto.Services().ByName("ChatService").Methods().ByName("GetChatCursor"),
+			Procedure:  ChatServiceGetChatCursorProcedure,
+		}
+	})
+	chatServiceEnterChatSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_coagent_v1_coagent_proto.Services().ByName("ChatService").Methods().ByName("EnterChat"),
+			Procedure:  ChatServiceEnterChatProcedure,
+		}
+	})
+	chatServiceAdvanceChatSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_coagent_v1_coagent_proto.Services().ByName("ChatService").Methods().ByName("AdvanceChat"),
+			Procedure:  ChatServiceAdvanceChatProcedure,
+		}
+	})
+	chatServiceSetChatFocusSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_coagent_v1_coagent_proto.Services().ByName("ChatService").Methods().ByName("SetChatFocus"),
+			Procedure:  ChatServiceSetChatFocusProcedure,
+		}
+	})
+	chatServiceResetChatFocusSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_coagent_v1_coagent_proto.Services().ByName("ChatService").Methods().ByName("ResetChatFocus"),
+			Procedure:  ChatServiceResetChatFocusProcedure,
+		}
+	})
+)
+
+// ChatServiceClient is a client for the coagent.v1.ChatService service.
+type ChatServiceClient interface {
+	// BindChat creates the chat's row and leaves an existing focus and cursor untouched.
+	BindChat(context.Context, *v1.BindChatRequest) (*v1.BindChatResponse, error)
+	// GetChatFocus returns the focused root, or 0 when no root is in focus.
+	GetChatFocus(context.Context, *v1.GetChatFocusRequest) (*v1.GetChatFocusResponse, error)
+	// GetChatCursor returns the focus, the cursor, and whether the focus's entry has been acknowledged.
+	GetChatCursor(context.Context, *v1.GetChatCursorRequest) (*v1.GetChatCursorResponse, error)
+	// EnterChat acknowledges entry at newest_id while session_id is the focus and entry is still owed.
+	EnterChat(context.Context, *v1.EnterChatRequest) (*v1.EnterChatResponse, error)
+	// AdvanceChat moves the cursor to output_id while session_id is the entered focus and the cursor is below it.
+	AdvanceChat(context.Context, *v1.AdvanceChatRequest) (*v1.AdvanceChatResponse, error)
+	// SetChatFocus focuses a live owned root and resets the cursor, so entry is owed.
+	SetChatFocus(context.Context, *v1.SetChatFocusRequest) (*v1.SetChatFocusResponse, error)
+	// ResetChatFocus clears the focus and cursor while the focus is still from_session_id.
+	ResetChatFocus(context.Context, *v1.ResetChatFocusRequest) (*v1.ResetChatFocusResponse, error)
+}
+
+// NewChatServiceClient constructs a client for the coagent.v1.ChatService service. Multiple service
+// clients may share a single connect.Client.
+func NewChatServiceClient(client *connect.Client) ChatServiceClient {
+	return &chatServiceClient{client: client}
+}
+
+// ChatServiceHandler is an implementation of the coagent.v1.ChatService service.
+type ChatServiceHandler interface {
+	// BindChat creates the chat's row and leaves an existing focus and cursor untouched.
+	BindChat(context.Context, *v1.BindChatRequest) (*v1.BindChatResponse, error)
+	// GetChatFocus returns the focused root, or 0 when no root is in focus.
+	GetChatFocus(context.Context, *v1.GetChatFocusRequest) (*v1.GetChatFocusResponse, error)
+	// GetChatCursor returns the focus, the cursor, and whether the focus's entry has been acknowledged.
+	GetChatCursor(context.Context, *v1.GetChatCursorRequest) (*v1.GetChatCursorResponse, error)
+	// EnterChat acknowledges entry at newest_id while session_id is the focus and entry is still owed.
+	EnterChat(context.Context, *v1.EnterChatRequest) (*v1.EnterChatResponse, error)
+	// AdvanceChat moves the cursor to output_id while session_id is the entered focus and the cursor is below it.
+	AdvanceChat(context.Context, *v1.AdvanceChatRequest) (*v1.AdvanceChatResponse, error)
+	// SetChatFocus focuses a live owned root and resets the cursor, so entry is owed.
+	SetChatFocus(context.Context, *v1.SetChatFocusRequest) (*v1.SetChatFocusResponse, error)
+	// ResetChatFocus clears the focus and cursor while the focus is still from_session_id.
+	ResetChatFocus(context.Context, *v1.ResetChatFocusRequest) (*v1.ResetChatFocusResponse, error)
+}
+
+// RegisterChatServiceHandler registers svc as the coagent.v1.ChatService implementation on server.
+func RegisterChatServiceHandler(server *connect.Server, svc ChatServiceHandler) {
+	adapter := chatServiceHandler{svc: svc}
+	server.Register(
+		connect.Method{Spec: chatServiceBindChatSpec(), Handler: adapter.bindChat},
+		connect.Method{Spec: chatServiceGetChatFocusSpec(), Handler: adapter.getChatFocus},
+		connect.Method{Spec: chatServiceGetChatCursorSpec(), Handler: adapter.getChatCursor},
+		connect.Method{Spec: chatServiceEnterChatSpec(), Handler: adapter.enterChat},
+		connect.Method{Spec: chatServiceAdvanceChatSpec(), Handler: adapter.advanceChat},
+		connect.Method{Spec: chatServiceSetChatFocusSpec(), Handler: adapter.setChatFocus},
+		connect.Method{Spec: chatServiceResetChatFocusSpec(), Handler: adapter.resetChatFocus},
+	)
+}
+
+// UnimplementedChatServiceHandler returns CodeUnimplemented from all methods.
+type UnimplementedChatServiceHandler struct{}
+
+func (UnimplementedChatServiceHandler) BindChat(context.Context, *v1.BindChatRequest) (*v1.BindChatResponse, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "coagent.v1.ChatService.BindChat is not implemented")
+}
+
+func (UnimplementedChatServiceHandler) GetChatFocus(context.Context, *v1.GetChatFocusRequest) (*v1.GetChatFocusResponse, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "coagent.v1.ChatService.GetChatFocus is not implemented")
+}
+
+func (UnimplementedChatServiceHandler) GetChatCursor(context.Context, *v1.GetChatCursorRequest) (*v1.GetChatCursorResponse, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "coagent.v1.ChatService.GetChatCursor is not implemented")
+}
+
+func (UnimplementedChatServiceHandler) EnterChat(context.Context, *v1.EnterChatRequest) (*v1.EnterChatResponse, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "coagent.v1.ChatService.EnterChat is not implemented")
+}
+
+func (UnimplementedChatServiceHandler) AdvanceChat(context.Context, *v1.AdvanceChatRequest) (*v1.AdvanceChatResponse, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "coagent.v1.ChatService.AdvanceChat is not implemented")
+}
+
+func (UnimplementedChatServiceHandler) SetChatFocus(context.Context, *v1.SetChatFocusRequest) (*v1.SetChatFocusResponse, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "coagent.v1.ChatService.SetChatFocus is not implemented")
+}
+
+func (UnimplementedChatServiceHandler) ResetChatFocus(context.Context, *v1.ResetChatFocusRequest) (*v1.ResetChatFocusResponse, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "coagent.v1.ChatService.ResetChatFocus is not implemented")
+}
+
+type chatServiceClient struct {
+	client *connect.Client
+}
+
+func (c *chatServiceClient) BindChat(ctx context.Context, req *v1.BindChatRequest) (*v1.BindChatResponse, error) {
+	var res v1.BindChatResponse
+	if err := c.client.CallUnary(ctx, chatServiceBindChatSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *chatServiceClient) GetChatFocus(ctx context.Context, req *v1.GetChatFocusRequest) (*v1.GetChatFocusResponse, error) {
+	var res v1.GetChatFocusResponse
+	if err := c.client.CallUnary(ctx, chatServiceGetChatFocusSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *chatServiceClient) GetChatCursor(ctx context.Context, req *v1.GetChatCursorRequest) (*v1.GetChatCursorResponse, error) {
+	var res v1.GetChatCursorResponse
+	if err := c.client.CallUnary(ctx, chatServiceGetChatCursorSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *chatServiceClient) EnterChat(ctx context.Context, req *v1.EnterChatRequest) (*v1.EnterChatResponse, error) {
+	var res v1.EnterChatResponse
+	if err := c.client.CallUnary(ctx, chatServiceEnterChatSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *chatServiceClient) AdvanceChat(ctx context.Context, req *v1.AdvanceChatRequest) (*v1.AdvanceChatResponse, error) {
+	var res v1.AdvanceChatResponse
+	if err := c.client.CallUnary(ctx, chatServiceAdvanceChatSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *chatServiceClient) SetChatFocus(ctx context.Context, req *v1.SetChatFocusRequest) (*v1.SetChatFocusResponse, error) {
+	var res v1.SetChatFocusResponse
+	if err := c.client.CallUnary(ctx, chatServiceSetChatFocusSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *chatServiceClient) ResetChatFocus(ctx context.Context, req *v1.ResetChatFocusRequest) (*v1.ResetChatFocusResponse, error) {
+	var res v1.ResetChatFocusResponse
+	if err := c.client.CallUnary(ctx, chatServiceResetChatFocusSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+type chatServiceHandler struct{ svc ChatServiceHandler }
+
+func (h chatServiceHandler) bindChat(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.BindChatRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.BindChat(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
+}
+
+func (h chatServiceHandler) getChatFocus(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.GetChatFocusRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.GetChatFocus(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
+}
+
+func (h chatServiceHandler) getChatCursor(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.GetChatCursorRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.GetChatCursor(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
+}
+
+func (h chatServiceHandler) enterChat(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.EnterChatRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.EnterChat(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
+}
+
+func (h chatServiceHandler) advanceChat(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.AdvanceChatRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.AdvanceChat(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
+}
+
+func (h chatServiceHandler) setChatFocus(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.SetChatFocusRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.SetChatFocus(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
+}
+
+func (h chatServiceHandler) resetChatFocus(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.ResetChatFocusRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.ResetChatFocus(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
+}
+
+var (
+	discoveryServiceListModelsSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_coagent_v1_coagent_proto.Services().ByName("DiscoveryService").Methods().ByName("ListModels"),
+			Procedure:  DiscoveryServiceListModelsProcedure,
+		}
+	})
+	discoveryServiceListSkillsSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_coagent_v1_coagent_proto.Services().ByName("DiscoveryService").Methods().ByName("ListSkills"),
+			Procedure:  DiscoveryServiceListSkillsProcedure,
+		}
+	})
+	discoveryServiceListProjectsSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_coagent_v1_coagent_proto.Services().ByName("DiscoveryService").Methods().ByName("ListProjects"),
+			Procedure:  DiscoveryServiceListProjectsProcedure,
+		}
+	})
+	discoveryServiceListSpawnFavoritesSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_coagent_v1_coagent_proto.Services().ByName("DiscoveryService").Methods().ByName("ListSpawnFavorites"),
+			Procedure:  DiscoveryServiceListSpawnFavoritesProcedure,
+		}
+	})
+	discoveryServiceCreateProjectSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_coagent_v1_coagent_proto.Services().ByName("DiscoveryService").Methods().ByName("CreateProject"),
+			Procedure:  DiscoveryServiceCreateProjectProcedure,
+		}
+	})
+)
+
+// DiscoveryServiceClient is a client for the coagent.v1.DiscoveryService service.
+type DiscoveryServiceClient interface {
+	// ListModels lists the configured models.
+	ListModels(context.Context, *v1.ListModelsRequest) (*v1.ListModelsResponse, error)
+	// ListSkills lists the skills available to an owned root.
+	ListSkills(context.Context, *v1.ListSkillsRequest) (*v1.ListSkillsResponse, error)
+	// ListProjects lists the daemon-managed projects, most recently active first.
+	ListProjects(context.Context, *v1.ListProjectsRequest) (*v1.ListProjectsResponse, error)
+	// ListSpawnFavorites lists the configured favorite project paths.
+	ListSpawnFavorites(context.Context, *v1.ListSpawnFavoritesRequest) (*v1.ListSpawnFavoritesResponse, error)
+	// CreateProject creates a folder project under the projects root, or opens an existing one.
+	CreateProject(context.Context, *v1.CreateProjectRequest) (*v1.CreateProjectResponse, error)
+}
+
+// NewDiscoveryServiceClient constructs a client for the coagent.v1.DiscoveryService service.
+// Multiple service clients may share a single connect.Client.
+func NewDiscoveryServiceClient(client *connect.Client) DiscoveryServiceClient {
+	return &discoveryServiceClient{client: client}
+}
+
+// DiscoveryServiceHandler is an implementation of the coagent.v1.DiscoveryService service.
+type DiscoveryServiceHandler interface {
+	// ListModels lists the configured models.
+	ListModels(context.Context, *v1.ListModelsRequest) (*v1.ListModelsResponse, error)
+	// ListSkills lists the skills available to an owned root.
+	ListSkills(context.Context, *v1.ListSkillsRequest) (*v1.ListSkillsResponse, error)
+	// ListProjects lists the daemon-managed projects, most recently active first.
+	ListProjects(context.Context, *v1.ListProjectsRequest) (*v1.ListProjectsResponse, error)
+	// ListSpawnFavorites lists the configured favorite project paths.
+	ListSpawnFavorites(context.Context, *v1.ListSpawnFavoritesRequest) (*v1.ListSpawnFavoritesResponse, error)
+	// CreateProject creates a folder project under the projects root, or opens an existing one.
+	CreateProject(context.Context, *v1.CreateProjectRequest) (*v1.CreateProjectResponse, error)
+}
+
+// RegisterDiscoveryServiceHandler registers svc as the coagent.v1.DiscoveryService implementation
+// on server.
+func RegisterDiscoveryServiceHandler(server *connect.Server, svc DiscoveryServiceHandler) {
+	adapter := discoveryServiceHandler{svc: svc}
+	server.Register(
+		connect.Method{Spec: discoveryServiceListModelsSpec(), Handler: adapter.listModels},
+		connect.Method{Spec: discoveryServiceListSkillsSpec(), Handler: adapter.listSkills},
+		connect.Method{Spec: discoveryServiceListProjectsSpec(), Handler: adapter.listProjects},
+		connect.Method{Spec: discoveryServiceListSpawnFavoritesSpec(), Handler: adapter.listSpawnFavorites},
+		connect.Method{Spec: discoveryServiceCreateProjectSpec(), Handler: adapter.createProject},
+	)
+}
+
+// UnimplementedDiscoveryServiceHandler returns CodeUnimplemented from all methods.
+type UnimplementedDiscoveryServiceHandler struct{}
+
+func (UnimplementedDiscoveryServiceHandler) ListModels(context.Context, *v1.ListModelsRequest) (*v1.ListModelsResponse, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "coagent.v1.DiscoveryService.ListModels is not implemented")
+}
+
+func (UnimplementedDiscoveryServiceHandler) ListSkills(context.Context, *v1.ListSkillsRequest) (*v1.ListSkillsResponse, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "coagent.v1.DiscoveryService.ListSkills is not implemented")
+}
+
+func (UnimplementedDiscoveryServiceHandler) ListProjects(context.Context, *v1.ListProjectsRequest) (*v1.ListProjectsResponse, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "coagent.v1.DiscoveryService.ListProjects is not implemented")
+}
+
+func (UnimplementedDiscoveryServiceHandler) ListSpawnFavorites(context.Context, *v1.ListSpawnFavoritesRequest) (*v1.ListSpawnFavoritesResponse, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "coagent.v1.DiscoveryService.ListSpawnFavorites is not implemented")
+}
+
+func (UnimplementedDiscoveryServiceHandler) CreateProject(context.Context, *v1.CreateProjectRequest) (*v1.CreateProjectResponse, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "coagent.v1.DiscoveryService.CreateProject is not implemented")
+}
+
+type discoveryServiceClient struct {
+	client *connect.Client
+}
+
+func (c *discoveryServiceClient) ListModels(ctx context.Context, req *v1.ListModelsRequest) (*v1.ListModelsResponse, error) {
+	var res v1.ListModelsResponse
+	if err := c.client.CallUnary(ctx, discoveryServiceListModelsSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *discoveryServiceClient) ListSkills(ctx context.Context, req *v1.ListSkillsRequest) (*v1.ListSkillsResponse, error) {
+	var res v1.ListSkillsResponse
+	if err := c.client.CallUnary(ctx, discoveryServiceListSkillsSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *discoveryServiceClient) ListProjects(ctx context.Context, req *v1.ListProjectsRequest) (*v1.ListProjectsResponse, error) {
+	var res v1.ListProjectsResponse
+	if err := c.client.CallUnary(ctx, discoveryServiceListProjectsSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *discoveryServiceClient) ListSpawnFavorites(ctx context.Context, req *v1.ListSpawnFavoritesRequest) (*v1.ListSpawnFavoritesResponse, error) {
+	var res v1.ListSpawnFavoritesResponse
+	if err := c.client.CallUnary(ctx, discoveryServiceListSpawnFavoritesSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *discoveryServiceClient) CreateProject(ctx context.Context, req *v1.CreateProjectRequest) (*v1.CreateProjectResponse, error) {
+	var res v1.CreateProjectResponse
+	if err := c.client.CallUnary(ctx, discoveryServiceCreateProjectSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+type discoveryServiceHandler struct{ svc DiscoveryServiceHandler }
+
+func (h discoveryServiceHandler) listModels(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.ListModelsRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.ListModels(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
+}
+
+func (h discoveryServiceHandler) listSkills(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.ListSkillsRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.ListSkills(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
+}
+
+func (h discoveryServiceHandler) listProjects(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.ListProjectsRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.ListProjects(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
+}
+
+func (h discoveryServiceHandler) listSpawnFavorites(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.ListSpawnFavoritesRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.ListSpawnFavorites(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
+}
+
+func (h discoveryServiceHandler) createProject(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.CreateProjectRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.CreateProject(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
 }

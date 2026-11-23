@@ -12,9 +12,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/pilat/coagent/api/coagent/v1"
 	"github.com/pilat/coagent/internal/config"
-	"github.com/pilat/coagent/internal/controllerapi"
-	"github.com/pilat/coagent/internal/sessionevent"
 )
 
 const (
@@ -85,21 +84,11 @@ func TestHarnessScenario_ForeignConversationIsNotRenderedInTelegram(t *testing.T
 	var calls []telegramHarnessCall
 	manager := newTelegramHarnessManager(t, &fakeController{}, &calls)
 
-	manager.handleNotification(t.Context(), controllerapi.SessionNotification{
-		SessionID: harnessSessionID,
-		Notification: sessionevent.Notification{
-			Type:       sessionevent.NotifySessionCreated,
-			Name:       "other - 42",
-			WorkDir:    "/tmp/projects/other",
-			Attributes: map[string]any{"manager_id": "telegram-other"},
-		},
+	manager.handleNotification(t.Context(), &coagentv1.WatchSessionsResponse{
+		SessionId: harnessSessionID, Type: coagentv1.SessionEventType_SESSION_EVENT_TYPE_ACTIVITY,
 	})
-	manager.handleNotification(t.Context(), controllerapi.SessionNotification{
-		SessionID: harnessSessionID,
-		Notification: sessionevent.Notification{
-			Type:    sessionevent.NotifyMessage,
-			Message: "✅ configuration answer",
-		},
+	manager.handleNotification(t.Context(), &coagentv1.WatchSessionsResponse{
+		SessionId: harnessSessionID, Type: coagentv1.SessionEventType_SESSION_EVENT_TYPE_ACTIVITY,
 	})
 
 	assert.Empty(t, calls, "a Telegram manager must ignore another manager's conversation")
@@ -180,7 +169,7 @@ func newTelegramHarnessManager(
 	t.Helper()
 	manager, err := New(config.ManagerEntry{
 		ID: "telegram-main", BotToken: "test-token", AllowedUserIDs: []int64{harnessChatID},
-	}, nil, controller)
+	}, nil, servedTransport(t, controller, controller))
 	require.NoError(t, err)
 	manager.httpClient = &http.Client{Transport: telegramHarnessRecorder(t, calls)}
 	return manager

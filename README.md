@@ -113,8 +113,9 @@ built-in tools · MCP servers · skills · subagents
 
 The daemon is the only process-wide owner. It creates isolated sessions, retains
 their tool resources, persists lifecycle state, and routes results to the built-in
-managers. The managers share a private in-process contract; coagent is an
-opinionated product, not an agent framework with a public plugin API.
+managers. The built-in managers reach the daemon through the `coagent.v1` local
+API over an in-process connection. Coagent is an opinionated product, not an agent
+framework with a public plugin API.
 
 ## What it can use
 

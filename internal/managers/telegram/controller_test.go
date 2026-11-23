@@ -275,7 +275,8 @@ func (f *fakeController) ChatSessions(context.Context, string) ([]controllerapi.
 	defer f.mu.Unlock()
 	var rows []controllerapi.ChatSessionInfo
 	for _, session := range f.listSessions {
-		if !isActiveSession(session) || session.Attributes["manager_id"] != f.owner() {
+		if session.KilledAt != nil || session.Status == "terminating" || session.Status == "killed" ||
+			session.Attributes["manager_id"] != f.owner() {
 			continue
 		}
 		rows = append(rows, controllerapi.ChatSessionInfo{ID: session.ID, Name: session.Name})

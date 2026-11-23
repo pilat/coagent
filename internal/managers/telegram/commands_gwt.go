@@ -4,7 +4,7 @@ import (
 	"context"
 	"strings"
 
-	"github.com/pilat/coagent/internal/controllerapi"
+	"github.com/pilat/coagent/api/coagent/v1"
 )
 
 func parseGwtCommand(text string) (string, bool) {
@@ -36,8 +36,8 @@ func (m *Manager) handleGWT(ctx context.Context, sessionID int64, name string) {
 		return
 	}
 
-	m.createAndSwitch(ctx, commandGWT, controllerapi.SessionCreateData{
-		WorkDir: workDir, WorktreeName: name, Attributes: map[string]any{"channel": telegramChannel},
+	m.createAndSwitch(ctx, commandGWT, &coagentv1.CreateSessionRequest{
+		WorkDir: workDir, WorktreeName: name,
 	})
 }
 
@@ -50,16 +50,16 @@ func (m *Manager) workDirBySessionID(ctx context.Context, sessionID int64) (stri
 		return workDir, true
 	}
 
-	sessions, err := m.controller.ListSessions(ctx)
+	sessions, err := m.api.sessions.ListSessionDetails(ctx, &coagentv1.ListSessionDetailsRequest{})
 	if err != nil {
 		return "", false
 	}
 
-	for _, s := range m.filterOwnedActiveSessions(sessions) {
-		if s.ID == sessionID && s.WorkDir != "" {
-			m.setWorkDir(sessionID, s.WorkDir)
+	for _, s := range m.filterOwnedActiveSessions(sessions.GetSessions()) {
+		if s.GetId() == sessionID && s.GetWorkDir() != "" {
+			m.setWorkDir(sessionID, s.GetWorkDir())
 
-			return s.WorkDir, true
+			return s.GetWorkDir(), true
 		}
 	}
 
