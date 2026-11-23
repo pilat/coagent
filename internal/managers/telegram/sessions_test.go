@@ -2,22 +2,20 @@ package telegram
 
 import (
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 
-	"github.com/pilat/coagent/internal/controllerapi"
+	"github.com/pilat/coagent/api/coagent/v1"
 )
 
 func TestActiveSessionsExcludeKillFencesAndKilledRecords(t *testing.T) {
-	now := time.Now()
 	assert.Equal(t,
-		[]controllerapi.SessionInfo{{ID: 1, Status: "completed"}},
-		filterActiveSessions([]controllerapi.SessionInfo{
-			{ID: 1, Status: "completed"},
-			{ID: 2, Status: "terminating"},
-			{ID: 3, Status: "killed"},
-			{ID: 4, KilledAt: &now},
+		[]*coagentv1.SessionDetails{{Id: 1, Status: "completed"}},
+		filterActiveSessions([]*coagentv1.SessionDetails{
+			{Id: 1, Status: "completed"},
+			{Id: 2, Status: "terminating"},
+			{Id: 3, Status: "killed"},
+			{Id: 4, Killed: true},
 		}),
 	)
 }

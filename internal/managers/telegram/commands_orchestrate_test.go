@@ -2,7 +2,6 @@ package telegram
 
 import (
 	"errors"
-	"strconv"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -38,7 +37,7 @@ func TestOrchestrateCommand(t *testing.T) {
 			m.handleChatText(t.Context(), normalizeTextCommand(tc.input))
 			assert.Equal(t, []string{tc.reply}, messages)
 			assert.Empty(t, ctrl.messageCalls)
-			chat := strconv.FormatInt(harnessChatID, 10)
+			chat := ""
 			if tc.operation == "read" {
 				assert.Equal(t, []orchestratorRead{{chat, tc.focus}}, ctrl.orchestratorReads)
 			} else {

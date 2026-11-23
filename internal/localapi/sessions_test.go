@@ -174,3 +174,17 @@ func TestTailOutput_RejectsMalformedRequests(t *testing.T) {
 		assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
 	}
 }
+
+func TestCreateSession_PassesTheWorktreeName(t *testing.T) {
+	t.Parallel()
+	f := newAPIFixture(t)
+	client := coagentv1connect.NewSessionServiceClient(inProcessClient(t, f, "alpha"))
+	_, err := client.CreateSession(
+		t.Context(),
+		&coagentv1.CreateSessionRequest{WorkDir: t.TempDir(), WorktreeName: "api"},
+	)
+	require.NoError(t, err)
+	f.backend.mu.Lock()
+	defer f.backend.mu.Unlock()
+	assert.Equal(t, []string{"api"}, f.backend.worktrees)
+}

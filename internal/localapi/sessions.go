@@ -32,7 +32,7 @@ func (sessionService) CreateSession(
 	}
 
 	id, err := author.control.CreateSession(ctx, controllerapi.SessionCreateData{
-		WorkDir: req.GetWorkDir(), Model: req.GetModel(),
+		WorkDir: req.GetWorkDir(), Model: req.GetModel(), WorktreeName: req.GetWorktreeName(),
 	})
 	if err != nil {
 		return nil, refusal(ctx, err)

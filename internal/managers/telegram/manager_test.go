@@ -49,9 +49,10 @@ func TestTextPreview(t *testing.T) {
 
 func TestStartDoesNotAnnounceStartup(t *testing.T) {
 	recorder := &delayedTelegramRecorder{}
+	controller := &fakeController{}
 	manager, err := New(config.ManagerEntry{
 		ID: "telegram-main", BotToken: "test-token", AllowedUserIDs: []int64{harnessChatID},
-	}, nil, &fakeController{})
+	}, nil, servedTransport(t, controller, controller))
 	require.NoError(t, err)
 	manager.httpClient = &http.Client{Transport: recorder}
 	require.NoError(t, manager.Start(t.Context()))

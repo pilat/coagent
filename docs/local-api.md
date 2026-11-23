@@ -8,6 +8,8 @@
 It uses HTTP/1.1 and accepts Connect JSON or binary messages and gRPC-Web. There is no TCP listener.
 Unary JSON calls work with `curl`; streams use envelopes and need a Connect, gRPC-Web or `buf curl` client.
 The separate `daemon.sock` still serves only [`coagent status`](control-api.md).
+Built-in managers use the same services over an in-process connection, with the configured manager id as
+author and no socket or token.
 
 ## Clients and tokens
 
@@ -32,13 +34,17 @@ Removing the entry and restarting revokes it. The client owns and sees only the 
 including session commands and `/config`; the host stamps its source and owner, never the request.
 A read-only host mount still permits connecting to a Unix socket, so socket mode alone is no boundary.
 A client's plaintext token file is as readable from the sandbox as any operator credential; with it a
-session can send `/config` to that client's roots and edit config. With the sandbox off, a session already
-has the user's authority. See [ADR-0104](adr/0104-the-local-api-is-the-two-durable-ledgers.md).
+session can send `/config` to that client's roots and edit config, or use the chat, session-setting and
+discovery calls on those roots. With the sandbox off, a session already has the user's authority.
+See [ADR-0104](adr/0104-the-local-api-is-the-two-durable-ledgers.md) and
+[ADR-0105](adr/0105-built-in-managers-are-local-api-clients-in-process.md).
 
 ## Calls
 
-- `SessionService.CreateSession` takes an absolute `work_dir` and optional configured `model` id. It creates
-  an empty root; send the first input separately. Retrying a lost create response can leave an extra empty root.
+- `SessionService.CreateSession` takes an absolute `work_dir`, optional configured `model` id and optional
+  `worktree_name`. A worktree name forks the directory's repository into that named worktree and runs the root
+  there; empty runs in `work_dir`. It creates an empty root; send the first input separately. Retrying a lost
+  create response can leave an extra empty root.
 - `SessionService.SendInput` takes `session_id`, non-blank `text` and a client-chosen `idempotency_key` of
   1–128 bytes. Reuse a key only to retry the same input.
   An accepted send runs to completion even if the client disconnects or its deadline passes. Uniqueness is
@@ -54,6 +60,28 @@ has the user's authority. See [ADR-0104](adr/0104-the-local-api-is-the-two-durab
   for both tail and send: an id 16 or more replacements old stops resolving. Rows a replaced root commits
   after replacement are not streamed. Runtime state is best effort, sent only on change; a missed wake delays
   output until a fallback read. The client holds its cursor; reconnecting does not replay rows at or below it.
+- `SessionService` also serves session reads and settings. `ListSessions` lists the caller's live roots,
+  newest activity first; `ListSessionDetails` lists every owned root, killed ones included;
+  `GetSessionKilled` reports whether an owned root has been killed. `SetSessionModel` switches an owned root's
+  model and reasoning effort; `SetSessionTitle` renames a live owned root. `GetOrchestratorMode` reports whether
+  a live owned root has orchestrator mode; `SetOrchestratorMode` turns it on or off.
+- `OutputService` also serves bounded reads and wake hints. `ListOutput` returns up to `limit` rows of a root
+  above `after_id`, oldest first. `ReadEntry` returns the newest renderable rows and newest output id from one
+  read, oldest first, leaving out `session_opened` and `session_replaced` rows. Both require `limit` in 1–100.
+  `StreamSessionEvents` streams root ids with activity or heartbeat, never content. Its first event is `ACTIVITY`
+  with `session_id` 0: the subscription is live, so state read after it misses no later change. Hints may be
+  dropped under load; re-read state on any event and periodically.
+- `ChatService` keeps one chat's focus and delivery cursor as durable server state. `BindChat` creates its row,
+  preserving an existing focus and cursor. `GetChatFocus` returns the focused root, or 0;
+  `GetChatCursor` returns focus, cursor and whether entry has been acknowledged. `EnterChat` acknowledges entry
+  at `newest_id` while `session_id` is the focus and entry is still owed. `AdvanceChat` moves the cursor to
+  `output_id` while `session_id` is the entered focus and the cursor is below it. `SetChatFocus` focuses a live
+  owned root and resets the cursor, owing entry. `ResetChatFocus` clears focus and cursor while focus is still
+  `from_session_id`.
+- `DiscoveryService` lists what the caller can start work with. `ListModels` lists configured models;
+  `ListSkills` lists skills available to an owned root; `ListProjects` lists daemon-managed projects, most
+  recently active first; `ListSpawnFavorites` lists configured favorite project paths. `CreateProject` creates
+  a folder project under the projects root, or opens an existing one.
 
 ## Errors and retries
 

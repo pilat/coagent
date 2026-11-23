@@ -264,9 +264,8 @@ func (permanentNetworkError) Temporary() bool { return false }
 
 func managerBlockedInPreflight(requestStarted chan<- struct{}) *Manager {
 	return &Manager{
-		id:         "telegram-test",
-		cfg:        config.ManagerEntry{BotToken: "token", AllowedUserIDs: []int64{7}},
-		controller: &fakeController{},
+		id:  "telegram-test",
+		cfg: config.ManagerEntry{BotToken: "token", AllowedUserIDs: []int64{7}},
 		httpClient: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 			select {
 			case requestStarted <- struct{}{}:

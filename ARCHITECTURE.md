@@ -21,16 +21,17 @@ occurrence, and subagent round.
 ## System shape
 
 Coagent is a self-hosted, headless coding agent. One daemon coordinates durable
-state, session lifecycle and admission. It backs the private manager contract
-implemented by `managercontrol`. Domain packages own their ledgers; the daemon
-owns runner capacity counters and quotas. It accepts no network listener.
+state, session lifecycle and admission. It backs the private controller contract
+implemented by `managercontrol` behind the local API server. Domain packages own
+their ledgers; the daemon owns runner capacity counters and quotas. It accepts no
+network listener.
 It listens on two same-user Unix sockets: the control socket, serving the
 read-only status protocol used by `coagent status`, and, when API clients are
 configured, the API socket, serving the `coagent.v1` local API
 ([ADR-0104](docs/adr/0104-the-local-api-is-the-two-durable-ledgers.md)).
 
 ```
-Telegram manager ── controller contract ──────────────────────────────> daemon
+Telegram manager ── coagent.v1 in process ── localapi ── controller ──> daemon
 API client ── coagent.v1 on api.sock ── localapi ── controller ───────┤
 coagent status ── status-only control socket ─────────────────────────┤
                  SQLite <── session lifecycle <── per-task session ───┤
@@ -40,13 +41,14 @@ coagent status ── status-only control socket ──────────�
 A manager submits work as a session. A session owns one agent-loop activation:
 its model client, tool registry, prompt projection, and conversation handling.
 Each manager chat selects one owned root through `/switch`, or has no session
-in focus. Selected roots publish their own messages and tool trails directly.
+in focus. Selected roots' messages and tool trails reach the chat through
+output-log reads.
 The daemon coordinates work that crosses sessions, survives a process restart,
 or needs global admission decisions; the owning domain package retains each
-ledger. Built-in managers and the local API server program against the private
-controller contract, never the daemon implementation. The `coagent.v1` local API
-is the daemon's one public contract; managers and the status protocol are product
-surfaces, and none of them is a plugin API.
+ledger. Built-in managers call `coagent.v1` over an in-process connection; only the
+local API server programs against the private controller contract. The `coagent.v1`
+local API is the daemon's one public contract; managers and the status protocol are
+product surfaces, and none of them is a plugin API.
 
 The composition root is `cmd/coagent`. It constructs dependencies explicitly,
 registers operations before declaring the daemon ready, and stops components in
@@ -70,7 +72,7 @@ does not imply a tier except where it expresses an implementation variant.
 - `internal/config` — typed configuration and secrets resolution policy.
 - `internal/configapply` — activation-gated config read/edit tools, serialized commit claim and restart trigger.
 - `internal/configops` — guarded whole-document configuration staging, backups and the boot-rollback marker.
-- `internal/controllerapi` — private daemon-to-manager contract and DTO vocabulary, also behind the local API server.
+- `internal/controllerapi` — private manager-bound controller contract behind the local API server and shared DTO vocabulary.
 - `internal/ctl` — status-only local control socket, status operation registry and client; owns the same-user Unix socket bind the API socket reuses.
 - `internal/daemon` — runner and tree lifecycle, admission, boot recovery, commands and session-event composition.
 - `internal/git` — Git operations used by repository-facing features.
@@ -81,13 +83,13 @@ does not imply a tier except where it expresses an implementation variant.
 - `internal/llm/llmtest` — test-support oracle for provider transcript validity; imported only by tests, never by a binary.
 - `internal/llmwire` — provider-neutral message, response and tool wire vocabulary.
 - `internal/loader` — project context, skills, subagent definitions and marketplace loading.
-- `internal/localapi` — the `coagent.v1` server on the API socket: bearer-token client authentication, empty-root creation, keyed human input and the output-log tail, each over the client's manager-bound controller.
+- `internal/localapi` — the full `coagent.v1` surface on the API socket and in process, with author authentication and dispatch through the author's manager-bound controller.
 - `internal/logger` — structured logging and registered-secret redaction.
 - `internal/lsp` — language-server process client for code-intelligence tools.
-- `internal/managers` — manager lifecycle coordinator.
-- `internal/managers/telegram` — Telegram manager implementation. Each manager
-  owns one bot account, one chat and polling loop, adapting the focus capability
-  to send-only delivery; failures remain isolated at startup.
+- `internal/managers` — manager lifecycle coordinator, opening each manager's in-process connection.
+- `internal/managers/telegram` — `coagent.v1` client adapting chat calls to send-only
+  delivery. Each manager owns one bot account, one chat and polling loop;
+  failures remain isolated at startup.
 - `internal/mcp` — session-owned external MCP process lifecycle, tool discovery and structured content conversion.
 - `internal/mcpstore` — durable MCP server definitions, scope precedence and registry tools.
 - `internal/memory` — curated per-project long-term memory.
@@ -177,8 +179,8 @@ Budget observation and response output share the step transaction.
 
 An API client's input carries its idempotency key as the inbox delivery key
 `user:<key>`. A repeated key for the same root enqueues nothing, through the
-per-session delivery-key uniqueness producers already use. The client holds its
-own output-log position; nothing stores it.
+per-session delivery-key uniqueness producers already use. A tailing client holds its
+own output-log position; only `ChatService` calls store one, as a chat's cursor in `chat_focus`.
 
 Each `chat_focus` row holds one manager/chat's selection and
 `last_sent_id`. A NULL session means no focus; a NULL cursor means entry is
@@ -245,7 +247,7 @@ once per activation, so the prompt describes the registry that actually runs.
 
 `controllerapi`, `llmwire`, `sessionevent`, and `tool` are vocabulary/contract
 packages. They deliberately avoid implementation ownership. The controller
-interface is private to built-in managers and the local API server. `coagent.v1`
+interface is private to the local API server. `coagent.v1`
 is the public contract: a Protocol Buffers schema served with ConnectRPC,
 extended only additively within v1. MCP servers are external processes;
 marketplace content is loadable instruction/definition data, not executable
@@ -253,8 +255,8 @@ code with privileged integration rights. New managers and drivers are source
 contributions governed by the internal dependency graph.
 
 Each root created by a manager or API client carries one durable owner ID. The
-composition root binds one controller capability to each manager and API client
-ID, which config validation keeps distinct: creation stamps it, every
+composition root binds the local API server's controller capability to each manager
+and API client ID, which config validation keeps distinct: creation stamps it, every
 session-addressed operation checks it, and subscriptions deliver only that
 owner's events. Driver and channel names cannot route ownership
 because several configured managers may share them.
@@ -738,8 +740,9 @@ sessions fail closed. Subagent events remain inside their tree; parent
 completion is the explicit cross-boundary signal.
 The daemon resolves and caches that route; `sessionbus` owns subscriber state
 and bounded non-blocking fan-out after the route is known.
-Publication is in-process only: managers subscribe through `sessionbus`, and
-the control socket carries no event traffic and no server pushes
+Managers receive wake hints through `StreamSessionEvents`, fed by the local API server's
+`sessionbus` subscription. Hints carry no content: output reaches a chat only by
+reading the output log. The control socket carries no event traffic or server pushes
 ([ADR-0060](docs/adr/0060-telegram-service-topics-own-daemon-management.md)).
 
 ## Security and Trust Boundaries
@@ -747,7 +750,8 @@ the control socket carries no event traffic and no server pushes
 ### Orchestrator boundary
 
 Orchestrator mode is a durable attribute on an ordinary manager-owned root,
-granted and revoked only by human `/orchestrate on|off`; it survives restart and `/clear`.
+granted and revoked only by a human through `/orchestrate on|off` in a chat or
+`SetOrchestratorMode` from an operator client; it survives restart and `/clear`.
 From its next run, that root alone gets list, send, spawn, read, subscribe, unsubscribe, stop and kill tools, with mode and
 ownership checked on every call; its subagents and targets receive no new tool.
 Sent messages carry host-authored sender provenance at acceptance and appear in
@@ -908,8 +912,8 @@ in-process lifecycle signal that never crosses the socket.
 
 The API socket `~/.coagent/api.sock` is a second mode-0600 same-user Unix socket.
 Only the single-instance lock holder binds it, and only when `api.clients` is
-non-empty. It serves `coagent.v1` with ConnectRPC over HTTP/1.1. Every call
-carries `Authorization: Bearer <token>`. The daemon keeps only each client's
+non-empty. It serves the full `coagent.v1` surface with ConnectRPC over HTTP/1.1.
+Every call carries `Authorization: Bearer <token>`. The daemon keeps only each client's
 SHA-256 token hash from `config.yaml`. The server checks the token in front of
 the RPC layer on every request to the socket, compares in constant time, and
 removes the bearer value from the request before any handler runs. It binds
@@ -917,13 +921,18 @@ each authenticated call to that client's id through the manager-bound controller
 session can connect through the read-only host bind, so the token, not the
 socket mode, is the boundary. The token authenticates an author and grants
 nothing itself: as everywhere in the core, authority follows the source the
-host stamps on the input. The one author served, `operator`, sends human input,
+host stamps on the input. The socket's author kind, `operator`, sends human input,
 `/config` included. A configuration change therefore still runs only through a
 session's `/config` flow; no RPC mutates configuration, carries secrets or
 streams model tokens. With the sandbox off a session already has the user's
 authority. A client's plaintext token file is as readable from the sandbox as
-any operator credential, and with it a session can reach `/config`
-([ADR-0104](docs/adr/0104-the-local-api-is-the-two-durable-ledgers.md)).
+any operator credential, and with it a session can reach `/config` and every
+other `coagent.v1` call as that client, `SetOrchestratorMode` and `CreateProject` included
+([ADR-0104](docs/adr/0104-the-local-api-is-the-two-durable-ledgers.md),
+[ADR-0105](docs/adr/0105-built-in-managers-are-local-api-clients-in-process.md)).
+Built-in managers use the same services over an in-process connection with no
+socket or token; configuration binds the author, never request fields
+([ADR-0105](docs/adr/0105-built-in-managers-are-local-api-clients-in-process.md)).
 
 ## Configuration and product surfaces
 
@@ -1238,17 +1247,19 @@ helpers with no durable protocol ownership.
 
 ### Managers, control and releases
 
-The manager coordinator isolates manager failures. Telegram submits private
-controller requests and adapts the manager-bound `ChatFocusController` to the
-small local ports owned by `managerdelivery`. `managercontrol` owns ownership,
+The manager coordinator isolates manager failures and opens each manager's
+in-process connection. Telegram calls `coagent.v1`; its chat port adapts
+`ChatService`, `OutputService` and `SessionService` calls to the small local ports
+owned by `managerdelivery`. `managercontrol` owns ownership,
 liveness validation, DTO conversion, focus/cursor operations and project resolution;
 `managerdiscovery` owns project, model, skill and spawn-favorites discovery. The
 composition root supplies the daemon backend, store, discovery and session bus.
 
 Each Telegram manager owns one private chat with its sole allowed user. Startup
 validates the bot and chat, binds the chat without overwriting its selection or
-cursor, and starts polling and the send-only chat loop. NULL focus creates no
-session. Plain text, captions, media, voice and focus-scoped commands receive
+cursor, waits for the `StreamSessionEvents` sync event, and starts polling and
+the send-only chat loop. NULL focus creates no session. Plain text, captions,
+media, voice and focus-scoped commands receive
 exactly one local line:
 `No session in focus. /new, /spawn or /switch N.` No-focus voice is not
 transcribed and media is not downloaded. `/new`, `/spawn`, `/sessions`,
@@ -1298,12 +1309,17 @@ focus and cursor to NULL. A newer selection survives that reset. Killed roots
 are omitted from session summaries. No-focus delivery calls only its focus port
 and sends nothing.
 
-The local API server binds each authenticated client to its manager-bound
+The local API server binds each authenticated author to its manager-bound
 controller and adds no session creation, inbox enqueue or output read of its
-own. `CreateSession` creates an empty root. `SendInput` sends human input through
-the managers' send path with the client's idempotency key, resolving a replaced
+own. The composition root binds a configured manager id to an in-process server;
+it registers the same handlers as the API socket without a socket or token.
+`StreamSessionEvents` carries only wake hints; its first event, with session id 0,
+marks the subscription live before the client reads state. Telegram waits for
+that event before delivery starts and resubscribes when a stream ends.
+`CreateSession` creates an empty root. `SendInput` sends human input through
+the controller's send path with the client's idempotency key, resolving a replaced
 root to its successor. Accepted sends outlive client disconnects and deadlines,
-ending only with completion or API shutdown.
+ending only with completion or server shutdown; in-process sends end with the daemon.
 `TailOutput` reads the output log above the client's id in pages and continues
 through `/clear` replacements, sending a replaced root's rows only up to its
 successor's first row. It ends after a killed root's closing row and wakes on

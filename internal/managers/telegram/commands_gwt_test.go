@@ -40,7 +40,7 @@ func TestGwtDispatchCreatesWorktreeSession(t *testing.T) {
 	m.handleChatText(t.Context(), "/gwt api")
 	require.Len(t, ctrl.createSessionCalls, 1)
 	assert.Equal(t, controllerapi.SessionCreateData{
-		WorkDir: "/repo/work", WorktreeName: "api", Attributes: map[string]any{"channel": telegramChannel},
+		WorkDir: "/repo/work", WorktreeName: "api",
 	}, ctrl.createSessionCalls[0])
 	assert.Empty(t, ctrl.messageCalls)
 	assert.Empty(t, messages)

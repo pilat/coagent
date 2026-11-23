@@ -203,9 +203,9 @@ deps:
   managerdelivery:
     mayDependOn: [logger]
   telegram:
-    mayDependOn: [coagenthome, config, controllerapi, humanize, llmwire, logger, managerdelivery, sessionevent]
+    mayDependOn: [coagenthome, coagentv1, config, controllerapi, humanize, llmwire, logger, managerdelivery]
   managers:
-    mayDependOn: [config, controllerapi, logger, telegram]
+    mayDependOn: [config, logger, telegram]
 
   # Lifecycle owner.
   daemon:

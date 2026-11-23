@@ -1,18 +1,13 @@
 package telegram
 
-import (
-	"context"
+import "github.com/pilat/coagent/api/coagent/v1"
 
-	"github.com/pilat/coagent/internal/controllerapi"
-	"github.com/pilat/coagent/internal/sessionevent"
-)
-
-func isActiveSession(s controllerapi.SessionInfo) bool {
-	return s.KilledAt == nil && s.Status != "terminating" && s.Status != "killed"
+func isActiveSession(s *coagentv1.SessionDetails) bool {
+	return !s.GetKilled() && s.GetStatus() != "terminating" && s.GetStatus() != "killed"
 }
 
-func filterActiveSessions(sessions []controllerapi.SessionInfo) []controllerapi.SessionInfo {
-	active := make([]controllerapi.SessionInfo, 0, len(sessions))
+func filterActiveSessions(sessions []*coagentv1.SessionDetails) []*coagentv1.SessionDetails {
+	active := make([]*coagentv1.SessionDetails, 0, len(sessions))
 
 	for _, s := range sessions {
 		if isActiveSession(s) {
@@ -27,30 +22,4 @@ func (m *Manager) setWorkDir(sessionID int64, workDir string) {
 	m.mu.Lock()
 	m.workDirs[sessionID] = workDir
 	m.mu.Unlock()
-}
-
-func (m *Manager) wakeDelivery() {
-	m.mu.RLock()
-	delivery := m.delivery
-	m.mu.RUnlock()
-
-	if delivery != nil {
-		delivery.Wake()
-	}
-}
-
-func (m *Manager) handleNotification(ctx context.Context, sn controllerapi.SessionNotification) {
-	m.wakeDelivery()
-
-	if sn.Notification.Type != sessionevent.NotifyHeartbeat {
-		return
-	}
-
-	m.mu.RLock()
-	delivery := m.delivery
-	m.mu.RUnlock()
-
-	if delivery != nil && sn.SessionID > 0 && delivery.Focus() == sn.SessionID {
-		_ = m.sendTyping(ctx)
-	}
 }

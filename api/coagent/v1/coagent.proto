@@ -2,6 +2,8 @@ syntax = "proto3";
 
 package coagent.v1;
 
+import "google/protobuf/timestamp.proto";
+
 option go_package = "github.com/pilat/coagent/api/coagent/v1;coagentv1";
 
 // SessionService creates the calling client's roots and accepts their input.
@@ -13,6 +15,20 @@ service SessionService {
   // already replaced the root clears its successor. A replaced root resolves to its successor;
   // address the newest session_id received.
   rpc SendInput(SendInputRequest) returns (SendInputResponse);
+  // ListSessions lists the caller's live roots, newest activity first.
+  rpc ListSessions(ListSessionsRequest) returns (ListSessionsResponse);
+  // ListSessionDetails lists every root the caller owns, killed ones included.
+  rpc ListSessionDetails(ListSessionDetailsRequest) returns (ListSessionDetailsResponse);
+  // GetSessionKilled reports whether an owned root has been killed.
+  rpc GetSessionKilled(GetSessionKilledRequest) returns (GetSessionKilledResponse);
+  // SetSessionModel switches an owned root's model and reasoning effort.
+  rpc SetSessionModel(SetSessionModelRequest) returns (SetSessionModelResponse);
+  // SetSessionTitle renames a live owned root.
+  rpc SetSessionTitle(SetSessionTitleRequest) returns (SetSessionTitleResponse);
+  // GetOrchestratorMode reports whether a live owned root has orchestrator mode.
+  rpc GetOrchestratorMode(GetOrchestratorModeRequest) returns (GetOrchestratorModeResponse);
+  // SetOrchestratorMode turns orchestrator mode on or off for a live owned root.
+  rpc SetOrchestratorMode(SetOrchestratorModeRequest) returns (SetOrchestratorModeResponse);
 }
 
 // OutputService reads the output log.
@@ -21,6 +37,14 @@ service OutputService {
   // replacements. It ends without error only after a killed root's last row. On UNAVAILABLE or a
   // transport error, call it again with the session_id and id of the last row received.
   rpc TailOutput(TailOutputRequest) returns (stream TailOutputResponse);
+  // ListOutput returns up to limit rows of a root above after_id, oldest first.
+  rpc ListOutput(ListOutputRequest) returns (ListOutputResponse);
+  // ReadEntry returns a root's newest renderable rows and its newest output id from one read.
+  rpc ReadEntry(ReadEntryRequest) returns (ReadEntryResponse);
+  // StreamSessionEvents streams wake hints for the caller's roots. The first event, with session_id 0, means the
+  // subscription is live: state read after it misses no later change. Events carry no content and may be
+  // dropped under load; re-read state on any event and periodically.
+  rpc StreamSessionEvents(StreamSessionEventsRequest) returns (stream StreamSessionEventsResponse);
 }
 
 message CreateSessionRequest {
@@ -28,6 +52,8 @@ message CreateSessionRequest {
   string work_dir = 1;
   // A configured model id; empty selects the default model.
   string model = 2;
+  // Forks work_dir's repository into a new git worktree of this name and runs the root there; empty runs in work_dir.
+  string worktree_name = 3;
 }
 
 message CreateSessionResponse {
@@ -84,4 +110,281 @@ enum RuntimeState {
   RUNTIME_STATE_RUNNING = 1;
   RUNTIME_STATE_IDLE = 2;
   RUNTIME_STATE_ERROR = 3;
+}
+
+// ChatService keeps one chat's focus and delivery cursor as durable server state.
+service ChatService {
+  // BindChat creates the chat's row and leaves an existing focus and cursor untouched.
+  rpc BindChat(BindChatRequest) returns (BindChatResponse);
+  // GetChatFocus returns the focused root, or 0 when no root is in focus.
+  rpc GetChatFocus(GetChatFocusRequest) returns (GetChatFocusResponse);
+  // GetChatCursor returns the focus, the cursor, and whether the focus's entry has been acknowledged.
+  rpc GetChatCursor(GetChatCursorRequest) returns (GetChatCursorResponse);
+  // EnterChat acknowledges entry at newest_id while session_id is the focus and entry is still owed.
+  rpc EnterChat(EnterChatRequest) returns (EnterChatResponse);
+  // AdvanceChat moves the cursor to output_id while session_id is the entered focus and the cursor is below it.
+  rpc AdvanceChat(AdvanceChatRequest) returns (AdvanceChatResponse);
+  // SetChatFocus focuses a live owned root and resets the cursor, so entry is owed.
+  rpc SetChatFocus(SetChatFocusRequest) returns (SetChatFocusResponse);
+  // ResetChatFocus clears the focus and cursor while the focus is still from_session_id.
+  rpc ResetChatFocus(ResetChatFocusRequest) returns (ResetChatFocusResponse);
+}
+
+// DiscoveryService lists what the caller can start work with.
+service DiscoveryService {
+  // ListModels lists the configured models.
+  rpc ListModels(ListModelsRequest) returns (ListModelsResponse);
+  // ListSkills lists the skills available to an owned root.
+  rpc ListSkills(ListSkillsRequest) returns (ListSkillsResponse);
+  // ListProjects lists the daemon-managed projects, most recently active first.
+  rpc ListProjects(ListProjectsRequest) returns (ListProjectsResponse);
+  // ListSpawnFavorites lists the configured favorite project paths.
+  rpc ListSpawnFavorites(ListSpawnFavoritesRequest) returns (ListSpawnFavoritesResponse);
+  // CreateProject creates a folder project under the projects root, or opens an existing one.
+  rpc CreateProject(CreateProjectRequest) returns (CreateProjectResponse);
+}
+
+message ListSessionsRequest {}
+
+message ListSessionsResponse {
+  repeated SessionSummary sessions = 1;
+}
+
+message SessionSummary {
+  int64 id = 1;
+  // "<project> · <title>", or the project name while the root is untitled.
+  string name = 2;
+  // The root has a schedule.
+  bool scheduled = 3;
+}
+
+message ListSessionDetailsRequest {}
+
+message ListSessionDetailsResponse {
+  repeated SessionDetails sessions = 1;
+}
+
+message SessionDetails {
+  int64 id = 1;
+  // Absolute path of the directory the root runs in.
+  string work_dir = 2;
+  string model = 3;
+  string effort = 4;
+  // The persisted session status, such as "active", "terminating" or "completed".
+  string status = 5;
+  bool killed = 6;
+  // The author that owns the root, which is always the caller.
+  string owner_id = 7;
+}
+
+message GetSessionKilledRequest {
+  int64 session_id = 1;
+}
+
+message GetSessionKilledResponse {
+  bool killed = 1;
+}
+
+message SetSessionModelRequest {
+  int64 session_id = 1;
+  // A configured model id.
+  string model = 2;
+  // One of the model's effort_levels; empty keeps the daemon's default for the model.
+  string effort = 3;
+}
+
+message SetSessionModelResponse {}
+
+message SetSessionTitleRequest {
+  int64 session_id = 1;
+  // One line of 1-80 characters after trimming.
+  string title = 2;
+}
+
+message SetSessionTitleResponse {}
+
+message GetOrchestratorModeRequest {
+  int64 session_id = 1;
+}
+
+message GetOrchestratorModeResponse {
+  bool on = 1;
+}
+
+message SetOrchestratorModeRequest {
+  int64 session_id = 1;
+  bool on = 2;
+}
+
+message SetOrchestratorModeResponse {
+  // False when the mode already had the requested value.
+  bool changed = 1;
+}
+
+message ListOutputRequest {
+  int64 session_id = 1;
+  int64 after_id = 2;
+  // 1-100.
+  int32 limit = 3;
+}
+
+message ListOutputResponse {
+  repeated OutputRow rows = 1;
+}
+
+message ReadEntryRequest {
+  int64 session_id = 1;
+  // How many of the newest renderable rows to return, 1-100.
+  int32 limit = 2;
+}
+
+message ReadEntryResponse {
+  // Oldest first; session_opened and session_replaced rows are left out.
+  repeated OutputRow rows = 1;
+  // The root's newest output id of any type; 0 when it has none.
+  int64 newest_id = 2;
+}
+
+message StreamSessionEventsRequest {}
+
+message StreamSessionEventsResponse {
+  // 0 on the first event of the stream.
+  int64 session_id = 1;
+  SessionEventType type = 2;
+}
+
+enum SessionEventType {
+  SESSION_EVENT_TYPE_UNSPECIFIED = 0;
+  // Something about the root may have changed; re-read it.
+  SESSION_EVENT_TYPE_ACTIVITY = 1;
+  // The root is running; sent about once a second.
+  SESSION_EVENT_TYPE_HEARTBEAT = 2;
+}
+
+message BindChatRequest {
+  string chat_id = 1;
+}
+
+message BindChatResponse {}
+
+message GetChatFocusRequest {
+  string chat_id = 1;
+}
+
+message GetChatFocusResponse {
+  // 0 when no root is in focus.
+  int64 session_id = 1;
+}
+
+message GetChatCursorRequest {
+  string chat_id = 1;
+}
+
+message GetChatCursorResponse {
+  // 0 when no root is in focus.
+  int64 session_id = 1;
+  // The highest output id sent or skipped past; meaningful only while entered.
+  int64 cursor = 2;
+  bool entered = 3;
+}
+
+message EnterChatRequest {
+  string chat_id = 1;
+  int64 session_id = 2;
+  // The newest output id the entry covered.
+  int64 newest_id = 3;
+}
+
+message EnterChatResponse {
+  // False when the focus moved or entry was already acknowledged.
+  bool entered = 1;
+}
+
+message AdvanceChatRequest {
+  string chat_id = 1;
+  int64 session_id = 2;
+  int64 output_id = 3;
+}
+
+message AdvanceChatResponse {
+  // False when the focus moved, entry is owed, or the cursor is already at or past output_id.
+  bool advanced = 1;
+}
+
+message SetChatFocusRequest {
+  string chat_id = 1;
+  int64 session_id = 2;
+}
+
+message SetChatFocusResponse {}
+
+message ResetChatFocusRequest {
+  string chat_id = 1;
+  int64 from_session_id = 2;
+}
+
+message ResetChatFocusResponse {
+  // False when the focus had already moved.
+  bool cleared = 1;
+}
+
+message ListModelsRequest {}
+
+message ListModelsResponse {
+  repeated Model models = 1;
+}
+
+message Model {
+  string id = 1;
+  string name = 2;
+  string display_name = 3;
+  // USD per 1M tokens.
+  double input_price = 4;
+  double output_price = 5;
+  // Levels the model accepts, weakest first; empty when it offers no effort choice.
+  repeated string effort_levels = 6;
+  // The level a switch to this model lands on; empty when effort_levels is.
+  string default_effort = 7;
+  // The catalog no longer lists the model; the fields above are its last resolution.
+  bool catalog_stale = 8;
+}
+
+message ListSkillsRequest {
+  int64 session_id = 1;
+}
+
+message ListSkillsResponse {
+  repeated Skill skills = 1;
+}
+
+message Skill {
+  string name = 1;
+  string description = 2;
+}
+
+message ListProjectsRequest {}
+
+message ListProjectsResponse {
+  repeated Project projects = 1;
+}
+
+message Project {
+  string name = 1;
+  // Absent while the project has no sessions.
+  google.protobuf.Timestamp last_activity = 2;
+}
+
+message ListSpawnFavoritesRequest {}
+
+message ListSpawnFavoritesResponse {
+  repeated string paths = 1;
+}
+
+message CreateProjectRequest {
+  string name = 1;
+}
+
+message CreateProjectResponse {
+  // Absolute path of the created or opened project.
+  string path = 1;
 }

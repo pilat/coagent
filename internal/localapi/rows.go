@@ -25,6 +25,15 @@ func outputRow(row controllerapi.ChatOutput) *coagentv1.OutputRow {
 	}
 }
 
+func outputRows(rows []controllerapi.ChatOutput) []*coagentv1.OutputRow {
+	outputs := make([]*coagentv1.OutputRow, 0, len(rows))
+	for _, row := range rows {
+		outputs = append(outputs, outputRow(row))
+	}
+
+	return outputs
+}
+
 func runtimeState(state sessionevent.State) coagentv1.RuntimeState {
 	switch state {
 	case sessionevent.StateRunning:

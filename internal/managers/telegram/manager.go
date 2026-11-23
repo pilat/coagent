@@ -2,15 +2,16 @@ package telegram
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
 	"sync"
 	"time"
 
+	"connectrpc.com/connect/v2"
+
+	"github.com/pilat/coagent/api/coagent/v1"
 	"github.com/pilat/coagent/internal/config"
-	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/managerdelivery"
 )
 
@@ -32,8 +33,7 @@ type Manager struct {
 	id             string
 	cfg            config.ManagerEntry
 	unifiedCfg     *config.UnifiedConfig
-	controller     controllerapi.Controller
-	chat           controllerapi.ChatFocusController
+	api            apiClients
 	httpClient     *http.Client // poll/API calls: bounded by the poll timeout
 	downloadClient *http.Client // bot-API file downloads: request-scoped deadlines only
 
@@ -43,10 +43,9 @@ type Manager struct {
 	updateOffset int64
 	workDirs     map[int64]string
 
-	subscription <-chan controllerapi.SessionNotification
-	delivery     managerdelivery.ChatLoop
-	cancel       context.CancelFunc
-	done         chan struct{}
+	delivery managerdelivery.ChatLoop
+	cancel   context.CancelFunc
+	done     chan struct{}
 }
 
 type telegramUpdate struct {
@@ -113,17 +112,8 @@ type telegramAudio struct {
 func New(
 	entry config.ManagerEntry,
 	unifiedCfg *config.UnifiedConfig,
-	controller controllerapi.Controller,
+	transport connect.Transport,
 ) (*Manager, error) {
-	if controller == nil {
-		return nil, errors.New("controller is required")
-	}
-
-	chat, ok := controller.(controllerapi.ChatFocusController)
-	if !ok {
-		return nil, errors.New("chat focus capability is required")
-	}
-
 	timeout, err := httpTimeoutFor(entry.PollTimeoutSec)
 	if err != nil {
 		return nil, fmt.Errorf("manager %q: %w", entry.ID, err)
@@ -133,8 +123,7 @@ func New(
 		id:             entry.ID,
 		cfg:            entry,
 		unifiedCfg:     unifiedCfg,
-		controller:     controller,
-		chat:           chat,
+		api:            newAPI(transport),
 		httpClient:     &http.Client{Timeout: timeout},
 		downloadClient: &http.Client{}, // request-scoped deadlines: bot-API downloads must outlive PollTimeoutSec
 		workDirs:       make(map[int64]string),
@@ -168,10 +157,6 @@ func (m *Manager) Start(ctx context.Context) error {
 		if !started {
 			cancel()
 
-			if m.subscription != nil {
-				m.controller.Unsubscribe(m.subscription)
-			}
-
 			close(done)
 		}
 	}()
@@ -180,25 +165,34 @@ func (m *Manager) Start(ctx context.Context) error {
 		return fmt.Errorf("preflight chat: %w", err)
 	}
 
-	if err := m.chat.BindChat(runCtx, strconv.FormatInt(m.effectiveChatID(), 10)); err != nil {
+	if _, err := m.api.chats.BindChat(
+		runCtx,
+		&coagentv1.BindChatRequest{ChatId: strconv.FormatInt(m.effectiveChatID(), 10)},
+	); err != nil {
 		return fmt.Errorf("bind chat: %w", err)
 	}
 
-	subscription := m.controller.Subscribe()
+	events, err := m.api.outputs.StreamSessionEvents(runCtx, &coagentv1.StreamSessionEventsRequest{})
+	if err != nil {
+		return fmt.Errorf("stream session events: %w", err)
+	}
+
+	if _, err := events.Receive(); err != nil {
+		return fmt.Errorf("stream session events: %w", err)
+	}
 
 	if err := m.tg(runCtx, "setMyCommands", map[string]any{"commands": publishedCommands}, nil); err != nil {
-		m.controller.Unsubscribe(subscription)
 		return fmt.Errorf("set commands: %w", err)
 	}
 
 	var port managerdelivery.ChatPort = &chatPort{
-		controller: m.chat, chatID: strconv.FormatInt(m.effectiveChatID(), 10),
+		api: m.api, chatID: strconv.FormatInt(m.effectiveChatID(), 10),
 	}
 	var transport managerdelivery.ChatTransport = &outputTransport{manager: m}
 	delivery := managerdelivery.NewChat(port, transport)
 
 	m.mu.Lock()
-	m.subscription, m.delivery = subscription, delivery
+	m.delivery = delivery
 	m.mu.Unlock()
 	delivery.Start(runCtx)
 
@@ -208,7 +202,7 @@ func (m *Manager) Start(ctx context.Context) error {
 
 		var wg sync.WaitGroup
 
-		wg.Go(func() { m.notificationsLoop(runCtx) })
+		wg.Go(func() { m.notificationsLoop(runCtx, events) })
 		wg.Go(func() { m.pollLoop(runCtx) })
 		wg.Wait()
 	}()
@@ -241,7 +235,6 @@ func (m *Manager) Stop(ctx context.Context) error {
 	m.mu.RLock()
 	cancel := m.cancel
 	delivery := m.delivery
-	subscription := m.subscription
 	done := m.done
 	m.mu.RUnlock()
 
@@ -255,10 +248,6 @@ func (m *Manager) Stop(ctx context.Context) error {
 		}
 	}
 
-	if subscription != nil {
-		m.controller.Unsubscribe(subscription)
-	}
-
 	if done == nil {
 		return nil
 	}
@@ -268,24 +257,5 @@ func (m *Manager) Stop(ctx context.Context) error {
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
-	}
-}
-
-func (m *Manager) notificationsLoop(ctx context.Context) {
-	if m.subscription == nil {
-		return
-	}
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case sn, ok := <-m.subscription:
-			if !ok {
-				return
-			}
-
-			m.handleNotification(ctx, sn)
-		}
 	}
 }

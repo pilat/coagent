@@ -2,10 +2,12 @@ package telegram
 
 import (
 	"context"
+	"crypto/rand"
 	"fmt"
 	"strconv"
 	"strings"
 
+	"github.com/pilat/coagent/api/coagent/v1"
 	"github.com/pilat/coagent/internal/controllerapi"
 )
 
@@ -14,7 +16,6 @@ const (
 	commandStop      = "/stop"
 	commandClear     = "/clear"
 	commandGWT       = "/gwt"
-	telegramChannel  = "telegram"
 	noFocusHint      = "No session in focus. /new, /spawn or /switch N."
 	sessionListLimit = 30
 )
@@ -100,7 +101,10 @@ func (m *Manager) handleFocusedText(ctx context.Context, command, text string) {
 		command = ""
 	}
 
-	focus, err := m.chat.ChatFocus(ctx, strconv.FormatInt(m.effectiveChatID(), 10))
+	focus, err := m.api.chats.GetChatFocus(
+		ctx,
+		&coagentv1.GetChatFocusRequest{ChatId: strconv.FormatInt(m.effectiveChatID(), 10)},
+	)
 	if err != nil {
 		m.reply(ctx, command, strings.ReplaceAll(err.Error(), "\n", " "))
 		return
@@ -108,7 +112,7 @@ func (m *Manager) handleFocusedText(ctx context.Context, command, text string) {
 
 	_, arg, _ := strings.Cut(text, " ")
 
-	if focus == 0 {
+	if focus.GetSessionId() == 0 {
 		if command == "/help" || command == "/start" {
 			m.handleHelp(ctx, command, 0)
 		} else {
@@ -120,18 +124,18 @@ func (m *Manager) handleFocusedText(ctx context.Context, command, text string) {
 
 	switch command {
 	case "/title":
-		m.handleTitle(ctx, focus, arg)
+		m.handleTitle(ctx, focus.GetSessionId(), arg)
 	case "/orchestrate":
-		m.handleOrchestrate(ctx, focus, arg)
+		m.handleOrchestrate(ctx, focus.GetSessionId(), arg)
 	case commandGWT:
 		name, _ := parseGwtCommand(text)
-		m.handleGWT(ctx, focus, name)
+		m.handleGWT(ctx, focus.GetSessionId(), name)
 	case "/model":
-		m.handleModel(ctx, focus, strings.TrimSpace(arg))
+		m.handleModel(ctx, focus.GetSessionId(), strings.TrimSpace(arg))
 	case "/help", "/start":
-		m.handleHelp(ctx, command, focus)
+		m.handleHelp(ctx, command, focus.GetSessionId())
 	default:
-		m.handleSessionMessage(ctx, focus, command, text)
+		m.handleSessionMessage(ctx, focus.GetSessionId(), command, text)
 	}
 }
 
@@ -147,7 +151,10 @@ func (m *Manager) handleTitle(ctx context.Context, focus int64, raw string) {
 		return
 	}
 
-	if err := m.chat.SetSessionTitle(ctx, strconv.FormatInt(m.effectiveChatID(), 10), focus, title); err != nil {
+	if _, err := m.api.sessions.SetSessionTitle(
+		ctx,
+		&coagentv1.SetSessionTitleRequest{SessionId: focus, Title: title},
+	); err != nil {
 		m.reply(ctx, "/title", strings.ReplaceAll(err.Error(), "\n", " "))
 		return
 	}
@@ -160,7 +167,10 @@ func (m *Manager) switchChat(ctx context.Context, command string, id int64) {
 	delivery := m.delivery
 	m.mu.RUnlock()
 
-	if err := m.chat.SetChatFocus(ctx, strconv.FormatInt(m.effectiveChatID(), 10), id); err != nil {
+	if _, err := m.api.chats.SetChatFocus(
+		ctx,
+		&coagentv1.SetChatFocusRequest{ChatId: strconv.FormatInt(m.effectiveChatID(), 10), SessionId: id},
+	); err != nil {
 		m.reply(ctx, command, strings.ReplaceAll(err.Error(), "\n", " "))
 
 		return
@@ -178,83 +188,20 @@ func (m *Manager) handleNumberedControl(ctx context.Context, command, arg string
 		return
 	}
 
-	sessions, err := m.chat.ChatSessions(ctx, strconv.FormatInt(m.effectiveChatID(), 10))
+	sessions, err := m.api.sessions.ListSessions(ctx, &coagentv1.ListSessionsRequest{})
 	if err != nil {
 		m.reply(ctx, command, strings.ReplaceAll(err.Error(), "\n", " "))
 		return
 	}
 
-	for _, session := range sessions {
-		if session.ID == id && id > 0 {
+	for _, session := range sessions.GetSessions() {
+		if session.GetId() == id && id > 0 {
 			m.handleSessionMessage(ctx, id, command, command)
 			return
 		}
 	}
 
 	m.reply(ctx, command, strings.ReplaceAll(fmt.Sprintf("#%d is not a live session", id), "\n", " "))
-}
-
-func (m *Manager) handleSessions(ctx context.Context, word string) {
-	sessions, err := m.chat.ChatSessions(ctx, strconv.FormatInt(m.effectiveChatID(), 10))
-	if err != nil {
-		m.reply(ctx, "/sessions", strings.ReplaceAll(err.Error(), "\n", " "))
-		return
-	}
-
-	focus, err := m.chat.ChatFocus(ctx, strconv.FormatInt(m.effectiveChatID(), 10))
-	if err != nil {
-		m.reply(ctx, "/sessions", strings.ReplaceAll(err.Error(), "\n", " "))
-		return
-	}
-
-	sessions = filterSessionNames(sessions, word)
-	if len(sessions) == 0 {
-		message := "No sessions. /new or /spawn."
-		if word != "" {
-			message = "No sessions match \"" + word + "\"."
-		}
-
-		m.reply(ctx, "/sessions", message)
-
-		return
-	}
-
-	lines := make([]string, 0, min(len(sessions), sessionListLimit)+1)
-	for _, session := range sessions[:min(len(sessions), sessionListLimit)] {
-		line := fmt.Sprintf("#%d %s", session.ID, session.Name)
-		if session.Scheduled {
-			line += " ⏰"
-		}
-
-		if session.ID == focus {
-			line += " ◀"
-		}
-
-		lines = append(lines, line)
-	}
-
-	if remaining := len(sessions) - sessionListLimit; remaining > 0 {
-		lines = append(lines, fmt.Sprintf("… and %d more", remaining))
-	}
-
-	m.reply(ctx, "/sessions", strings.Join(lines, "\n"))
-}
-
-func filterSessionNames(sessions []controllerapi.ChatSessionInfo, word string) []controllerapi.ChatSessionInfo {
-	if word == "" {
-		return sessions
-	}
-
-	filtered := make([]controllerapi.ChatSessionInfo, 0, len(sessions))
-
-	word = strings.ToLower(word)
-	for _, session := range sessions {
-		if strings.Contains(strings.ToLower(session.Name), word) {
-			filtered = append(filtered, session)
-		}
-	}
-
-	return filtered
 }
 
 func (m *Manager) handleHelp(ctx context.Context, command string, sessionID int64) {
@@ -273,29 +220,29 @@ func (m *Manager) handleHelp(ctx context.Context, command string, sessionID int6
 }
 
 func (m *Manager) handleCommands(ctx context.Context, command string, sessionID int64) {
-	result, err := m.controller.ListSkills(ctx, controllerapi.ConfigSkillsData{SessionID: sessionID})
-	if err != nil || len(result.Skills) == 0 {
+	result, err := m.api.discovery.ListSkills(ctx, &coagentv1.ListSkillsRequest{SessionId: sessionID})
+	if err != nil || len(result.GetSkills()) == 0 {
 		m.replyHTML(ctx, command, "No skills loaded.")
 		return
 	}
 
 	lines := []string{"<b>Skills:</b>"}
 
-	for _, skill := range result.Skills {
+	for _, skill := range result.GetSkills() {
 		desc := ""
-		if skill.Description != "" {
-			desc = " — " + escapeHTML(skill.Description)
+		if skill.GetDescription() != "" {
+			desc = " — " + escapeHTML(skill.GetDescription())
 		}
 
-		lines = append(lines, "  /skill "+escapeHTML(skill.Name)+desc)
+		lines = append(lines, "  /skill "+escapeHTML(skill.GetName())+desc)
 	}
 
 	m.replyHTML(ctx, command, strings.Join(lines, "\n"))
 }
 
 func (m *Manager) handleSessionMessage(ctx context.Context, sessionID int64, command, text string) {
-	if err := m.controller.SendSessionMessage(ctx, controllerapi.SessionMessageData{
-		SessionID: sessionID, Message: text,
+	if _, err := m.api.sessions.SendInput(ctx, &coagentv1.SendInputRequest{
+		SessionId: sessionID, Text: text, IdempotencyKey: rand.Text(),
 	}); err != nil {
 		m.reply(ctx, command, strings.ReplaceAll(err.Error(), "\n", " "))
 	}

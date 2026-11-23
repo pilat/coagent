@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"connectrpc.com/connect/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -29,6 +30,7 @@ import (
 	"github.com/pilat/coagent/internal/daemon"
 	"github.com/pilat/coagent/internal/llm"
 	"github.com/pilat/coagent/internal/llmwire"
+	"github.com/pilat/coagent/internal/localapi"
 	"github.com/pilat/coagent/internal/managercontrol"
 	"github.com/pilat/coagent/internal/managerdiscovery"
 	"github.com/pilat/coagent/internal/mcpstore"
@@ -47,6 +49,8 @@ const delayedTelegramManagerID = "telegram-delayed"
 type delayedTelegramHarness struct {
 	controller  controllerapi.Controller
 	controllers controllerapi.ManagerControllerFactory
+	transport   connect.Transport
+	bus         *sessionbus.Bus
 	sessions    *sessionstore.Store
 	service     *daemon.Service
 	workDir     string
@@ -141,9 +145,12 @@ func newDelayedTelegramHarnessWithClient(
 		bus,
 		nil,
 	)
+	transport, err := localapi.NewInProcess(t.Context(), controllers).Transport(delayedTelegramManagerID)
+	require.NoError(t, err)
 
 	return &delayedTelegramHarness{
 		controller: controllers.ForManager(delayedTelegramManagerID), controllers: controllers, sessions: sessions,
+		transport: transport, bus: bus,
 		service: service, workDir: workDir, recorder: &delayedTelegramRecorder{},
 	}
 }
@@ -170,7 +177,7 @@ func TestHarnessScenario_StartFailureCannotFloodTelegram(t *testing.T) {
 	for round := range 2 {
 		manager, err := New(config.ManagerEntry{
 			ID: delayedTelegramManagerID, BotToken: "test-token", AllowedUserIDs: []int64{harnessChatID},
-		}, &config.UnifiedConfig{}, h.controller)
+		}, &config.UnifiedConfig{}, h.transport)
 		require.NoError(t, err)
 		manager.httpClient = &http.Client{Transport: h.recorder}
 		require.NoError(t, manager.Start(t.Context()))

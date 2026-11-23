@@ -4,35 +4,28 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-
-	"github.com/pilat/coagent/internal/controllerapi"
 )
 
 func TestManagerOwnsOnlyExplicitlyAttributedSessions(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name       string
-		attributes map[string]any
-		wantOwned  bool
+		name      string
+		owner     string
+		wantOwned bool
 	}{
 		{
-			name: "already owned here",
-			attributes: map[string]any{
-				controllerapi.SessionAttributeManagerID: "telegram-main",
-			},
+			name:      "already owned here",
+			owner:     "telegram-main",
 			wantOwned: true,
 		},
 		{
-			name: "owned by another manager",
-			attributes: map[string]any{
-				controllerapi.SessionAttributeManagerID: "telegram-secondary",
-				"channel":                               "telegram",
-			},
+			name:  "owned by another manager",
+			owner: "telegram-secondary",
 		},
 		{
-			name:       "channel alone is not proof of ownership",
-			attributes: map[string]any{"channel": "telegram"},
+			name:  "channel alone is not proof of ownership",
+			owner: "",
 		},
 		{name: "ownerless without metadata"},
 	}
@@ -42,7 +35,7 @@ func TestManagerOwnsOnlyExplicitlyAttributedSessions(t *testing.T) {
 			t.Parallel()
 
 			manager := &Manager{id: "telegram-main"}
-			assert.Equal(t, tt.wantOwned, manager.ownsSession(tt.attributes))
+			assert.Equal(t, tt.wantOwned, manager.ownsSession(tt.owner))
 		})
 	}
 }

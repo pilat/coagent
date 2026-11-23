@@ -4,7 +4,7 @@ import "context"
 
 // ChatFocusController binds chat state to one manager without widening Controller.
 //
-//nolint:iface,interfacebloat // optional capability asserted by built-in chat managers.
+//nolint:iface,interfacebloat // optional capability asserted by the local API server.
 type ChatFocusController interface {
 	BindChat(ctx context.Context, chatID string) error
 	ChatFocus(ctx context.Context, chatID string) (int64, error)

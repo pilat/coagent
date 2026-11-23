@@ -46,11 +46,7 @@ func New(ctx context.Context, listener net.Listener, entries []config.APIClientE
 
 	server := connect.NewServer()
 
-	var sessions coagentv1connect.SessionServiceHandler = sessionService{closing: base.Done()}
-	var outputs coagentv1connect.OutputServiceHandler = outputService{}
-
-	coagentv1connect.RegisterSessionServiceHandler(server, sessions)
-	coagentv1connect.RegisterOutputServiceHandler(server, outputs)
+	register(server, base.Done())
 
 	mux := http.NewServeMux()
 	connecthttp.Mount(mux, server, connecthttp.WithReadMaxBytes(maxRequestBytes))
@@ -94,4 +90,16 @@ func (s *Server) Close(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+func register(server *connect.Server, closing <-chan struct{}) {
+	var sessions coagentv1connect.SessionServiceHandler = sessionService{closing: closing}
+	var outputs coagentv1connect.OutputServiceHandler = outputService{}
+	var chats coagentv1connect.ChatServiceHandler = chatService{}
+	var discovery coagentv1connect.DiscoveryServiceHandler = discoveryService{}
+
+	coagentv1connect.RegisterSessionServiceHandler(server, sessions)
+	coagentv1connect.RegisterOutputServiceHandler(server, outputs)
+	coagentv1connect.RegisterChatServiceHandler(server, chats)
+	coagentv1connect.RegisterDiscoveryServiceHandler(server, discovery)
 }

@@ -26,9 +26,9 @@ func TestSwitchObservedBeforeSetReturnsSendsOnePrelude(t *testing.T) {
 			ID: 42, Name: "work", Attributes: map[string]any{"manager_id": "telegram-main"},
 		}}}
 		manager := newCmdTestManager(t, controller, &messages)
-		hook := &focusWriteHook{ChatFocusController: manager.chat}
-		manager.chat = hook
-		loop := managerdelivery.NewChat(&chatPort{controller: hook, chatID: "chat"}, &outputTransport{manager: manager})
+		hook := &focusWriteHook{ChatFocusController: controller}
+		manager.api = servedAPI(t, controller, hook)
+		loop := managerdelivery.NewChat(&chatPort{api: manager.api, chatID: "chat"}, &outputTransport{manager: manager})
 		manager.delivery = loop
 		loop.Start(t.Context())
 		defer func() { require.NoError(t, loop.Stop(t.Context())) }()
@@ -51,13 +51,14 @@ func TestSwitchObservedBeforeSetReturnsSendsOnePrelude(t *testing.T) {
 func TestFocusWriteFailureDoesNotWakeDelivery(t *testing.T) {
 	t.Parallel()
 	var messages []string
-	manager := newCmdTestManager(t, &fakeController{}, &messages)
+	fake := &fakeController{}
+	manager := newCmdTestManager(t, fake, &messages)
 	loop := &chatLoopStub{}
 	manager.delivery = loop
-	manager.chat = &focusWriteHook{
-		ChatFocusController: manager.chat,
+	manager.api = servedAPI(t, fake, &focusWriteHook{
+		ChatFocusController: fake,
 		beforeWrite:         func() { assert.Zero(t, loop.wakes) },
-	}
+	})
 	manager.handleChatText(t.Context(), "/switch 42")
 	assert.Zero(t, loop.wakes)
 	assert.Equal(t, []string{"#42 is not a live session"}, messages)
