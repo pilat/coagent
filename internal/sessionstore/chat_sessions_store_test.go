@@ -11,9 +11,9 @@ import (
 func TestChatSessions_ScheduledRoots(t *testing.T) {
 	t.Parallel()
 	store, db, project := newTestStore(t)
-	cron := chatTestRoot(t, store, project, "owner")
-	once := chatTestRoot(t, store, project, "owner")
-	sleep := chatTestRoot(t, store, project, "owner")
+	cron := chatTestRoot(t, store, project)
+	once := chatTestRoot(t, store, project)
+	sleep := chatTestRoot(t, store, project)
 	for _, id := range []int64{cron.ID} {
 		_, err := db.ExecContext(
 			t.Context(),
@@ -46,7 +46,7 @@ func TestChatSessions_LiveOwnedRootsInActivityOrder(t *testing.T) {
 	ctx := t.Context()
 	store, db, project := newTestStore(t)
 	old, _, err := store.CreateManagerRoot(ctx, ManagerRootCreate{
-		ProjectID: project, Model: "model", Attributes: map[string]any{"manager_id": "owner"},
+		ProjectID: project, Model: "model", Attributes: map[string]any{},
 		Name: "test", WorkDir: "/project",
 	})
 	require.NoError(t, err)
@@ -54,15 +54,15 @@ func TestChatSessions_LiveOwnedRootsInActivityOrder(t *testing.T) {
 	require.NoError(t, err)
 	chatTestOutput(t, store, root.ID, "first answer")
 	chatTestOutput(t, store, root.ID, "latest answer\nsecond line")
-	stopped := chatTestRoot(t, store, project, "owner")
+	stopped := chatTestRoot(t, store, project)
 	require.NoError(t, store.UpdateSessionStatus(ctx, stopped.ID, SessionStatusStopped))
-	killed := chatTestRoot(t, store, project, "owner")
+	killed := chatTestRoot(t, store, project)
 	chatTestOutput(t, store, killed.ID, "killed answer")
 	_, err = store.MarkSessionKilledWithOutput(ctx, killed.ID, 0)
 	require.NoError(t, err)
 	child, err := store.CreateSubagentSession(ctx, project, root.ID, root.ID, "general", "model", "")
 	require.NoError(t, err)
-	_, err = db.ExecContext(ctx, `UPDATE sessions SET attributes = '{"manager_id":"owner"}' WHERE id = ?`, child)
+	_, err = db.ExecContext(ctx, `UPDATE sessions SET attributes = '{}' WHERE id = ?`, child)
 	require.NoError(t, err)
 
 	sessions, err := store.ChatSessions(ctx)
@@ -83,7 +83,7 @@ func TestChatSessions_LiveOwnedRootsInActivityOrder(t *testing.T) {
 func TestChatSessions_SessionTitle(t *testing.T) {
 	t.Parallel()
 	store, _, project := newTestStore(t)
-	root := chatTestRoot(t, store, project, "owner")
+	root := chatTestRoot(t, store, project)
 	require.NoError(t, store.SetSessionTitle(t.Context(), root.ID, "fix login 500"))
 	sessions, err := store.ChatSessions(t.Context())
 	require.NoError(t, err)

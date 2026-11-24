@@ -4,10 +4,7 @@
     {
       "type": "session_created",
       "name": "<name>",
-      "work_dir": "<workdir>",
-      "attributes": {
-        "manager_id": "telegram:main"
-      }
+      "work_dir": "<workdir>"
     },
     {
       "type": "state_changed",
@@ -26,8 +23,5 @@
       "content": "## Session commands\n`/status` — show session status\n`/stop` — stop the current run\n`/clear` — start a fresh session\n`/kill` — close this session\n`/compact [focus]` — compact the context\n`/schedules` — list schedules\n`/budget <request>` — arm, replace, inspect, or clear a one-shot cost/wall-time checkpoint\n`/gwt <name>` — fork into a worktree",
       "source_key": "input:1:help:result"
     }
-  ],
-  "owners": {
-    "1": "telegram:main"
-  }
+  ]
 }

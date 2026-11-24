@@ -27,6 +27,7 @@ import (
 	"github.com/pilat/coagent/internal/sessionevent"
 	"github.com/pilat/coagent/internal/sessionprompt"
 	"github.com/pilat/coagent/internal/sessionstore"
+	"github.com/pilat/coagent/internal/sessionstore/sessionstoretest"
 	"github.com/pilat/coagent/internal/todo"
 	"github.com/pilat/coagent/internal/tool"
 	"github.com/pilat/coagent/internal/transcript"
@@ -640,10 +641,9 @@ func newAttachmentsStore(t *testing.T) (*sql.DB, *sessionstore.Store, int64) {
 	require.NoError(t, err)
 
 	store := sessionstore.NewStore(db)
-	record, err := store.CreateSession(ctx, projectID, "model", "", map[string]any{"manager_id": "telegram"})
-	require.NoError(t, err)
+	record := sessionstoretest.BareRoot(t, db, projectID, "model", "", map[string]any{})
 
-	return db, store, record.ID
+	return db, store, record
 }
 
 // appendImageToolResult commits an assistant call plus its image-bearing tool

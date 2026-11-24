@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/pilat/coagent/internal/llmwire"
+	"github.com/pilat/coagent/internal/sessionstore/sessionstoretest"
 	"github.com/pilat/coagent/internal/transcript"
 )
 
@@ -161,7 +162,9 @@ func newGenerationProduction(t *testing.T) *generationProduction {
 	store, db, projectID := newTestStore(t)
 	ctx := context.Background()
 
-	root, err := store.CreateSession(ctx, projectID, "model", "", map[string]any{"manager_id": "mgr"})
+	rootID := sessionstoretest.BareRoot(t, store.db, projectID, "model", "", map[string]any{})
+
+	root, err := store.GetSession(ctx, rootID)
 	require.NoError(t, err)
 
 	return &generationProduction{t: t, ctx: ctx, store: store, db: db, root: root.ID}

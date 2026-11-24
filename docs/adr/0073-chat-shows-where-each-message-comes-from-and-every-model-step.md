@@ -2,6 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-10-30
+- **Amended by:** [ADR-0107](0107-every-root-is-a-root.md)
 - **Amends:** [ADR-0072](0072-flat-chat-with-a-focus.md)
 
 ## Context

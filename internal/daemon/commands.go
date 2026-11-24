@@ -245,7 +245,8 @@ func (s *Service) handleStoppedStop(ctx context.Context, input *sessionstore.Inb
 func (s *Service) handleLifecycleInput(ctx context.Context, input *sessionstore.InboxInput, content string) error {
 	command := strings.TrimPrefix(strings.TrimSpace(input.RawContent), "/")
 
-	if !controllerapi.ManagerRoot(input.Attributes) {
+	_, err := s.store.BeginLifecycleInput(ctx, input.ID, command, content)
+	if errors.Is(err, sessionstore.ErrOutputNotRoot) {
 		if _, err := s.store.Commit(
 			ctx,
 			sessionstore.Commit{
@@ -261,7 +262,7 @@ func (s *Service) handleLifecycleInput(ctx context.Context, input *sessionstore.
 		return nil
 	}
 
-	if _, err := s.store.BeginLifecycleInput(ctx, input.ID, command, content); err != nil {
+	if err != nil {
 		return fmt.Errorf("start lifecycle input: %w", err)
 	}
 

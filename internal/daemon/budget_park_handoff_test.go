@@ -34,7 +34,7 @@ func TestBudgetParkRetainsScheduledWakeDuringRefresh(t *testing.T) {
 		calls.Add(1)
 		return textReply("unexpected paid call")
 	}})
-	root := h.createRoot(managerAttrs(scenarioManagerID))
+	root := h.createRoot(nil)
 	fireHandoffBudget(t, h, root, "first")
 	barrier := &parkRefreshBarrier{Store: h.mgr.store, entered: make(chan struct{}), release: make(chan struct{})}
 	t.Cleanup(func() { closeOnce(barrier.release) })
@@ -61,7 +61,7 @@ func TestBudgetParkRetainsScheduledWakeDuringRefresh(t *testing.T) {
 
 func TestBudgetParkRetainsFireWhileSupersededParkExits(t *testing.T) {
 	h := newHarness(t, harnessOptions{respond: trivialRespond})
-	root := h.createRoot(managerAttrs(scenarioManagerID))
+	root := h.createRoot(nil)
 	fireHandoffBudget(t, h, root, "first")
 	limit := 2.0
 	armed, err := h.store.Arm(h.ctx, budget.Mutation{

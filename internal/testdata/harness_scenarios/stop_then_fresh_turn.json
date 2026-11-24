@@ -6,7 +6,6 @@
       "name": "<name>",
       "work_dir": "<workdir>",
       "attributes": {
-        "manager_id": "telegram:main",
         "title": "long work"
       }
     },
@@ -36,7 +35,6 @@
       "name": "<name>",
       "work_dir": "<workdir>",
       "attributes": {
-        "manager_id": "telegram:main",
         "title": "long work"
       }
     },
@@ -96,8 +94,5 @@
       "content": "Resumed and done.",
       "source_key": "message:10:final"
     }
-  ],
-  "owners": {
-    "1": "telegram:main"
-  }
+  ]
 }

@@ -25,6 +25,7 @@ import (
 	"github.com/pilat/coagent/internal/logger"
 	"github.com/pilat/coagent/internal/sessionevent"
 	"github.com/pilat/coagent/internal/sessionstore"
+	"github.com/pilat/coagent/internal/sessionstore/sessionstoretest"
 	"github.com/pilat/coagent/internal/subagent"
 	"github.com/pilat/coagent/internal/tool"
 	"github.com/pilat/coagent/internal/transcript"
@@ -425,11 +426,13 @@ func TestIntegration_ExploreChildIsDeniedControlPlaneTools(t *testing.T) {
 	for _, id := range controlPlaneTools {
 		assert.Contains(t, parentOffered, id, "root session must keep %q", id)
 	}
-	assertNotOffered(t, parentOffered, configPlaneTools)
+	for _, id := range configPlaneTools {
+		assert.Contains(t, parentOffered, id)
+	}
 	require.NoError(t, llmtest.ValidateToolPairing(h.messages(parentID)))
 }
 
-func TestIntegration_ConfigToolsReachOnlyManagerOwnedRoots(t *testing.T) {
+func TestIntegration_ConfigToolsReachEveryRootButNoSubagent(t *testing.T) {
 	tests := []struct {
 		name  string
 		attrs map[string]any
@@ -437,11 +440,7 @@ func TestIntegration_ConfigToolsReachOnlyManagerOwnedRoots(t *testing.T) {
 	}{
 		{name: "channel-less root"},
 		{name: "ordinary cli root", attrs: map[string]any{"channel": "cli"}},
-		{name: "general root", attrs: managerAttrs("telegram-main"), agent: "general"},
-		{
-			name:  "manager-owned root",
-			attrs: managerAttrs("telegram-main"),
-		},
+		{name: "general root", attrs: nil, agent: "general"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -459,12 +458,8 @@ func TestIntegration_ConfigToolsReachOnlyManagerOwnedRoots(t *testing.T) {
 			}
 			require.NoError(t, h.mgr.sendToSession(h.ctx, sessionID, "configure"))
 			h.waitAnswer(sessionID, "")
-			if owner, _ := tt.attrs["manager_id"].(string); owner != "" {
-				for _, id := range configPlaneTools {
-					assert.Contains(t, h.schemas.offered(sessionID), id)
-				}
-			} else {
-				assertNotOffered(t, h.schemas.offered(sessionID), configPlaneTools)
+			for _, id := range configPlaneTools {
+				assert.Contains(t, h.schemas.offered(sessionID), id)
 			}
 		})
 	}
@@ -488,7 +483,9 @@ func TestIntegration_ConfigToolsReachOnlyManagerOwnedRoots(t *testing.T) {
 		h.waitAnswer(parentID, "")
 		h.assertUnknownTools(link.ChildID, configPlaneTools)
 		assertNotOffered(t, h.schemas.offered(link.ChildID), configPlaneTools)
-		assertNotOffered(t, h.schemas.offered(parentID), configPlaneTools)
+		for _, id := range configPlaneTools {
+			assert.Contains(t, h.schemas.offered(parentID), id)
+		}
 	})
 }
 
@@ -620,7 +617,7 @@ func TestHarnessScenario_ForegroundChildHasNoLifetimeLimit(t *testing.T) {
 	h := newHarness(t, harnessOptions{respond: respond})
 	collector := h.collect()
 	defer closeOnce(childRelease)
-	parentID := h.send("run the long child", managerAttrs(scenarioManagerID))
+	parentID := h.send("run the long child", nil)
 
 	// While the child is held mid-run, all four durable wait facts hold at once.
 	h.waitUntil("child link spawned", func() bool {
@@ -708,10 +705,12 @@ func TestHarnessScenario_SubagentTextWithToolsCompletes(t *testing.T) {
 func TestHarnessScenario_ForegroundChildContinuesWithoutSleep(t *testing.T) {
 	initialRelease := make(chan struct{})
 	followUpRelease := make(chan struct{})
+	followUpStarted := make(chan struct{})
 	var childID atomic.Int64
 	respond := func(_ string, messages []llmwire.Message) *llmwire.Response {
 		if hasUserContaining(messages, "CHILD_INITIAL") {
 			if hasUserContaining(messages, "FOLLOW_UP") {
+				closeOnce(followUpStarted)
 				<-followUpRelease
 				return textReply("child continuation answer")
 			}
@@ -725,7 +724,13 @@ func TestHarnessScenario_ForegroundChildContinuesWithoutSleep(t *testing.T) {
 		}
 		if hasUserContaining(messages, "continue the same child") {
 			if hasToolResultFor(messages, "send_to_subagent") {
-				return textReply("follow-up accepted")
+				// The golden IDs require the child's promoted input before the parent's final.
+				select {
+				case <-followUpStarted:
+					return textReply("follow-up accepted")
+				case <-time.After(10 * time.Second):
+					return textReply("timed out waiting for child follow-up promotion")
+				}
 			}
 			id := childID.Load()
 			if id == 0 {
@@ -816,7 +821,7 @@ func TestHarnessScenario_BackgroundChildIsTheWakeSource(t *testing.T) {
 	h := newHarness(t, harnessOptions{respond: respond})
 	collector := h.collect()
 	defer closeOnce(childRelease)
-	parentID := h.send("start background child", managerAttrs(scenarioManagerID))
+	parentID := h.send("start background child", nil)
 	collector.waitMessage(parentID, "background launched; yielded without sleep")
 	link := h.linkByCall(parentID, taskCallID)
 	require.NotNil(t, link)
@@ -868,7 +873,7 @@ func TestHarnessScenario_BackgroundFinalResponseResumesOnCompletion(t *testing.T
 	h := newHarness(t, harnessOptions{respond: respond})
 	collector := h.collect()
 	defer closeOnce(childRelease)
-	parentID := h.send("start canary child", managerAttrs(scenarioManagerID))
+	parentID := h.send("start canary child", nil)
 	collector.waitMessage(parentID, "child still running")
 	parentMessages := h.messages(parentID)
 	require.True(t, slices.ContainsFunc(parentMessages, func(message llmwire.Message) bool {
@@ -1258,11 +1263,10 @@ func TestSpawnExplicitEffortReachesChildProvider(t *testing.T) {
 		configure: withSpawnEffortModels(provider.url),
 		clientFor: configuredClient(withSpawnEffortModels(provider.url)),
 	})
-	parent, err := h.store.CreateSession(h.ctx, h.projectID, "parent-model", "high", nil)
-	require.NoError(t, err)
+	parent := sessionstoretest.BareRoot(t, h.db, h.projectID, "parent-model", "high", nil)
 	h.startInboxWake()
 	child, err := h.mgr.Spawn(h.ctx, subagent.SpawnRequest{
-		ParentID: parent.ID, AgentType: "general", Model: "child-model",
+		ParentID: parent, AgentType: "general", Model: "child-model",
 		Prompt: "child work", ReasoningLevel: "medium",
 	})
 	require.NoError(t, err)
@@ -1284,8 +1288,7 @@ func TestSpawnEffortRefusalKeepsSubagentText(t *testing.T) {
 			}
 		},
 	})
-	parent, err := h.store.CreateSession(h.ctx, h.projectID, "parent-model", "high", nil)
-	require.NoError(t, err)
+	parent := sessionstoretest.BareRoot(t, h.db, h.projectID, "parent-model", "high", nil)
 	for _, tc := range []struct {
 		model, effort, want string
 	}{
@@ -1304,7 +1307,7 @@ func TestSpawnEffortRefusalKeepsSubagentText(t *testing.T) {
 	} {
 		t.Run(tc.model, func(t *testing.T) {
 			_, err := h.mgr.Spawn(h.ctx, subagent.SpawnRequest{
-				ParentID:       parent.ID,
+				ParentID:       parent,
 				AgentType:      "general",
 				Model:          tc.model,
 				Prompt:         "child work",

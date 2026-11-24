@@ -13,7 +13,6 @@ import (
 
 	"github.com/pilat/coagent/api/coagent/v1"
 	"github.com/pilat/coagent/api/coagent/v1/coagentv1connect"
-	"github.com/pilat/coagent/internal/controllerapi"
 )
 
 func TestServer_RefusesMissingAndWrongToken(t *testing.T) {
@@ -104,14 +103,14 @@ func TestServer_EveryClientReachesEveryRoot(t *testing.T) {
 	assert.Equal(t, []apiSend{{sessionID: id, text: "private", key: "foreign"}}, f.backend.sends)
 }
 
-func TestCreateSession_RootBelongsToTheCallingClient(t *testing.T) {
+func TestCreateSession_CreatesARootAndRefusesARelativeWorkDir(t *testing.T) {
 	t.Parallel()
 	f := newAPIFixture(t)
 	h := f.start(t)
 	id := f.root(t, h, "alpha")
 	record, err := f.store.GetSession(t.Context(), id)
 	require.NoError(t, err)
-	assert.Equal(t, "alpha", record.Attributes[controllerapi.SessionAttributeManagerID])
+
 	assert.Zero(t, record.ParentID)
 	ctx, cancel := context.WithTimeout(t.Context(), 4*time.Second)
 	defer cancel()

@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/pilat/coagent/internal/llmwire"
+	"github.com/pilat/coagent/internal/sessionstore/sessionstoretest"
 	"github.com/pilat/coagent/internal/transcript"
 )
 
@@ -41,7 +42,9 @@ func TestGetSessionTreeUsage(t *testing.T) {
 	store, _, projectID := newTestStore(t)
 	ctx := context.Background()
 
-	root, err := store.CreateSession(ctx, projectID, "m", "medium", nil)
+	rootID := sessionstoretest.BareRoot(t, store.db, projectID, "m", "medium", nil)
+
+	root, err := store.GetSession(ctx, rootID)
 	require.NoError(t, err)
 
 	sub, err := createChild(ctx, store, projectID, root.ID, root.ID, "explore", "m", "medium")
@@ -56,9 +59,8 @@ func TestGetSessionTreeUsage(t *testing.T) {
 	insertUsageRow(t, store, sub, 500, 50, 0.02)
 
 	// A second, unrelated root must not be swept in.
-	other, err := store.CreateSession(ctx, projectID, "m", "medium", nil)
-	require.NoError(t, err)
-	insertUsageRow(t, store, other.ID, 9999, 999, 9.99)
+	other := sessionstoretest.BareRoot(t, store.db, projectID, "m", "medium", nil)
+	insertUsageRow(t, store, other, 9999, 999, 9.99)
 
 	prompt, completion, cost, err := store.GetSessionTreeUsage(ctx, root.ID)
 	require.NoError(t, err)
@@ -74,10 +76,9 @@ func TestGetSessionTreeUsage_EmptyTree(t *testing.T) {
 	store, _, projectID := newTestStore(t)
 	ctx := context.Background()
 
-	root, err := store.CreateSession(ctx, projectID, "m", "medium", nil)
-	require.NoError(t, err)
+	root := sessionstoretest.BareRoot(t, store.db, projectID, "m", "medium", nil)
 
-	prompt, completion, cost, err := store.GetSessionTreeUsage(ctx, root.ID)
+	prompt, completion, cost, err := store.GetSessionTreeUsage(ctx, root)
 	require.NoError(t, err)
 	assert.Equal(t, 0, prompt)
 	assert.Equal(t, 0, completion)

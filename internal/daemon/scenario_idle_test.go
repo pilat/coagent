@@ -16,7 +16,7 @@ func TestHarnessScenario_OwnedRootBecomesIdleWithoutOutputAcknowledgement(t *tes
 		return textReply("finished without delivery")
 	}})
 	collector := h.collect()
-	root := h.send("finish", managerAttrs(scenarioManagerID))
+	root := h.send("finish", nil)
 	collector.waitMessage(root, "finished without delivery")
 	collector.waitIdleAfter(root, "finished without delivery")
 	assert.False(t, h.mgr.HasActiveLoop(root))

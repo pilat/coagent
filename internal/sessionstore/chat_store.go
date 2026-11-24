@@ -9,9 +9,7 @@ import (
 )
 
 const liveChatRootSQL = `s.parent_id = 0 AND s.killed_at IS NULL
-	AND s.status NOT IN ('terminating', 'killed')
-	AND json_type(s.attributes, '$.manager_id') = 'text'
-	AND json_extract(s.attributes, '$.manager_id') <> ''`
+	AND s.status NOT IN ('terminating', 'killed')`
 
 // ChatOutput includes non-rendering lifecycle rows that still advance the chat cursor.
 type ChatOutput struct {

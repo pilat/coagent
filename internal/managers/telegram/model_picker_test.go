@@ -29,7 +29,7 @@ func TestHandleModelRendersDisplayNamePriceAndEffort(t *testing.T) {
 		focus: 42, listModels: pickerModels,
 		listSessions: []controllerapi.SessionInfo{{
 			ID: 42, Model: pickerModels[0].ID, ReasoningLevel: "high",
-			Attributes: map[string]any{"manager_id": "telegram-main"},
+			Attributes: map[string]any{},
 		}},
 	}
 	m := newCmdTestManager(t, ctrl, &messages)
@@ -53,7 +53,7 @@ func TestHandleModelMarksStaleCatalog(t *testing.T) {
 		focus: 42, listModels: models,
 		listSessions: []controllerapi.SessionInfo{{
 			ID: 42, Model: models[0].ID, ReasoningLevel: "high",
-			Attributes: map[string]any{"manager_id": "telegram-main"},
+			Attributes: map[string]any{},
 		}},
 	}
 	m := newCmdTestManager(t, ctrl, &messages)

@@ -2,10 +2,10 @@ package managercontrol
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 
-	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/sessionstore"
 )
 
@@ -17,13 +17,17 @@ func requireManagerIdentity(managerID string) error {
 	return nil
 }
 
-func (s *service) managerRoot(ctx context.Context, sessionID int64) (*sessionstore.SessionRecord, error) {
+func (s *service) requireRoot(ctx context.Context, sessionID int64) (*sessionstore.SessionRecord, error) {
 	record, err := s.store.GetSession(ctx, sessionID)
-	if err != nil || record == nil {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, fmt.Errorf("session %d not found", sessionID)
 	}
 
-	if record.ParentID != 0 || !controllerapi.ManagerRoot(record.Attributes) {
+	if err != nil {
+		return nil, fmt.Errorf("load session %d: %w", sessionID, err)
+	}
+
+	if record.ParentID != 0 {
 		return nil, fmt.Errorf("session %d is not a root session", sessionID)
 	}
 

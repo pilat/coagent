@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/pilat/coagent/internal/migrate"
+	"github.com/pilat/coagent/internal/sessionstore/sessionstoretest"
 )
 
 // The oracle tracks immutable identities independently for two owners across restarts.
@@ -20,15 +21,8 @@ func runOutputLogModel(t *testing.T, commands, template []byte) {
 	store, db, project := newTemplateTestStore(t, template)
 	var roots [2]int64
 	for owner := range roots {
-		root, err := store.CreateSession(
-			t.Context(),
-			project,
-			"model",
-			"",
-			map[string]any{"manager_id": fmt.Sprint(owner)},
-		)
-		require.NoError(t, err)
-		roots[owner] = root.ID
+		root := sessionstoretest.BareRoot(t, store.db, project, "model", "", nil)
+		roots[owner] = root
 	}
 	type outputIdentity struct {
 		owner int

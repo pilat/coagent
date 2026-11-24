@@ -6,7 +6,6 @@
       "name": "<name>",
       "work_dir": "<workdir>",
       "attributes": {
-        "manager_id": "telegram:main",
         "title": "unknown finish"
       }
     },
@@ -38,8 +37,5 @@
       "content": "❌ LLM error: Model response ended with an unknown finish reason.",
       "source_key": "integrity:1:error"
     }
-  ],
-  "owners": {
-    "1": "telegram:main"
-  }
+  ]
 }

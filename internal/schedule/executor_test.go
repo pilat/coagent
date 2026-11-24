@@ -2,6 +2,7 @@ package schedule_test
 
 import (
 	"context"
+	"database/sql"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -14,6 +15,7 @@ import (
 	"github.com/pilat/coagent/internal/schedule"
 	"github.com/pilat/coagent/internal/sessionevent"
 	"github.com/pilat/coagent/internal/sessionstore"
+	"github.com/pilat/coagent/internal/sessionstore/sessionstoretest"
 	"github.com/pilat/coagent/internal/tool"
 	"github.com/pilat/coagent/internal/transcript"
 )
@@ -36,7 +38,7 @@ func (m *mockSender) getNotifications() []sessionevent.Notification {
 	return append([]sessionevent.Notification{}, m.notifications...)
 }
 
-func newTestDB(t *testing.T) (schedule.Store, *sessionstore.Store, *sessionstore.Store) {
+func newTestDB(t *testing.T) (schedule.Store, *sessionstore.Store, *sessionstore.Store, *sql.DB) {
 	t.Helper()
 	dbPath := filepath.Join(t.TempDir(), "test.db")
 	db, err := migrate.OpenDB(context.Background(), dbPath)
@@ -48,22 +50,21 @@ func newTestDB(t *testing.T) (schedule.Store, *sessionstore.Store, *sessionstore
 	_, err = provider.Up(context.Background())
 	require.NoError(t, err)
 	sessions := sessionstore.NewStore(db)
-	return schedule.NewStore(db, sessions), sessions, sessions
+	return schedule.NewStore(db, sessions), sessions, sessions, db
 }
 
 func TestExecutor_OneShotFires(t *testing.T) {
-	schedStore, daemonStore, sessStore := newTestDB(t)
+	schedStore, daemonStore, sessStore, db := newTestDB(t)
 	sender := &mockSender{}
 
 	pid, err := daemonStore.GetOrCreateProject(context.Background(), "/tmp/test")
 	require.NoError(t, err)
-	rec, err := sessStore.CreateSession(context.Background(), pid, "", "", nil)
-	require.NoError(t, err)
+	rec := sessionstoretest.BareRoot(t, db, pid, "", "", nil)
 
 	_, err = sessStore.Commit(
 		t.Context(),
 		sessionstore.Commit{
-			SessionID: rec.ID,
+			SessionID: rec,
 			Messages: []*transcript.Message{
 				{Role: "assistant", ToolCalls: []byte(`[{"ID":"sleep-call-1","Name":"sleep","Arguments":"e30="}]`)},
 			},
@@ -74,7 +75,7 @@ func TestExecutor_OneShotFires(t *testing.T) {
 	past := time.Now().Add(-time.Minute).UTC()
 	_, err = schedStore.AddSchedule(
 		context.Background(),
-		rec.ID,
+		rec,
 		"",
 		&past,
 		"wake up and check",
@@ -91,33 +92,32 @@ func TestExecutor_OneShotFires(t *testing.T) {
 	time.Sleep(500 * time.Millisecond)
 	executor.Stop()
 
-	calls, err := sessStore.ListPending(t.Context(), rec.ID)
+	calls, err := sessStore.ListPending(t.Context(), rec)
 	require.NoError(t, err)
 	require.Len(t, calls, 1)
-	assert.Equal(t, rec.ID, calls[0].SessionID)
+	assert.Equal(t, rec, calls[0].SessionID)
 	assert.Equal(t, sessionstore.InputSourceCallResult, calls[0].Source)
 	assert.Equal(t, "sleep-call-1", calls[0].Attributes["call_id"])
 	assert.Equal(t, tool.IDSleep, calls[0].Attributes["tool_id"])
 	assert.Equal(t, "wake up and check", calls[0].RawContent)
 
-	schedules, err := schedStore.ListSchedules(context.Background(), rec.ID)
+	schedules, err := schedStore.ListSchedules(context.Background(), rec)
 	require.NoError(t, err)
 	assert.Empty(t, schedules)
 }
 
 func TestExecutor_StandaloneOneShotDeliversFutureInput(t *testing.T) {
-	schedStore, daemonStore, sessStore := newTestDB(t)
+	schedStore, daemonStore, sessStore, db := newTestDB(t)
 	sender := &mockSender{}
 
 	pid, err := daemonStore.GetOrCreateProject(context.Background(), "/tmp/test")
 	require.NoError(t, err)
-	rec, err := sessStore.CreateSession(context.Background(), pid, "", "", nil)
-	require.NoError(t, err)
+	rec := sessionstoretest.BareRoot(t, db, pid, "", "", nil)
 
 	past := time.Now().Add(-time.Minute).UTC()
 	_, err = schedStore.AddSchedule(
 		context.Background(),
-		rec.ID,
+		rec,
 		"",
 		&past,
 		"one-time check",
@@ -133,7 +133,7 @@ func TestExecutor_StandaloneOneShotDeliversFutureInput(t *testing.T) {
 	time.Sleep(500 * time.Millisecond)
 	executor.Stop()
 
-	calls, err := sessStore.ListPending(t.Context(), rec.ID)
+	calls, err := sessStore.ListPending(t.Context(), rec)
 	require.NoError(t, err)
 	require.Len(t, calls, 1)
 	assert.Equal(t, sessionstore.InputSourceSchedule, calls[0].Source)
@@ -146,24 +146,23 @@ func TestExecutor_StandaloneOneShotDeliversFutureInput(t *testing.T) {
 	assert.Equal(t, "scheduler", notifications[0].Source)
 	assert.Equal(t, "one-time check", notifications[0].Message)
 
-	schedules, err := schedStore.ListSchedules(context.Background(), rec.ID)
+	schedules, err := schedStore.ListSchedules(context.Background(), rec)
 	require.NoError(t, err)
 	assert.Empty(t, schedules, "accepted standalone one-shot is acknowledged by deletion")
 }
 
 func TestExecutor_FreshStandaloneOneShotUsesFreshDelivery(t *testing.T) {
-	schedStore, daemonStore, sessStore := newTestDB(t)
+	schedStore, daemonStore, sessStore, db := newTestDB(t)
 	sender := &mockSender{}
 
 	pid, err := daemonStore.GetOrCreateProject(context.Background(), "/tmp/test")
 	require.NoError(t, err)
-	rec, err := sessStore.CreateSession(context.Background(), pid, "", "", nil)
-	require.NoError(t, err)
+	rec := sessionstoretest.BareRoot(t, db, pid, "", "", nil)
 
 	past := time.Now().Add(-time.Minute).UTC()
 	_, err = schedStore.AddSchedule(
 		context.Background(),
-		rec.ID,
+		rec,
 		"",
 		&past,
 		"fresh one-time work",
@@ -184,7 +183,7 @@ func TestExecutor_FreshStandaloneOneShotUsesFreshDelivery(t *testing.T) {
 		5*time.Second,
 		10*time.Millisecond,
 	)
-	calls, err := sessStore.ListPending(t.Context(), rec.ID)
+	calls, err := sessStore.ListPending(t.Context(), rec)
 	require.NoError(t, err)
 	require.Len(t, calls, 1)
 	assert.Equal(t, sessionstore.InputSourceSchedule, calls[0].Source)
@@ -193,17 +192,16 @@ func TestExecutor_FreshStandaloneOneShotUsesFreshDelivery(t *testing.T) {
 }
 
 func TestExecutor_CronFires(t *testing.T) {
-	schedStore, daemonStore, sessStore := newTestDB(t)
+	schedStore, daemonStore, sessStore, db := newTestDB(t)
 	sender := &mockSender{}
 
 	pid, err := daemonStore.GetOrCreateProject(context.Background(), "/tmp/test")
 	require.NoError(t, err)
-	rec, err := sessStore.CreateSession(context.Background(), pid, "", "", nil)
-	require.NoError(t, err)
+	rec := sessionstoretest.BareRoot(t, db, pid, "", "", nil)
 
 	_, err = schedStore.AddSchedule(
 		context.Background(),
-		rec.ID,
+		rec,
 		"* * * * *",
 		nil,
 		"periodic check",
@@ -220,7 +218,7 @@ func TestExecutor_CronFires(t *testing.T) {
 	time.Sleep(500 * time.Millisecond)
 	executor.Stop()
 
-	calls, err := sessStore.ListPending(t.Context(), rec.ID)
+	calls, err := sessStore.ListPending(t.Context(), rec)
 	require.NoError(t, err)
 	require.Len(t, calls, 1)
 	assert.Equal(t, sessionstore.InputSourceSchedule, calls[0].Source)
@@ -228,24 +226,23 @@ func TestExecutor_CronFires(t *testing.T) {
 	assert.Contains(t, calls[0].RawContent, "Schedule tick #1")
 	assert.Contains(t, calls[0].RawContent, "periodic check")
 
-	schedules, err := schedStore.ListSchedules(context.Background(), rec.ID)
+	schedules, err := schedStore.ListSchedules(context.Background(), rec)
 	require.NoError(t, err)
 	require.Len(t, schedules, 1)
 	assert.NotNil(t, schedules[0].LastFiredAt(), "a delivered tick is durably acknowledged")
 }
 
 func TestExecutor_CronDeliveryFailureIsNotAcknowledged(t *testing.T) {
-	schedStore, daemonStore, sessStore := newTestDB(t)
+	schedStore, daemonStore, sessStore, db := newTestDB(t)
 	sender := &mockSender{}
 
 	pid, err := daemonStore.GetOrCreateProject(context.Background(), "/tmp/test")
 	require.NoError(t, err)
-	rec, err := sessStore.CreateSession(context.Background(), pid, "", "", nil)
-	require.NoError(t, err)
+	rec := sessionstoretest.BareRoot(t, db, pid, "", "", nil)
 
 	_, err = schedStore.AddSchedule(
 		context.Background(),
-		rec.ID,
+		rec,
 		"* * * * *",
 		nil,
 		"retry me",
@@ -254,7 +251,7 @@ func TestExecutor_CronDeliveryFailureIsNotAcknowledged(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	require.NoError(t, sessStore.UpdateSessionStatus(t.Context(), rec.ID, sessionstore.SessionStatusKilled))
+	require.NoError(t, sessStore.UpdateSessionStatus(t.Context(), rec, sessionstore.SessionStatusKilled))
 	executor := schedule.NewExecutor(schedStore, sender)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -263,27 +260,26 @@ func TestExecutor_CronDeliveryFailureIsNotAcknowledged(t *testing.T) {
 	executor.Stop()
 
 	assert.Empty(t, sender.getNotifications())
-	inputs, err := sessStore.ListPending(t.Context(), rec.ID)
+	inputs, err := sessStore.ListPending(t.Context(), rec)
 	require.NoError(t, err)
 	assert.Empty(t, inputs)
-	schedules, err := schedStore.ListSchedules(context.Background(), rec.ID)
+	schedules, err := schedStore.ListSchedules(context.Background(), rec)
 	require.NoError(t, err)
 	require.Len(t, schedules, 1)
 	assert.Nil(t, schedules[0].LastFiredAt(), "failed delivery must remain due for retry")
 }
 
 func TestExecutor_FreshCronFires(t *testing.T) {
-	schedStore, daemonStore, sessStore := newTestDB(t)
+	schedStore, daemonStore, sessStore, db := newTestDB(t)
 	sender := &mockSender{}
 
 	pid, err := daemonStore.GetOrCreateProject(context.Background(), "/tmp/test")
 	require.NoError(t, err)
-	rec, err := sessStore.CreateSession(context.Background(), pid, "", "", nil)
-	require.NoError(t, err)
+	rec := sessionstoretest.BareRoot(t, db, pid, "", "", nil)
 
 	_, err = schedStore.AddSchedule(
 		context.Background(),
-		rec.ID,
+		rec,
 		"* * * * *",
 		nil,
 		"do the fresh job",
@@ -300,7 +296,7 @@ func TestExecutor_FreshCronFires(t *testing.T) {
 	time.Sleep(500 * time.Millisecond)
 	executor.Stop()
 
-	calls, err := sessStore.ListPending(t.Context(), rec.ID)
+	calls, err := sessStore.ListPending(t.Context(), rec)
 	require.NoError(t, err)
 	require.Len(t, calls, 1)
 	assert.Equal(t, true, calls[0].Attributes["fresh"])
@@ -310,17 +306,16 @@ func TestExecutor_FreshCronFires(t *testing.T) {
 }
 
 func TestExecutor_CronDoesNotDoubleFire(t *testing.T) {
-	schedStore, daemonStore, sessStore := newTestDB(t)
+	schedStore, daemonStore, sessStore, db := newTestDB(t)
 	sender := &mockSender{}
 
 	pid, err := daemonStore.GetOrCreateProject(context.Background(), "/tmp/test")
 	require.NoError(t, err)
-	rec, err := sessStore.CreateSession(context.Background(), pid, "", "", nil)
-	require.NoError(t, err)
+	rec := sessionstoretest.BareRoot(t, db, pid, "", "", nil)
 
 	sched, err := schedStore.AddSchedule(
 		context.Background(),
-		rec.ID,
+		rec,
 		"* * * * *",
 		nil,
 		"periodic",
@@ -343,13 +338,13 @@ func TestExecutor_CronDoesNotDoubleFire(t *testing.T) {
 	executor.Stop()
 
 	assert.Empty(t, sender.getNotifications())
-	inputs, err := sessStore.ListPending(t.Context(), rec.ID)
+	inputs, err := sessStore.ListPending(t.Context(), rec)
 	require.NoError(t, err)
 	assert.Len(t, inputs, 1)
 }
 
 func TestExecutor_StopIsClean(t *testing.T) {
-	schedStore, _, _ := newTestDB(t)
+	schedStore, _, _, _ := newTestDB(t)
 	sender := &mockSender{}
 
 	executor := schedule.NewExecutor(schedStore, sender)

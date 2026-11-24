@@ -24,7 +24,6 @@ type fakeController struct {
 	outputs           map[int64][]controllerapi.ChatOutput
 	cursor            int64
 	entered           bool
-	managerID         string
 	spawnFavorites    []string
 	spawnFavoritesErr error
 
@@ -75,7 +74,6 @@ func (f *fakeController) CreateSession(_ context.Context, data controllerapi.Ses
 	id := int64(len(f.createSessionCalls))
 	f.listSessions = append(f.listSessions, controllerapi.SessionInfo{
 		ID: id, Name: fmt.Sprintf("project - %d", id), WorkDir: data.WorkDir,
-		Attributes: map[string]any{"manager_id": f.owner()},
 	})
 	return id, nil
 }
@@ -154,13 +152,6 @@ func telegramResponse(req *http.Request, payload string) *http.Response {
 	return resp
 }
 
-func (f *fakeController) owner() string {
-	if f.managerID == "" {
-		return "telegram-main"
-	}
-	return f.managerID
-}
-
 func (f *fakeController) ChatFocus(context.Context, string) (int64, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -182,7 +173,7 @@ func (f *fakeController) SetChatFocus(_ context.Context, _ string, id int64) err
 	defer f.mu.Unlock()
 	for _, session := range f.listSessions {
 		if session.ID == id && session.KilledAt == nil && session.Status != "terminating" &&
-			session.Status != "killed" && controllerapi.ManagerRoot(session.Attributes) {
+			session.Status != "killed" {
 			f.focus, f.cursor, f.entered = id, 0, false
 			return nil
 		}
@@ -275,8 +266,7 @@ func (f *fakeController) ChatSessions(context.Context, string) ([]controllerapi.
 	defer f.mu.Unlock()
 	var rows []controllerapi.ChatSessionInfo
 	for _, session := range f.listSessions {
-		if session.KilledAt != nil || session.Status == "terminating" || session.Status == "killed" ||
-			!controllerapi.ManagerRoot(session.Attributes) {
+		if session.KilledAt != nil || session.Status == "terminating" || session.Status == "killed" {
 			continue
 		}
 		rows = append(rows, controllerapi.ChatSessionInfo{ID: session.ID, Name: session.Name})

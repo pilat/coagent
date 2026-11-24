@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/pilat/coagent/internal/migrate"
+	"github.com/pilat/coagent/internal/sessionstore/sessionstoretest"
 	"github.com/pilat/coagent/internal/transcript"
 )
 
@@ -245,9 +246,8 @@ func scheduledTurn(ctx context.Context, s *Store,
 
 func seedCompletionSession(t *testing.T, s *Store, db *sql.DB, project int64) int64 {
 	t.Helper()
-	record, err := s.CreateSession(t.Context(), project, "model", "", map[string]any{"manager_id": "test-manager"})
-	require.NoError(t, err)
-	return record.ID
+	record := sessionstoretest.BareRoot(t, s.db, project, "model", "", map[string]any{})
+	return record
 }
 
 func testStore(db *sql.DB) *Store { return NewStore(db) }

@@ -20,7 +20,7 @@ func TestSessionsLimitAndNumberedControlBeyondLimit(t *testing.T) {
 			for id := 1; id <= total; id++ {
 				ctrl.listSessions = append(ctrl.listSessions, controllerapi.SessionInfo{
 					ID: int64(id), Name: fmt.Sprintf("work %d", id),
-					Attributes: map[string]any{"manager_id": "telegram-main"},
+					Attributes: map[string]any{},
 				})
 			}
 			var messages []string

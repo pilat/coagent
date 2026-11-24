@@ -6,6 +6,7 @@
 - **Amended by:** [ADR-0101](0101-an-orchestrator-ends-only-sessions-it-spawned.md) — an orchestrator can stop and kill the sessions it spawned
 - **Amended by:** [ADR-0105](0105-built-in-managers-are-local-api-clients-in-process.md) — an operator client can also set or clear the mode with `SetOrchestratorMode`
 - **Amended by:** [ADR-0106](0106-one-operator-every-surface-reaches-every-root.md) — an orchestrator reaches every manager root
+- **Amended by:** [ADR-0107](0107-every-root-is-a-root.md)
 
 ## Context
 

@@ -2,6 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-11-14
+- **Amended by:** [ADR-0107](0107-every-root-is-a-root.md)
 - **Amends:** [ADR-0031](0031-user-commands-grant-one-turn-tool-authority.md), [ADR-0057](0057-reuse-user-command-activation-for-config-edits.md), [ADR-0015](0015-one-apply-in-flight-one-marker-consumption.md)
 
 ## Context

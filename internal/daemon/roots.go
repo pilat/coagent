@@ -6,7 +6,6 @@ import (
 
 	"go.uber.org/zap"
 
-	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/logger"
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/worktree"
@@ -21,13 +20,17 @@ type rootRequest struct {
 }
 
 // CreateSession creates and starts a root, optionally in a fresh worktree.
-// A manager root commits its opened row and first input with the session.
+// It commits its opened row and first input with the session.
 func (s *Service) CreateSession(
 	ctx context.Context,
 	projectID int64,
 	worktreeName, prompt, model string,
 	attrs map[string]any,
 ) (int64, error) {
+	if attrs == nil {
+		attrs = map[string]any{}
+	}
+
 	workDir, err := s.store.GetProjectWorkDir(ctx, projectID)
 	if err != nil {
 		return 0, fmt.Errorf("resolve project %d: %w", projectID, err)
@@ -42,42 +45,21 @@ func (s *Service) CreateSession(
 		return 0, fmt.Errorf("resolve reasoning level for model %s: %w", model, err)
 	}
 
-	if controllerapi.ManagerRoot(attrs) {
-		projectName, err := s.store.GetProjectName(ctx, projectID)
-		if err != nil {
-			return 0, fmt.Errorf("resolve project name: %w", err)
-		}
-
-		id, _, err := s.createManagerRoot(ctx, rootRequest{
-			Root: sessionstore.ManagerRootCreate{
-				ProjectID: projectID, Name: projectName, WorkDir: workDir,
-				Model: model, ReasoningLevel: level, Attributes: attrs,
-				Input: sessionstore.Input{Source: sessionstore.InputSourceUser, Content: prompt},
-			},
-			Worktree: worktreeName, Start: true,
-		})
-
-		return id, err
-	}
-
-	record, err := s.store.CreateSession(ctx, projectID, model, level, attrs)
+	projectName, err := s.store.GetProjectName(ctx, projectID)
 	if err != nil {
-		return 0, fmt.Errorf("create session record: %w", err)
+		return 0, fmt.Errorf("resolve project name: %w", err)
 	}
 
-	if prompt != "" {
-		if _, err := s.store.Enqueue(ctx, sessionstore.Input{
-			SessionID: record.ID, Source: sessionstore.InputSourceUser, Content: prompt,
-		}); err != nil {
-			return 0, fmt.Errorf("persist initial session input: %w", err)
-		}
-	}
+	id, _, err := s.createManagerRoot(ctx, rootRequest{
+		Root: sessionstore.ManagerRootCreate{
+			ProjectID: projectID, Name: projectName, WorkDir: workDir,
+			Model: model, ReasoningLevel: level, Attributes: attrs,
+			Input: sessionstore.Input{Source: sessionstore.InputSourceUser, Content: prompt},
+		},
+		Worktree: worktreeName, Start: true,
+	})
 
-	if err := s.startCreated(ctx, record.ID); err != nil {
-		return 0, err
-	}
-
-	return record.ID, nil
+	return id, err
 }
 
 func (s *Service) createManagerRoot(ctx context.Context, request rootRequest) (int64, string, error) {

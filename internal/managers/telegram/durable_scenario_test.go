@@ -56,7 +56,7 @@ func TestHarnessScenario_SetManagerTracesProduceNoTelegramTraffic(t *testing.T) 
 		t.Run(name, func(t *testing.T) {
 			trace := readDaemonTrace(t, name)
 			calls := replayDaemonTraceThroughOutbox(t, trace)
-			assert.Empty(t, calls, "a CLI-owned trace must produce no Telegram traffic")
+			assert.Empty(t, calls, "a trace with no output rows must produce no Telegram traffic")
 		})
 	}
 }
@@ -91,39 +91,21 @@ func TestHarnessScenario_OutputsRetainOwnershipWithoutCreatedNotification(t *tes
 	}, messages)
 }
 
-func TestHarnessScenario_ReplaySelectsFirstOwnedMessageAndSkipsOtherTails(t *testing.T) {
-	trace := harnessTraceFile{
-		Owners: map[int64]string{1: "foreign", 2: replayManagerID, 3: replayManagerID},
-		Outputs: []harnessTraceOutput{
-			{ID: 1, SessionID: 1, Type: controllerapi.OutputMessage, Content: "foreign"},
-			{ID: 2, SessionID: 3, Type: controllerapi.OutputSessionOpened},
-			{ID: 3, SessionID: 2, Type: controllerapi.OutputMessage, Content: "selected first"},
-			{ID: 4, SessionID: 3, Type: controllerapi.OutputMessage, Content: "other output"},
-			{ID: 5, SessionID: 2, Type: controllerapi.OutputMessage, Content: "selected second"},
-		},
-	}
-	calls := replayDaemonTraceThroughOutbox(t, trace)
-	require.Len(t, calls, 3)
-	assert.Equal(t, "<b>→ #2 &lt;name&gt;</b>", calls[0].Text)
-	assert.Equal(t, "<b>#2 &lt;name&gt;</b>\n\nselected first", calls[1].Text)
-	assert.Equal(t, "<b>#2 &lt;name&gt;</b>\n\nselected second", calls[2].Text)
-}
-
 func replayDaemonTraceThroughOutbox(t *testing.T, trace harnessTraceFile) []telegramHarnessCall {
 	t.Helper()
-	controller := &fakeController{managerID: replayManagerID, outputs: make(map[int64][]controllerapi.ChatOutput)}
-	for id, owner := range trace.Owners {
-		controller.listSessions = append(controller.listSessions, controllerapi.SessionInfo{
-			ID: id, Name: "<name>", Attributes: map[string]any{"manager_id": owner},
-		})
-	}
+	controller := &fakeController{outputs: make(map[int64][]controllerapi.ChatOutput)}
 	for _, output := range trace.Outputs {
+		if _, exists := controller.outputs[output.SessionID]; !exists {
+			controller.listSessions = append(controller.listSessions, controllerapi.SessionInfo{
+				ID: output.SessionID, Name: "<name>",
+			})
+		}
 		controller.outputs[output.SessionID] = append(controller.outputs[output.SessionID], controllerapi.ChatOutput{
 			ID: output.ID, SessionID: output.SessionID, Type: output.Type, Content: output.Content,
 		})
 	}
 	for _, row := range trace.Outputs {
-		if row.Type == controllerapi.OutputMessage && trace.Owners[row.SessionID] == replayManagerID {
+		if row.Type == controllerapi.OutputMessage {
 			require.NoError(t, controller.SetChatFocus(t.Context(), "chat", row.SessionID))
 			break
 		}

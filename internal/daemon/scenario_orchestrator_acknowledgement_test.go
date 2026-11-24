@@ -17,7 +17,7 @@ func TestOrchestratorAcknowledgesUnreadSignal(t *testing.T) {
 			h := newHarness(t, harnessOptions{respond: trivialRespond})
 			h.startInboxWake()
 			watcher := modeRoot(t, h)
-			target := h.createRoot(managerAttrs("owner"))
+			target := h.createRoot(nil)
 			host := orchestratorHost{s: h.mgr}
 			_, _, err := host.SendToSession(h.ctx, watcher, target, "first")
 			require.NoError(t, err)

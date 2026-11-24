@@ -16,6 +16,7 @@ import (
 	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/logger"
 	"github.com/pilat/coagent/internal/sessionstore"
+	"github.com/pilat/coagent/internal/sessionstore/sessionstoretest"
 	"github.com/pilat/coagent/internal/subagent"
 	"github.com/pilat/coagent/internal/tool"
 	"github.com/pilat/coagent/internal/transcript"
@@ -43,15 +44,14 @@ func TestSettleUnresolvedCallsDeduplicatesRepeatedCallID(t *testing.T) {
 	mgr, sessions := h.mgr, h.store
 	ctx := t.Context()
 	projectID := testProject(t, sessions, t.TempDir())
-	record, err := sessions.CreateSession(ctx, projectID, "fake-model", "", nil)
-	require.NoError(t, err)
-	_, err = sessions.Commit(ctx, sessionstore.Commit{SessionID: record.ID, Messages: []*transcript.Message{
+	record := sessionstoretest.BareRoot(t, h.db, projectID, "fake-model", "", nil)
+	_, err := sessions.Commit(ctx, sessionstore.Commit{SessionID: record, Messages: []*transcript.Message{
 		storedAssistant(`[{"id":"c1","name":"sleep"}]`),
 		storedAssistant(`[{"id":"c1","name":"sleep"}]`),
 	}})
 	require.NoError(t, err)
 	require.NoError(t, mgr.settleUnresolvedCalls(ctx))
-	pending, err := sessions.ListPending(ctx, record.ID)
+	pending, err := sessions.ListPending(ctx, record)
 	require.NoError(t, err)
 	require.Len(t, pending, 1)
 	assert.Equal(t, sessionstore.InputSourceCallResult, pending[0].Source)

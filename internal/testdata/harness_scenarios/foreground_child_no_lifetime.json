@@ -6,7 +6,6 @@
       "name": "<name>",
       "work_dir": "<workdir>",
       "attributes": {
-        "manager_id": "telegram:main",
         "title": "run the long child"
       }
     },
@@ -33,7 +32,6 @@
       "name": "<name>",
       "work_dir": "<workdir>",
       "attributes": {
-        "manager_id": "telegram:main",
         "title": "run the long child"
       }
     },
@@ -72,8 +70,5 @@
       "content": "parent collected the long child",
       "source_key": "message:34:final"
     }
-  ],
-  "owners": {
-    "1": "telegram:main"
-  }
+  ]
 }

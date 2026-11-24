@@ -2,6 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-11-24
+- **Amended by:** [ADR-0107](0107-every-root-is-a-root.md)
 - **Supersedes:** [ADR-0023](0023-manager-owned-session-publication.md)
 - **Amends:** [ADR-0030](0030-durable-session-outbox.md)
 - **Amends:** [ADR-0097](0097-orchestrator-mode-is-a-human-granted-capability-on-an-ordinary-root.md)

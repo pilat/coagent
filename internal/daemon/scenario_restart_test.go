@@ -24,6 +24,7 @@ import (
 	"github.com/pilat/coagent/internal/migrate"
 	"github.com/pilat/coagent/internal/sessionevent"
 	"github.com/pilat/coagent/internal/sessionstore"
+	"github.com/pilat/coagent/internal/sessionstore/sessionstoretest"
 	"github.com/pilat/coagent/internal/subagent"
 	"github.com/pilat/coagent/internal/tool"
 	"github.com/pilat/coagent/internal/transcript"
@@ -41,7 +42,7 @@ func TestHarnessScenario_CompletionCheckCrashAfterToolPersistenceRestartsClean(t
 			return callReply("sleep-call", tool.IDSleep, `{"duration":"10m","reason":"hold the turn"}`)
 		}},
 	)
-	root := first.send("sleep then answer", managerAttrs(scenarioManagerID))
+	root := first.send("sleep then answer", nil)
 	firstCollector := collectEvents(t, first.mgr.bus.SubscribeAll())
 	defer firstCollector.stop()
 	firstCollector.waitWait(root, sessionevent.WaitSleep)
@@ -74,7 +75,7 @@ func TestHarnessScenario_RestartResumesExplicitInputQueuedOnStoppedRoot(t *testi
 	}
 	first := newHarness(t, harnessOptions{dbPath: dbPath, respond: respond})
 	var err error
-	root := first.createRoot(managerAttrs(scenarioManagerID))
+	root := first.createRoot(nil)
 	require.NoError(t, first.store.UpdateSessionStatus(first.ctx, root, sessionstore.SessionStatusStopped))
 	_, err = first.store.Enqueue(
 		first.ctx, sessionstore.Input{
@@ -113,7 +114,7 @@ func TestHarnessScenario_RestartConsumesReadOnlyInputQueuedOnStoppedRoot(t *test
 	}
 	first := newHarness(t, harnessOptions{dbPath: dbPath, respond: respond})
 	var err error
-	root := first.createRoot(managerAttrs(scenarioManagerID))
+	root := first.createRoot(nil)
 	require.NoError(t, first.store.UpdateSessionStatus(first.ctx, root, sessionstore.SessionStatusStopped))
 	_, err = first.store.Enqueue(
 		first.ctx, sessionstore.Input{SessionID: root, Source: sessionstore.InputSourceUser, Content: "/help"},
@@ -557,7 +558,7 @@ func TestHarnessScenario_ProcessCrashRestartDeliversInterruptedOnce(t *testing.T
 		return textReply("interrupted process recovered")
 	}
 	first := newHarness(t, harnessOptions{dbPath: dbPath, respond: respond})
-	root := first.createRoot(managerAttrs(scenarioManagerID))
+	root := first.createRoot(nil)
 	require.NoError(t, first.store.UpdateSessionStatus(first.ctx, root, sessionstore.SessionStatusCompleted))
 	outputPath := filepath.Join(t.TempDir(), "interrupted.output")
 	require.NoError(t, os.WriteFile(outputPath, []byte("partial output\n"), 0o600))
@@ -658,13 +659,12 @@ func TestScenario_InterruptedCallSettlementNeedsNoProjectOrModel(t *testing.T) {
 	h := newHarness(t, harnessOptions{respond: func(string, []llmwire.Message) *llmwire.Response {
 		return textReply("unused")
 	}})
-	root, err := h.store.CreateSession(h.ctx, h.projectID, "removed-model", "", nil)
-	require.NoError(t, err)
+	root := sessionstoretest.BareRoot(h.t, h.db, h.projectID, "removed-model", "", nil)
 	toolCalls, err := json.Marshal([]llmwire.ToolCall{{
 		ID: "interrupted-bash", Name: "bash", Arguments: []byte(`{"command":"true"}`),
 	}})
 	require.NoError(t, err)
-	_, err = h.store.Commit(h.ctx, sessionstore.Commit{SessionID: root.ID, Messages: []*transcript.Message{{
+	_, err = h.store.Commit(h.ctx, sessionstore.Commit{SessionID: root, Messages: []*transcript.Message{{
 		Role: llmwire.RoleAssistant, ToolCalls: toolCalls,
 	}}})
 	require.NoError(t, err)
@@ -673,7 +673,7 @@ func TestScenario_InterruptedCallSettlementNeedsNoProjectOrModel(t *testing.T) {
 	require.NoError(t, os.Rename(workDir, workDir+".gone"))
 	err = h.mgr.settleUnresolvedCalls(h.ctx)
 	require.NoError(t, err)
-	messages, err := h.store.LoadActiveMessages(h.ctx, root.ID)
+	messages, err := h.store.LoadActiveMessages(h.ctx, root)
 	require.NoError(t, err)
 	require.Len(t, messages, 2)
 	assert.Equal(t, llmwire.RoleTool, messages[1].Role)
@@ -903,14 +903,13 @@ func TestScenario_OwnedTaskCallSurvivesSchemaUpgradeAndRestarts(t *testing.T) {
 	_, err = staged.ExecContext(ctx, `INSERT INTO projects (id, work_dir, name) VALUES (1, ?, 'p')`, t.TempDir())
 	require.NoError(t, err)
 	stagedStore := sessionstore.NewStore(staged)
-	parent, err := stagedStore.CreateSession(ctx, 1, "fake-model", "", nil)
-	require.NoError(t, err)
-	require.NoError(t, stagedStore.UpdateSessionStatus(ctx, parent.ID, sessionstore.SessionStatusSuspended))
+	parentID := sessionstoretest.BareRoot(t, staged, 1, "fake-model", "", nil)
+	require.NoError(t, stagedStore.UpdateSessionStatus(ctx, parentID, sessionstore.SessionStatusSuspended))
 
 	// The version-30 schema lacks tool_error, so only raw inserts can stage its prior-schema transcript.
 	_, err = staged.ExecContext(ctx,
 		`INSERT INTO messages (session_id, role, content) VALUES (?, 'user', 'kick off the work')`,
-		parent.ID)
+		parentID)
 	require.NoError(t, err)
 
 	// Persist the legacy timeout argument even though the current schema no longer interprets it.
@@ -920,18 +919,18 @@ func TestScenario_OwnedTaskCallSurvivesSchemaUpgradeAndRestarts(t *testing.T) {
 	require.NoError(t, err)
 	_, err = staged.ExecContext(ctx,
 		`INSERT INTO messages (session_id, role, content, tool_calls) VALUES (?, 'assistant', '', ?)`,
-		parent.ID, "["+string(stagedArgs)+"]")
+		parentID, "["+string(stagedArgs)+"]")
 	require.NoError(t, err)
 	result, err := staged.ExecContext(ctx, `INSERT INTO sessions
 		(project_id, parent_id, root_id, agent_type, model, reasoning_level, created_at, updated_at)
 		VALUES (1, ?, ?, 'general', 'fake-model', 'medium', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
-		parent.ID, parent.ID)
+		parentID, parentID)
 	require.NoError(t, err)
 	childID, err := result.LastInsertId()
 	require.NoError(t, err)
 	_, err = staged.ExecContext(ctx, `INSERT INTO subagent_links
 		(parent_id, child_id, task_call_id, blocking, depth, state, created_at, timeout_sec)
-		VALUES (?, ?, 'tc_staged', 1, 1, 'spawned', 1, 1)`, parent.ID, childID)
+		VALUES (?, ?, 'tc_staged', 1, 1, 'spawned', 1, 1)`, parentID, childID)
 	require.NoError(t, err)
 	_, err = staged.ExecContext(ctx, `INSERT INTO session_inbox
 		(session_id, source, raw_content, received_at)
@@ -956,25 +955,25 @@ func TestScenario_OwnedTaskCallSurvivesSchemaUpgradeAndRestarts(t *testing.T) {
 	require.NoError(t, h.db.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM pragma_table_info('subagent_links') WHERE name = 'timeout_sec'`).Scan(&timeoutCol))
 	assert.Zero(t, timeoutCol, "the boot migration must drop the legacy column")
-	link := h.linkByCall(parent.ID, "tc_staged")
+	link := h.linkByCall(parentID, "tc_staged")
 	require.NotNil(t, link)
 	assert.Equal(t, childID, link.ChildID, "the staged link still owns the call — no new child may spawn")
 
 	// The child completes and delivers exactly once to the suspended parent.
 	h.waitDelivered(childID)
 	h.waitUntil("staged completion consumed", func() bool {
-		return countToolResultsFor(h.messages(parent.ID), tool.IDTask) == 1 &&
-			!h.mgr.HasActiveLoop(parent.ID)
+		return countToolResultsFor(h.messages(parentID), tool.IDTask) == 1 &&
+			!h.mgr.HasActiveLoop(parentID)
 	})
-	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(parent.ID) })
-	final := h.messages(parent.ID)
+	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(parentID) })
+	final := h.messages(parentID)
 	require.NoError(t, llmtest.ValidateToolPairing(final))
 	assert.Equal(t, 1, countAssistantToolCallsFor(final, tool.IDTask), "the task call is never re-issued")
 	assert.Equal(t, 1, countToolResultsFor(final, tool.IDTask), "exactly one completion fills the staged call")
 	require.Contains(t, lastToolResultContent(final, tool.IDTask), "staged child finished")
 	var spawnCount int
 	require.NoError(t, h.db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM sessions WHERE parent_id = ?`, parent.ID).Scan(&spawnCount))
+		`SELECT COUNT(*) FROM sessions WHERE parent_id = ?`, parentID).Scan(&spawnCount))
 	assert.Equal(t, 1, spawnCount, "recovery spawns no replacement child")
 	link = h.link(childID)
 	require.NotNil(t, link)
@@ -1103,7 +1102,7 @@ func interruptFirstRecovery(t *testing.T, dbPath string) int64 {
 			return &llmwire.Response{Text: "must be canceled", FinishType: llmwire.FinishStop}
 		}},
 	)
-	rootID := first.send("restart the recovery", managerAttrs(scenarioManagerID))
+	rootID := first.send("restart the recovery", nil)
 	waitForScenarioSignal(t, secondCall, "recovery call before restart")
 	var recoveryRows int
 	require.NoError(t, first.db.QueryRowContext(first.ctx, `SELECT COUNT(*) FROM messages

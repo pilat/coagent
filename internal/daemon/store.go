@@ -18,13 +18,6 @@ type Store interface { //nolint:interfacebloat // Lifecycle commands share atomi
 	ObserveBudget(context.Context, int64, time.Time, string) (*budget.Record, bool, error)
 	StopFiredBudgetRoot(ctx context.Context, rootID int64) (bool, error)
 	LoadActiveMessages(context.Context, int64) ([]*transcript.Message, error)
-	CreateSession(
-		ctx context.Context,
-		projectID int64,
-		model, reasoningLevel string,
-		attrs map[string]any,
-	) (*sessionstore.SessionRecord, error)
-	CreateReplacementSession(ctx context.Context, oldSessionID int64) (*sessionstore.SessionRecord, error)
 	UpdateSessionModel(ctx context.Context, id int64, model, reasoningLevel string) error
 	GetSession(ctx context.Context, id int64) (*sessionstore.SessionRecord, error)
 	ListAllSessions(ctx context.Context) ([]*sessionstore.SessionRecord, error)

@@ -16,6 +16,7 @@ import (
 	"github.com/pilat/coagent/internal/llmwire"
 	"github.com/pilat/coagent/internal/logger"
 	"github.com/pilat/coagent/internal/sessionstore"
+	"github.com/pilat/coagent/internal/sessionstore/sessionstoretest"
 	"github.com/pilat/coagent/internal/subagent"
 	"github.com/pilat/coagent/internal/tool"
 	"github.com/pilat/coagent/internal/transcript"
@@ -50,17 +51,16 @@ func TestPendingExternalCallsRetainsAtomicChildHandoff(t *testing.T) {
 	h := newHarness(t, harnessOptions{dbPath: dbPath, respond: trivialRespond})
 	sessions, links := h.store, h.links
 	projectID := testProject(t, sessions, t.TempDir())
-	parent, err := sessions.CreateSession(ctx, projectID, "fake-model", "", nil)
-	require.NoError(t, err)
+	parent := sessionstoretest.BareRoot(t, h.db, projectID, "fake-model", "", nil)
 	encoded, err := json.Marshal([]llmwire.ToolCall{{ID: taskCallID, Name: tool.IDTask}})
 	require.NoError(t, err)
 	_, err = sessions.Commit(ctx, sessionstore.Commit{
-		SessionID: parent.ID,
+		SessionID: parent,
 		Messages:  []*transcript.Message{{Role: llmwire.RoleAssistant, ToolCalls: encoded}},
 	})
 	require.NoError(t, err)
 	childID, err := links.Create(ctx, subagent.Create{
-		ProjectID: projectID, ParentID: parent.ID, RootID: parent.ID,
+		ProjectID: projectID, ParentID: parent, RootID: parent,
 		AgentType: "general", Model: "fake-model", TaskCallID: taskCallID,
 		Blocking: true, Depth: 1, State: subagent.StateSpawned,
 	})
@@ -74,14 +74,14 @@ func TestPendingExternalCallsRetainsAtomicChildHandoff(t *testing.T) {
 	handoff := &deliveringChildLinks{Store: links, link: *link}
 	h.mgr.links = handoff
 	manager := h.mgr
-	owners, err := manager.callOwners(ctx, parent.ID)
+	owners, err := manager.callOwners(ctx, parent)
 	require.NoError(t, err)
 	require.True(t, handoff.delivered)
 	require.Equal(t, map[string]string{taskCallID: tool.IDTask}, owners)
-	pendingLinks, err := links.ListPendingChildLinks(ctx, parent.ID)
+	pendingLinks, err := links.ListPendingChildLinks(ctx, parent)
 	require.NoError(t, err)
 	require.Empty(t, pendingLinks)
-	pendingInputs, err := sessions.ListPending(ctx, parent.ID)
+	pendingInputs, err := sessions.ListPending(ctx, parent)
 	require.NoError(t, err)
 	require.Len(t, pendingInputs, 1)
 	require.Equal(t, sessionstore.InputSourceCallResult, pendingInputs[0].Source)

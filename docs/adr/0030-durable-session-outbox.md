@@ -2,6 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-08-24
+- **Amended by:** [ADR-0107](0107-every-root-is-a-root.md)
 - **Supersedes:** [ADR-0021](0021-best-effort-control-pushes.md)
 - **Amended by:** [ADR-0072](0072-flat-chat-with-a-focus.md) — the outbox is an append-only log behind one per-chat cursor; the claim/ack/retry/block queue, receipts and manager bindings are gone
 - **Amended by:** [ADR-0106](0106-one-operator-every-surface-reaches-every-root.md) — output rows no longer compare `manager_id`

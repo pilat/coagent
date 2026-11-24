@@ -10,6 +10,7 @@ import (
 
 	"github.com/pilat/coagent/internal/schedule"
 	"github.com/pilat/coagent/internal/sessionstore"
+	"github.com/pilat/coagent/internal/sessionstore/sessionstoretest"
 	"github.com/pilat/coagent/internal/transcript"
 )
 
@@ -25,17 +26,16 @@ func (s failingCallCheckStore) CallPending(ctx context.Context, sessionID int64,
 func TestPendingSleepsKeepsScheduleWhenCallCheckFails(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	schedStore, projects, sessions := newTestDB(t)
+	schedStore, projects, sessions, db := newTestDB(t)
 	projectID := testProject(t, projects, "/tmp/project")
-	root, err := sessions.CreateSession(ctx, projectID, "", "", nil)
-	require.NoError(t, err)
+	root := sessionstoretest.BareRoot(t, db, projectID, "", "", nil)
 	svc := schedule.NewService(failingCallCheckStore{Store: schedStore}, sessions)
-	sleep, err := svc.AddSleep(ctx, root.ID, "sleep-call", time.Now().Add(time.Hour), "wake")
+	sleep, err := svc.AddSleep(ctx, root, "sleep-call", time.Now().Add(time.Hour), "wake")
 	require.NoError(t, err)
 
-	_, err = svc.PendingSleeps(ctx, root.ID)
+	_, err = svc.PendingSleeps(ctx, root)
 	require.ErrorIs(t, err, context.Canceled)
-	remaining, err := schedStore.ListSchedules(ctx, root.ID)
+	remaining, err := schedStore.ListSchedules(ctx, root)
 	require.NoError(t, err)
 	require.Len(t, remaining, 1)
 	assert.Equal(t, sleep.ID, remaining[0].ID())
@@ -53,44 +53,42 @@ func (s failingRetirementStore) RemoveSchedule(ctx context.Context, id int64) er
 func TestPendingSleepsKeepsStaleRowWhenRetirementFails(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	schedStore, projects, sessions := newTestDB(t)
-	root, err := sessions.CreateSession(ctx, testProject(t, projects, "/tmp/project"), "", "", nil)
-	require.NoError(t, err)
+	schedStore, projects, sessions, db := newTestDB(t)
+	root := sessionstoretest.BareRoot(t, db, testProject(t, projects, "/tmp/project"), "", "", nil)
 	svc := schedule.NewService(failingRetirementStore{Store: schedStore}, sessions)
-	_, err = svc.AddSleep(ctx, root.ID, "settled-call", time.Now().Add(time.Hour), "wake")
+	_, err := svc.AddSleep(ctx, root, "settled-call", time.Now().Add(time.Hour), "wake")
 	require.NoError(t, err)
 
-	_, err = svc.PendingSleeps(ctx, root.ID)
+	_, err = svc.PendingSleeps(ctx, root)
 	require.ErrorIs(t, err, context.Canceled)
-	remaining, err := schedStore.ListSchedules(ctx, root.ID)
+	remaining, err := schedStore.ListSchedules(ctx, root)
 	require.NoError(t, err)
 	assert.Len(t, remaining, 1)
 }
 
 func TestService_CreationVariantsKeepExactIdentity(t *testing.T) {
 	ctx := context.Background()
-	schedStore, daemonStore, sessStore := newTestDB(t)
+	schedStore, daemonStore, sessStore, db := newTestDB(t)
 	projectID := testProject(t, daemonStore, "/tmp/project")
-	rec, err := sessStore.CreateSession(ctx, projectID, "", "", nil)
-	require.NoError(t, err)
+	rec := sessionstoretest.BareRoot(t, db, projectID, "", "", nil)
 
 	svc := schedule.NewService(schedStore, sessStore)
 
-	_, err = svc.AddRecurring(ctx, rec.ID, "", "invalid", false)
+	_, err := svc.AddRecurring(ctx, rec, "", "invalid", false)
 	require.Error(t, err)
-	_, err = svc.AddSleep(ctx, rec.ID, "", time.Now().Add(time.Hour), "invalid")
+	_, err = svc.AddSleep(ctx, rec, "", time.Now().Add(time.Hour), "invalid")
 	require.Error(t, err)
 
-	schedules, err := svc.ListSchedules(ctx, rec.ID)
+	schedules, err := svc.ListSchedules(ctx, rec)
 	require.NoError(t, err)
 	assert.Empty(t, schedules, "invalid variants must not reach persistence")
 
-	_, err = svc.AddRecurring(ctx, rec.ID, "0 9 * * *", "daily", false)
+	_, err = svc.AddRecurring(ctx, rec, "0 9 * * *", "daily", false)
 	require.NoError(t, err)
 	_, err = sessStore.Commit(
 		ctx,
 		sessionstore.Commit{
-			SessionID: rec.ID,
+			SessionID: rec,
 			Messages: []*transcript.Message{
 				{Role: "assistant", ToolCalls: []byte(`[{"ID":"sleep-call-7","Name":"sleep","Arguments":"e30="}]`)},
 			},
@@ -98,10 +96,10 @@ func TestService_CreationVariantsKeepExactIdentity(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	_, err = svc.AddSleep(ctx, rec.ID, "sleep-call-7", time.Now().Add(time.Hour), "wake")
+	_, err = svc.AddSleep(ctx, rec, "sleep-call-7", time.Now().Add(time.Hour), "wake")
 	require.NoError(t, err)
 
-	pending, err := svc.PendingSleeps(ctx, rec.ID)
+	pending, err := svc.PendingSleeps(ctx, rec)
 	require.NoError(t, err)
 	require.Len(t, pending, 1, "recurring rows never masquerade as pending calls")
 	assert.Equal(t, "sleep-call-7", pending[0].CallID)
@@ -109,16 +107,15 @@ func TestService_CreationVariantsKeepExactIdentity(t *testing.T) {
 
 func TestService_CancelPendingSleepsPreservesStandaloneInput(t *testing.T) {
 	ctx := context.Background()
-	schedStore, daemonStore, sessStore := newTestDB(t)
+	schedStore, daemonStore, sessStore, db := newTestDB(t)
 	projectID := testProject(t, daemonStore, "/tmp/project")
-	rec, err := sessStore.CreateSession(ctx, projectID, "", "", nil)
-	require.NoError(t, err)
+	rec := sessionstoretest.BareRoot(t, db, projectID, "", "", nil)
 
 	now := time.Now().UTC()
 	standaloneAt := now.Add(time.Hour)
-	_, err = schedStore.AddSchedule(
+	_, err := schedStore.AddSchedule(
 		ctx,
-		rec.ID,
+		rec,
 		"",
 		&standaloneAt,
 		"standalone input",
@@ -128,14 +125,14 @@ func TestService_CancelPendingSleepsPreservesStandaloneInput(t *testing.T) {
 	require.NoError(t, err)
 
 	svc := schedule.NewService(schedStore, sessStore)
-	_, err = svc.AddSleep(ctx, rec.ID, "sleep-call", now.Add(2*time.Hour), "wake")
+	_, err = svc.AddSleep(ctx, rec, "sleep-call", now.Add(2*time.Hour), "wake")
 	require.NoError(t, err)
 
-	removed, err := svc.CancelPendingSleeps(ctx, rec.ID)
+	removed, err := svc.CancelPendingSleeps(ctx, rec)
 	require.NoError(t, err)
 	assert.Equal(t, int64(1), removed, "only the row owning a pending sleep call is cancelled")
 
-	remaining, err := svc.ListSchedules(ctx, rec.ID)
+	remaining, err := svc.ListSchedules(ctx, rec)
 	require.NoError(t, err)
 	require.Len(t, remaining, 1)
 	assert.Equal(t, "standalone input", remaining[0].InputMessage())

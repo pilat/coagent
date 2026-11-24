@@ -138,10 +138,10 @@ func TestHarnessScenario_LateWakeAfterInterruptedSleepAddsNoOutput(t *testing.T)
 		return respond(model, messages)
 	}})
 	collector := h.collect()
-	id, _ := interruptSleep(t, h, collector, managerAttrs(scenarioManagerID), answer)
+	id, _ := interruptSleep(t, h, collector, nil, answer)
 	h.waitUntil("turn runner gone", func() bool { return !h.mgr.HasActiveLoop(id) })
 	before := collector.snapshot()
-	outputs, owners := scenarioOutputs(t, h)
+	outputs := scenarioOutputs(t, h)
 	messages, status, calls := h.messages(id), h.session(id).Status, modelCalls.Load()
 
 	assert.Equal(t, sessionstore.SessionStatusCompleted, status)
@@ -168,9 +168,8 @@ func TestHarnessScenario_LateWakeAfterInterruptedSleepAddsNoOutput(t *testing.T)
 		}, event.Notification.Type)
 	}
 	require.Positive(t, lateEvents)
-	lateOutputs, lateOwners := scenarioOutputs(t, h)
+	lateOutputs := scenarioOutputs(t, h)
 	assert.Equal(t, outputs, lateOutputs)
-	assert.Equal(t, owners, lateOwners)
 	assert.Equal(t, messages, h.messages(id))
 	assert.Equal(t, status, h.session(id).Status)
 	assert.Equal(t, calls, modelCalls.Load())
@@ -493,7 +492,7 @@ func TestHarnessScenario_ScheduledTurnChain(t *testing.T) {
 	h := newHarness(t, harnessOptions{respond: respond})
 
 	collector := h.collect()
-	root := h.send("hello", managerAttrs(scenarioManagerID))
+	root := h.send("hello", nil)
 	h.waitUntil("first turn completed", func() bool {
 		record, loadErr := h.store.GetSession(h.ctx, root)
 		return loadErr == nil && record.Status == sessionstore.SessionStatusCompleted
@@ -651,7 +650,7 @@ type orderedScheduleSender struct {
 func newScheduleRunningObserver(t *testing.T, source *sessionbus.Bus) *scheduleRunningObserver {
 	t.Helper()
 	o := &scheduleRunningObserver{
-		source: source, subscription: source.SubscribeManagerRoots(),
+		source: source, subscription: source.SubscribeRoots(),
 		running: make(chan struct{}), done: make(chan struct{}), stopped: make(chan struct{}),
 	}
 	go o.watch()
@@ -677,7 +676,7 @@ func (o *scheduleRunningObserver) watch() {
 func (o *scheduleRunningObserver) close() {
 	o.closeOnce.Do(func() { close(o.running) })
 	close(o.done)
-	o.source.UnsubscribeManagerRoots(o.subscription)
+	o.source.UnsubscribeRoots(o.subscription)
 	<-o.stopped
 }
 
@@ -703,11 +702,11 @@ func runStoppedRootScheduleScenario(t *testing.T, tc stoppedRootScheduleCase) {
 	release := make(chan struct{})
 	h := newHarness(t, harnessOptions{respond: stoppedRootScheduleResponder(tc, started, release)})
 	h.startInboxWake()
-	rootID, err := h.mgr.Send(t.Context(), h.projectID, "initialize", "fake-model", managerAttrs("telegram-main"))
+	rootID, err := h.mgr.Send(t.Context(), h.projectID, "initialize", "fake-model", nil)
 	require.NoError(t, err)
 	h.waitAnswer(rootID, "")
 	require.NoError(t, h.mgr.sendToSession(t.Context(), rootID, "/stop"))
-	collector := collectEvents(t, h.mgr.bus.SubscribeManagerRoots())
+	collector := collectEvents(t, h.mgr.bus.SubscribeRoots())
 	t.Cleanup(collector.stop)
 	oldEpisode := time.Now().UTC().Add(-time.Hour)
 	_, err = h.db.ExecContext(t.Context(),

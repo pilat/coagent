@@ -13,10 +13,10 @@ import (
 func TestLineage_EveryControllerFollowsAReplacement(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	factory, store, project := newChatControl(t)
+	factory, store, project, _ := newChatControl(t)
 	root, _, err := store.CreateManagerRoot(ctx, sessionstore.ManagerRootCreate{
 		ProjectID: project, Model: "model", Name: "test", WorkDir: "/project",
-		Attributes: map[string]any{controllerapi.SessionAttributeManagerID: "alpha"},
+		Attributes: map[string]any{},
 	})
 	require.NoError(t, err)
 	alpha := factory.ForManager("alpha").(controllerapi.LineageController)

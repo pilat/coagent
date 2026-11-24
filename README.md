@@ -213,7 +213,7 @@ for vulnerability reporting.
 ## Configuration and project context
 
 Configuration is a hand-edited `~/.coagent/config.yaml`, or a whole-document
-`/config` apply from a selected manager root. The
+`/config` apply from a selected root. The
 underlying state is intentionally inspectable:
 
 - `~/.coagent/config.yaml` — providers, models, managers, marketplaces, and tool

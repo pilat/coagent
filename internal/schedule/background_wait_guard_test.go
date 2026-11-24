@@ -11,6 +11,7 @@ import (
 
 	"github.com/pilat/coagent/internal/migrate"
 	"github.com/pilat/coagent/internal/sessionstore"
+	"github.com/pilat/coagent/internal/sessionstore/sessionstoretest"
 	"github.com/pilat/coagent/internal/subagent"
 	"github.com/pilat/coagent/internal/tool"
 	"github.com/pilat/coagent/internal/transcript"
@@ -41,16 +42,15 @@ func TestBackgroundWaitGuardRejectsSleepUntilCompletionDelivered(t *testing.T) {
 	sessions := sessionstore.NewStore(db)
 	projectID, err := sessions.GetOrCreateProject(t.Context(), t.TempDir())
 	require.NoError(t, err)
-	parent, err := sessions.CreateSession(t.Context(), projectID, "model", "", nil)
-	require.NoError(t, err)
+	parent := sessionstoretest.BareRoot(t, db, projectID, "model", "", nil)
 	children := subagent.NewStore(db, sessions)
 	childID, err := children.Create(t.Context(), subagent.Create{
-		ProjectID: projectID, ParentID: parent.ID, RootID: parent.ID, Model: "model",
+		ProjectID: projectID, ParentID: parent, RootID: parent, Model: "model",
 		TaskCallID: "task-1", State: subagent.StateRunning,
 	})
 	require.NoError(t, err)
-	guard := &backgroundWaitGuard{inner: inner, sessions: sessions, sessionID: parent.ID}
-	guarded := NewGuardedSleepTool(NewService(NewStore(db, sessions), sessions), parent.ID, sessions)
+	guard := &backgroundWaitGuard{inner: inner, sessions: sessions, sessionID: parent}
+	guarded := NewGuardedSleepTool(NewService(NewStore(db, sessions), sessions), parent, sessions)
 	_, err = guarded.Execute(t.Context(), json.RawMessage(`{"duration":"20ms"}`))
 	require.ErrorContains(t, err, "result arrives automatically in a later turn")
 
@@ -77,7 +77,7 @@ func TestBackgroundWaitGuardRejectsSleepUntilCompletionDelivered(t *testing.T) {
 	result, err = guarded.Execute(t.Context(), json.RawMessage(`{"duration":"20ms"}`))
 	require.NoError(t, err)
 	assert.Equal(t, "Sleep completed (20ms).", result.Output)
-	schedules, err := NewService(NewStore(db, sessions), sessions).ListSchedules(t.Context(), parent.ID)
+	schedules, err := NewService(NewStore(db, sessions), sessions).ListSchedules(t.Context(), parent)
 	require.NoError(t, err)
 	assert.Empty(t, schedules)
 }

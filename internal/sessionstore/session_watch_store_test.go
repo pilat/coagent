@@ -14,11 +14,11 @@ func TestReadWatch_PagesAndPositions(t *testing.T) {
 	t.Run("classifies kinds", func(t *testing.T) {
 		store, _, project := newTestStore(t)
 		root, _, err := store.CreateManagerRoot(t.Context(), ManagerRootCreate{
-			ProjectID: project, Model: "model", Attributes: map[string]any{"manager_id": "owner"},
+			ProjectID: project, Model: "model", Attributes: map[string]any{},
 			Name: "test", WorkDir: "/project",
 		})
 		require.NoError(t, err)
-		watcher := chatTestRoot(t, store, project, "owner")
+		watcher := chatTestRoot(t, store, project)
 		keys := []string{
 			"message:1:reply", "message:2:final", "input:3:sent", "schedule:x:announcement",
 			"input:4:status:result", "",
@@ -43,8 +43,8 @@ func TestReadWatch_PagesAndPositions(t *testing.T) {
 
 	t.Run("first read is latest", func(t *testing.T) {
 		store, _, project := newTestStore(t)
-		root := chatTestRoot(t, store, project, "owner")
-		watcher := chatTestRoot(t, store, project, "owner")
+		root := chatTestRoot(t, store, project)
+		watcher := chatTestRoot(t, store, project)
 		for i := range 5 {
 			watchTestOutput(t, store, root.ID, fmt.Sprintf("message:%d:reply", i), fmt.Sprint(i))
 		}
@@ -70,8 +70,8 @@ func TestReadWatch_PagesAndPositions(t *testing.T) {
 
 	t.Run("empty first read stays latest", func(t *testing.T) {
 		store, db, project := newTestStore(t)
-		root := chatTestRoot(t, store, project, "owner")
-		watcher := chatTestRoot(t, store, project, "owner")
+		root := chatTestRoot(t, store, project)
+		watcher := chatTestRoot(t, store, project)
 		read := WatchRead{WatcherID: watcher.ID, Chain: []int64{root.ID}, MaxRows: 2, MaxRunes: 16000}
 		page, err := store.ReadWatch(t.Context(), read)
 		require.NoError(t, err)
@@ -94,8 +94,8 @@ func TestReadWatch_PagesAndPositions(t *testing.T) {
 	t.Run("rune bound", func(t *testing.T) {
 		for _, latest := range []bool{false, true} {
 			store, _, project := newTestStore(t)
-			root := chatTestRoot(t, store, project, "owner")
-			watcher := chatTestRoot(t, store, project, "owner")
+			root := chatTestRoot(t, store, project)
+			watcher := chatTestRoot(t, store, project)
 			read := WatchRead{WatcherID: watcher.ID, Chain: []int64{root.ID}, MaxRows: 30, MaxRunes: 25}
 			watchTestOutput(t, store, root.ID, "", "already read")
 			_, err := store.ReadWatch(t.Context(), read)
@@ -120,8 +120,8 @@ func TestReadWatch_PagesAndPositions(t *testing.T) {
 
 	t.Run("latest flag", func(t *testing.T) {
 		store, _, project := newTestStore(t)
-		root := chatTestRoot(t, store, project, "owner")
-		watcher := chatTestRoot(t, store, project, "owner")
+		root := chatTestRoot(t, store, project)
+		watcher := chatTestRoot(t, store, project)
 		read := WatchRead{WatcherID: watcher.ID, Chain: []int64{root.ID}, MaxRows: 1, MaxRunes: 16000}
 		watchTestOutput(t, store, root.ID, "", "already read")
 		_, err := store.ReadWatch(t.Context(), read)
@@ -142,9 +142,9 @@ func TestReadWatch_PagesAndPositions(t *testing.T) {
 
 	t.Run("chain", func(t *testing.T) {
 		store, db, project := newTestStore(t)
-		first := chatTestRoot(t, store, project, "owner")
-		second := chatTestRoot(t, store, project, "owner")
-		watcher := chatTestRoot(t, store, project, "owner")
+		first := chatTestRoot(t, store, project)
+		second := chatTestRoot(t, store, project)
+		watcher := chatTestRoot(t, store, project)
 		read := WatchRead{WatcherID: watcher.ID, Chain: []int64{first.ID}, MaxRows: 30, MaxRunes: 16000}
 		watchTestOutput(t, store, first.ID, "", "already read")
 		_, err := store.ReadWatch(t.Context(), read)
@@ -164,9 +164,9 @@ func TestReadWatch_PagesAndPositions(t *testing.T) {
 
 	t.Run("position is per watcher and survives reopen", func(t *testing.T) {
 		store, db, project := newTestStore(t)
-		root := chatTestRoot(t, store, project, "owner")
-		first := chatTestRoot(t, store, project, "owner")
-		second := chatTestRoot(t, store, project, "owner")
+		root := chatTestRoot(t, store, project)
+		first := chatTestRoot(t, store, project)
+		second := chatTestRoot(t, store, project)
 		last := watchTestOutput(t, store, root.ID, "", "first")
 		read := WatchRead{WatcherID: first.ID, Chain: []int64{root.ID}, MaxRows: 1, MaxRunes: 16000}
 		_, err := store.ReadWatch(t.Context(), read)
@@ -190,8 +190,8 @@ func TestReadWatch_PagesAndPositions(t *testing.T) {
 
 	t.Run("never touches chat focus", func(t *testing.T) {
 		store, _, project := newTestStore(t)
-		root := chatTestRoot(t, store, project, "owner")
-		watcher := chatTestRoot(t, store, project, "owner")
+		root := chatTestRoot(t, store, project)
+		watcher := chatTestRoot(t, store, project)
 		id := watchTestOutput(t, store, root.ID, "", "answer")
 		require.NoError(t, store.BindChat(t.Context(), "owner", "chat"))
 		require.NoError(t, store.SetChatFocus(t.Context(), "owner", "chat", root.ID))

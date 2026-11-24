@@ -30,7 +30,7 @@ func TestSessionsWordFilter(t *testing.T) {
 			ctrl := &fakeController{focus: 1}
 			for i, name := range []string{"Alpha project · first", "beta", "tools · alpha task"} {
 				ctrl.listSessions = append(ctrl.listSessions, controllerapi.SessionInfo{
-					ID: int64(i + 1), Name: name, Attributes: map[string]any{"manager_id": "telegram-main"},
+					ID: int64(i + 1), Name: name, Attributes: map[string]any{},
 				})
 			}
 			var messages []string
@@ -74,7 +74,7 @@ func TestSessionsFilterLimit(t *testing.T) {
 					name = fmt.Sprintf("match %d", i-40)
 				}
 				ctrl.listSessions = append(ctrl.listSessions, controllerapi.SessionInfo{
-					ID: int64(i), Name: name, Attributes: map[string]any{"manager_id": "telegram-main"},
+					ID: int64(i), Name: name, Attributes: map[string]any{},
 				})
 			}
 			var messages []string

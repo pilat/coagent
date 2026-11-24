@@ -6,7 +6,6 @@
       "name": "<name>",
       "work_dir": "<workdir>",
       "attributes": {
-        "manager_id": "telegram:main",
         "title": "inspect files"
       }
     },
@@ -60,8 +59,5 @@
       "content": "Work complete.",
       "source_key": "message:9:final"
     }
-  ],
-  "owners": {
-    "1": "telegram:main"
-  }
+  ]
 }

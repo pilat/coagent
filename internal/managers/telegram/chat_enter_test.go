@@ -23,7 +23,7 @@ func TestSwitchObservedBeforeSetReturnsSendsOnePrelude(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		var messages []string
 		controller := &fakeController{listSessions: []controllerapi.SessionInfo{{
-			ID: 42, Name: "work", Attributes: map[string]any{"manager_id": "telegram-main"},
+			ID: 42, Name: "work", Attributes: map[string]any{},
 		}}}
 		manager := newCmdTestManager(t, controller, &messages)
 		hook := &focusWriteHook{ChatFocusController: controller}

@@ -37,6 +37,7 @@ import (
 	"github.com/pilat/coagent/internal/sessionbus"
 	"github.com/pilat/coagent/internal/sessionevent"
 	"github.com/pilat/coagent/internal/sessionstore"
+	"github.com/pilat/coagent/internal/sessionstore/sessionstoretest"
 	"github.com/pilat/coagent/internal/subagent"
 	"github.com/pilat/coagent/internal/tool"
 	"github.com/pilat/coagent/internal/transcript"
@@ -841,9 +842,6 @@ func toolResultForCallID(msgs []llmwire.Message, callID string) *llmwire.Message
 	return nil
 }
 
-// Shared trace ownership matches the manager used by output-chain scenarios.
-const scenarioManagerID = "telegram:main"
-
 func installScenarioProcessService(t *testing.T, h *harness) backgroundprocess.Service {
 	t.Helper()
 	service := backgroundprocess.NewService(h.mgr.processStore, backgroundprocess.Options{OutputDir: t.TempDir()})
@@ -1061,15 +1059,6 @@ func runnerChildCount(runners *runnerSet) int {
 	return runners.children
 }
 
-func requireNoManagerNotification(t *testing.T, ch <-chan controllerapi.SessionNotification) {
-	t.Helper()
-	select {
-	case notification := <-ch:
-		t.Fatalf("unexpected manager notification: %#v", notification)
-	case <-time.After(20 * time.Millisecond):
-	}
-}
-
 func configuredClient(configure func(*config.Config)) func(*config.Config) (llm.Client, error) {
 	cfg := &config.Config{}
 	configure(cfg)
@@ -1230,10 +1219,6 @@ type outboxRow struct {
 	Content   string
 }
 
-func managerAttrs(id string) map[string]any {
-	return map[string]any{"manager_id": id}
-}
-
 func textReply(text string) *llmwire.Response {
 	return &llmwire.Response{Text: text}
 }
@@ -1288,10 +1273,8 @@ func (h *harness) outbox(sessionID int64) []outboxRow {
 
 func (h *harness) createRoot(attrs map[string]any) int64 {
 	h.t.Helper()
-	root, err := h.store.CreateSession(h.ctx, h.projectID, "fake-model", "", attrs)
-	require.NoError(h.t, err)
-	require.NotNil(h.t, root)
-	return root.ID
+	root := sessionstoretest.BareRoot(h.t, h.db, h.projectID, "fake-model", "", attrs)
+	return root
 }
 
 func newMockHarness(t *testing.T) (*harness, *mockFactory, *eventCollector) {

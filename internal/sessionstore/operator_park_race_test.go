@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/pilat/coagent/internal/budget"
+	"github.com/pilat/coagent/internal/sessionstore/sessionstoretest"
 )
 
 func TestOperatorProtocolModel_UserInputRacesPark(t *testing.T) {
@@ -19,7 +20,8 @@ func TestOperatorProtocolModel_UserInputRacesPark(t *testing.T) {
 		t.Helper()
 
 		store, _, projectID := newTestStore(t) //nolint:contextcheck // test helper owns its own bootstrap context
-		root, err := store.CreateSession(ctx, projectID, "priced", "", map[string]any{"manager_id": "telegram-test"})
+		rootID := sessionstoretest.BareRoot(t, store.db, projectID, "priced", "", map[string]any{})
+		root, err := store.GetSession(ctx, rootID)
 		require.NoError(t, err)
 		limit := 1.0
 		_, err = store.Arm(ctx, budget.Mutation{

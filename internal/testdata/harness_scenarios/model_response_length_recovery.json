@@ -6,7 +6,6 @@
       "name": "<name>",
       "work_dir": "<workdir>",
       "attributes": {
-        "manager_id": "telegram:main",
         "title": "exercise response recovery"
       }
     },
@@ -38,8 +37,5 @@
       "content": "recovered complete answer",
       "source_key": "message:6:final"
     }
-  ],
-  "owners": {
-    "1": "telegram:main"
-  }
+  ]
 }

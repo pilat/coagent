@@ -31,7 +31,7 @@ func TestOrchestratorToolsOnlyOnModeRoots(t *testing.T) {
 		return textReply("done")
 	})
 	h.startInboxWake()
-	root := h.send("initial", managerAttrs("owner"))
+	root := h.send("initial", nil)
 	h.waitAnswer(root, "done")
 	assertModeToolSchemas(t, h.schemas.first(t, root), false)
 	_, err := h.store.SetOrchestrator(h.ctx, root, true)
@@ -48,22 +48,22 @@ func TestOrchestratorToolsOnlyOnModeRoots(t *testing.T) {
 	require.NoError(t, err)
 	h.say(ownerless, "ownerless")
 	h.waitAnswer(ownerless, "done")
-	assertModeToolSchemas(t, h.schemas.first(t, ownerless), false)
+	assertModeToolSchemas(t, h.schemas.first(t, ownerless), true)
 }
 
 func TestOrchestratorSendRefusals(t *testing.T) {
 	h := newHarness(t, harnessOptions{respond: trivialRespond})
 	h.startInboxWake()
 	caller := modeRoot(t, h)
-	foreign := h.createRoot(managerAttrs("other"))
+	foreign := h.createRoot(nil)
 	child := h.createChild(caller, subagent.Link{TaskCallID: "owned-child"})
 	foreignChild := h.createChild(foreign, subagent.Link{TaskCallID: "foreign-child"})
-	killed := h.createRoot(managerAttrs("owner"))
+	killed := h.createRoot(nil)
 	h.say(killed, "/kill")
 	h.waitUntil("killed", func() bool { return h.session(killed).KilledAt != nil })
-	parked := h.createRoot(managerAttrs("owner"))
+	parked := h.createRoot(nil)
 	fireOrchestratorBudget(t, h, parked)
-	stopping := h.createRoot(managerAttrs("owner"))
+	stopping := h.createRoot(nil)
 	_, err := h.db.ExecContext(h.ctx, "UPDATE sessions SET status = 'stopping' WHERE id = ?", stopping)
 	require.NoError(t, err)
 	for _, tc := range []struct {
@@ -100,7 +100,7 @@ func TestOrchestratorSendCarriesNoHumanAuthority(t *testing.T) {
 	}})
 	h.startInboxWake()
 	caller := modeRoot(t, h)
-	target := h.createRoot(managerAttrs("owner"))
+	target := h.createRoot(nil)
 	require.NoError(t, h.store.SetSessionTitle(h.ctx, target, "unchanged"))
 	for _, text := range []string{"/status", "/budget one dollar", "fix the login bug"} {
 		resolved, _, err := (orchestratorHost{h.mgr}).SendToSession(h.ctx, caller, target, text)
@@ -124,7 +124,7 @@ func TestOrchestratorSendCarriesNoHumanAuthority(t *testing.T) {
 	)
 	assert.Zero(t, humanRows)
 	assert.Equal(t, "unchanged", h.session(target).Attributes[controllerapi.SessionAttributeTitle])
-	parked := h.createRoot(managerAttrs("owner"))
+	parked := h.createRoot(nil)
 	fireOrchestratorBudget(t, h, parked)
 	_, _, err := (orchestratorHost{h.mgr}).SendToSession(h.ctx, caller, parked, "/budget resume")
 	require.ErrorContains(t, err, "only the human can resume it")
@@ -137,7 +137,7 @@ func TestOrchestratorSendFollowsClearReplacement(t *testing.T) {
 	h := newHarness(t, harnessOptions{respond: trivialRespond})
 	h.startInboxWake()
 	caller := modeRoot(t, h)
-	target := h.createRoot(managerAttrs("owner"))
+	target := h.createRoot(nil)
 	h.say(target, "/clear")
 	var replacement int64
 	h.waitUntil("clear replacement", func() bool {
@@ -166,7 +166,7 @@ func TestOrchestratorToolTrailInOwnChat(t *testing.T) {
 		return textReply("done")
 	}})
 	h.startInboxWake()
-	target = h.createRoot(managerAttrs("owner"))
+	target = h.createRoot(nil)
 	caller := modeRoot(t, h)
 	h.say(caller, "send the message")
 	h.waitUntil("tool trail", func() bool {
@@ -179,7 +179,7 @@ func TestOrchestratorToolTrailInOwnChat(t *testing.T) {
 
 func modeRoot(t *testing.T, h *harness) int64 {
 	t.Helper()
-	id := h.createRoot(managerAttrs("owner"))
+	id := h.createRoot(nil)
 	_, err := h.store.SetOrchestrator(h.ctx, id, true)
 	require.NoError(t, err)
 	return id

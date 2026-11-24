@@ -35,7 +35,7 @@ func TestOrchestratorWaitIsAWakeSource(t *testing.T) {
 	defer closeOnce(release)
 	h.startInboxWake()
 	watcher := modeRoot(t, h)
-	target = h.createRoot(managerAttrs("owner"))
+	target = h.createRoot(nil)
 	h.say(watcher, "/budget send and wait")
 	h.waitAnswer(watcher, "sent, waiting")
 	assert.Zero(t, countUserCompletions(h.messages(watcher), completionNudgeMarker))

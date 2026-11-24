@@ -8,20 +8,20 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/pilat/coagent/internal/llmwire"
+	"github.com/pilat/coagent/internal/sessionstore/sessionstoretest"
 	"github.com/pilat/coagent/internal/transcript"
 )
 
 func TestProcessDeliverySurvivesCompactionConcurrentInputAndRetry(t *testing.T) {
 	store, _, projectID := newTestStore(t)
 	ctx := context.Background()
-	session, err := store.CreateSession(ctx, projectID, "m", "", nil)
-	require.NoError(t, err)
+	session := sessionstoretest.BareRoot(t, store.db, projectID, "m", "", nil)
 
-	oldUser, err := appendMessage(ctx, store, session.ID, &transcript.Message{
+	oldUser, err := appendMessage(ctx, store, session, &transcript.Message{
 		Role: llmwire.RoleUser, Content: "old task",
 	})
 	require.NoError(t, err)
-	oldAnswer, err := appendMessage(ctx, store, session.ID, &transcript.Message{
+	oldAnswer, err := appendMessage(ctx, store, session, &transcript.Message{
 		Role: llmwire.RoleAssistant, Content: "old answer",
 	})
 	require.NoError(t, err)
@@ -42,7 +42,7 @@ func TestProcessDeliverySurvivesCompactionConcurrentInputAndRetry(t *testing.T) 
 	go func() {
 		<-start
 		_, _, inserted, insertErr := internalTurn(ctx, store,
-			session.ID,
+			session,
 			"bgp_1",
 			"process-fingerprint",
 			assistant,
@@ -53,7 +53,7 @@ func TestProcessDeliverySurvivesCompactionConcurrentInputAndRetry(t *testing.T) 
 	}()
 	go func() {
 		<-start
-		_, insertErr := appendMessage(ctx, store, session.ID, &transcript.Message{
+		_, insertErr := appendMessage(ctx, store, session, &transcript.Message{
 			Role: llmwire.RoleUser, Content: "concurrent user input",
 		})
 		errs <- insertErr
@@ -61,7 +61,7 @@ func TestProcessDeliverySurvivesCompactionConcurrentInputAndRetry(t *testing.T) 
 	go func() {
 		<-start
 		_, compactErr := replaceTranscript(ctx, store,
-			session.ID,
+			session,
 			[]int64{oldUser, oldAnswer},
 			[]CompactionEntry{
 				{Message: &transcript.Message{Role: llmwire.RoleUser, Content: "summary"}},
@@ -77,11 +77,11 @@ func TestProcessDeliverySurvivesCompactionConcurrentInputAndRetry(t *testing.T) 
 	}
 	require.True(t, <-insertedResult)
 
-	_, _, inserted, err := internalTurn(ctx, store, session.ID, "bgp_1", "process-fingerprint", assistant, result)
+	_, _, inserted, err := internalTurn(ctx, store, session, "bgp_1", "process-fingerprint", assistant, result)
 	require.NoError(t, err)
 	assert.False(t, inserted)
 
-	messages, err := store.LoadActiveMessages(ctx, session.ID)
+	messages, err := store.LoadActiveMessages(ctx, session)
 	require.NoError(t, err)
 	processResults := 0
 	foundConcurrentInput := false

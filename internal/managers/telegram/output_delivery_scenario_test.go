@@ -2,6 +2,7 @@ package telegram
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -47,6 +48,7 @@ import (
 const delayedTelegramManagerID = "telegram-delayed"
 
 type delayedTelegramHarness struct {
+	db          *sql.DB
 	controller  controllerapi.Controller
 	controllers controllerapi.ManagerControllerFactory
 	transport   connect.Transport
@@ -149,6 +151,7 @@ func newDelayedTelegramHarnessWithClient(
 	require.NoError(t, err)
 
 	return &delayedTelegramHarness{
+		db:         db,
 		controller: controllers.ForManager(delayedTelegramManagerID), controllers: controllers, sessions: sessions,
 		transport: transport, bus: bus,
 		service: service, workDir: workDir, recorder: &delayedTelegramRecorder{},

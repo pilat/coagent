@@ -11,7 +11,7 @@ import (
 
 func TestReplacementChain(t *testing.T) {
 	store, _, project := newTestStore(t)
-	first := chatTestRoot(t, store, project, "owner")
+	first := chatTestRoot(t, store, project)
 	second, _, err := store.ReplaceManagerRoot(t.Context(), first.ID, "test", "/project")
 	require.NoError(t, err)
 	third, _, err := store.ReplaceManagerRoot(t.Context(), second.ID, "test", "/project")
@@ -21,7 +21,7 @@ func TestReplacementChain(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, []int64{first.ID, second.ID, third.ID}, chain)
 	}
-	killed := chatTestRoot(t, store, project, "owner")
+	killed := chatTestRoot(t, store, project)
 	_, err = store.MarkSessionKilledWithOutput(t.Context(), killed.ID, 0)
 	require.NoError(t, err)
 	chain, err := store.ReplacementChain(t.Context(), killed.ID)
@@ -32,11 +32,11 @@ func TestReplacementChain(t *testing.T) {
 	foreign, err := store.CreateSubagentSession(t.Context(), project, first.ID, first.ID, "general", "model", "")
 	require.NoError(t, err)
 	_, err = store.ReplacementChain(t.Context(), foreign)
-	require.ErrorIs(t, err, ErrOutputOwner)
+	require.ErrorIs(t, err, ErrOutputNotRoot)
 
 	t.Run("predecessor query errors are returned", func(t *testing.T) {
 		store, db, project := newTestStore(t)
-		root := chatTestRoot(t, store, project, "owner")
+		root := chatTestRoot(t, store, project)
 		_, err := db.ExecContext(t.Context(),
 			`ALTER TABLE session_outbox RENAME COLUMN attributes TO broken_attributes`)
 		require.NoError(t, err)
@@ -46,7 +46,7 @@ func TestReplacementChain(t *testing.T) {
 
 	t.Run("predecessor load errors are returned", func(t *testing.T) {
 		store, db, project := newTestStore(t)
-		first := chatTestRoot(t, store, project, "owner")
+		first := chatTestRoot(t, store, project)
 		second, _, err := store.ReplaceManagerRoot(t.Context(), first.ID, "test", "/project")
 		require.NoError(t, err)
 		_, err = db.ExecContext(t.Context(), `UPDATE sessions SET created_at = 'invalid' WHERE id = ?`, first.ID)
@@ -57,7 +57,7 @@ func TestReplacementChain(t *testing.T) {
 
 	t.Run("invalid or missing predecessor stops", func(t *testing.T) {
 		store, db, project := newTestStore(t)
-		first := chatTestRoot(t, store, project, "owner")
+		first := chatTestRoot(t, store, project)
 		second, _, err := store.ReplaceManagerRoot(t.Context(), first.ID, "test", "/project")
 		require.NoError(t, err)
 		for _, id := range []any{nil, 0, -1, "invalid", 1.5, 999999} {
@@ -81,7 +81,7 @@ func TestResolveReplacement_StatusFidelity(t *testing.T) {
 		for _, killed := range []bool{false, true} {
 			for _, replaced := range []bool{false, true} {
 				t.Run(fmt.Sprintf("%s/killed=%t/replaced=%t", status, killed, replaced), func(t *testing.T) {
-					root := chatTestRoot(t, store, project, "owner")
+					root := chatTestRoot(t, store, project)
 					want := root.ID
 					if replaced {
 						replacement, _, err := store.ReplaceManagerRoot(t.Context(), root.ID, "test", "/project")

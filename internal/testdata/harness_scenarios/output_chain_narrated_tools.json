@@ -6,7 +6,6 @@
       "name": "<name>",
       "work_dir": "<workdir>",
       "attributes": {
-        "manager_id": "telegram:main",
         "title": "do the work"
       }
     },
@@ -60,8 +59,5 @@
       "content": "All done.",
       "source_key": "message:8:final"
     }
-  ],
-  "owners": {
-    "1": "telegram:main"
-  }
+  ]
 }

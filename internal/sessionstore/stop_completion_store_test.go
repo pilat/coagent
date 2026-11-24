@@ -8,13 +8,16 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/pilat/coagent/internal/sessionstore/sessionstoretest"
 	"github.com/pilat/coagent/internal/transcript"
 )
 
 func seededOwnedSession(ctx context.Context, t *testing.T, store *Store, projectID int64) *SessionRecord {
 	t.Helper()
 
-	session, err := store.CreateSession(ctx, projectID, "m", "", map[string]any{"manager_id": "mgr"})
+	sessionID := sessionstoretest.BareRoot(t, store.db, projectID, "m", "", map[string]any{})
+
+	session, err := store.GetSession(ctx, sessionID)
 	require.NoError(t, err)
 
 	return session
@@ -164,7 +167,7 @@ func TestSelectInterruptedExplicitStops(t *testing.T) {
 	require.NoError(t, err)
 	_, err = db.Exec(`INSERT INTO session_outbox
 		(session_id, type, content, attributes, source_key, created_at)
-		VALUES (?, 'message', '⏹ Stopping...', '{"manager_id":"mgr"}', ?, datetime('now'))`,
+		VALUES (?, 'message', '⏹ Stopping...', '{}', ?, datetime('now'))`,
 		session.ID, "input:"+strconv.FormatInt(legacy.ID, 10)+":stop:result")
 	require.NoError(t, err)
 

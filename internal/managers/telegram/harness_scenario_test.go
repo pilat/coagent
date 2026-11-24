@@ -34,7 +34,6 @@ type harnessTraceFile struct {
 	SourceTest string               `json:"source_test"`
 	Trace      []harnessTraceEvent  `json:"trace"`
 	Outputs    []harnessTraceOutput `json:"outputs"`
-	Owners     map[int64]string     `json:"owners,omitempty"`
 }
 
 type harnessTraceOutput struct {

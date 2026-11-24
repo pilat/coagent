@@ -14,7 +14,7 @@ func TestChatSessions_ActivityOrderAndRename(t *testing.T) {
 	store, db, project := newTestStore(t)
 	var roots []*SessionRecord
 	for range 4 {
-		roots = append(roots, chatTestRoot(t, store, project, "owner"))
+		roots = append(roots, chatTestRoot(t, store, project))
 	}
 	base := time.Date(2026, time.October, 30, 10, 0, 0, 0, time.UTC)
 	for i, root := range roots {
@@ -58,8 +58,8 @@ func TestChatSessions_LastActivitySources(t *testing.T) {
 			t.Parallel()
 			ctx := t.Context()
 			store, db, project := newTestStore(t)
-			root := chatTestRoot(t, store, project, "owner")
-			other := chatTestRoot(t, store, project, "owner")
+			root := chatTestRoot(t, store, project)
+			other := chatTestRoot(t, store, project)
 			base := time.Date(2026, time.October, 30, 10, 0, 0, 0, time.UTC)
 			_, err := db.ExecContext(ctx, `UPDATE sessions SET created_at = ?, updated_at = ?`, base, base)
 			require.NoError(t, err)
@@ -110,8 +110,8 @@ func TestChatSessions_LastActivitySources(t *testing.T) {
 func TestChatSessions_ActivityTiesUseDescendingID(t *testing.T) {
 	t.Parallel()
 	store, db, project := newTestStore(t)
-	first := chatTestRoot(t, store, project, "owner")
-	second := chatTestRoot(t, store, project, "owner")
+	first := chatTestRoot(t, store, project)
+	second := chatTestRoot(t, store, project)
 	_, err := db.ExecContext(t.Context(), `UPDATE sessions SET created_at = '2026-10-30 10:00:00'`)
 	require.NoError(t, err)
 	sessions, err := store.ChatSessions(t.Context())

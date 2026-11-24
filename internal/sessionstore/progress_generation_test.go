@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/pilat/coagent/internal/sessionstore"
+	"github.com/pilat/coagent/internal/sessionstore/sessionstoretest"
 	"github.com/pilat/coagent/internal/subagent"
 	"github.com/pilat/coagent/internal/transcript"
 )
@@ -35,16 +36,15 @@ func TestMessageAndLifecycleOutputsDoNotStampGeneration(t *testing.T) {
 	store, db, projectID := newTestStore(t)
 	ctx := context.Background()
 
-	session, err := store.CreateSession(ctx, projectID, "m", "", map[string]any{"manager_id": "mgr"})
-	require.NoError(t, err)
+	session := sessionstoretest.BareRoot(t, sDB(store), projectID, "m", "", map[string]any{})
 
-	input, err := enqueueInput(ctx, store, session.ID, sessionstore.InputSourceUser, "hello")
+	input, err := enqueueInput(ctx, store, session, sessionstore.InputSourceUser, "hello")
 	require.NoError(t, err)
 	_, err = acceptInput(ctx, store, input.ID, "hello")
 	require.NoError(t, err)
 
 	// Assistant message output.
-	_, commit, err := appendPublished(ctx, store, session.ID,
+	_, commit, err := appendPublished(ctx, store, session,
 		&transcript.Message{Role: "assistant", Content: "working", ToolCalls: []byte(`[]`)},
 		sessionstore.OutputMessage, "working", false)
 	require.NoError(t, err)
@@ -52,7 +52,7 @@ func TestMessageAndLifecycleOutputsDoNotStampGeneration(t *testing.T) {
 	assert.NotContains(t, ownerAttrs(t, db, commit.OutputID), "model_input_generation")
 
 	// Direct output rides a tool result insertion.
-	_, outputs, err := answerTool(ctx, store, session.ID,
+	_, outputs, err := answerTool(ctx, store, session,
 		&transcript.Message{Role: "tool", Content: "done", ToolCallID: "c1", ToolName: "bash"},
 		[]string{"direct!"})
 	require.NoError(t, err)
@@ -61,7 +61,7 @@ func TestMessageAndLifecycleOutputsDoNotStampGeneration(t *testing.T) {
 
 	// Assistant replaceable output via EnqueueOutput.
 	draft := sessionstore.OutputDraft{
-		SessionID: session.ID,
+		SessionID: session,
 		Type:      sessionstore.OutputMessage,
 		Content:   "still working",
 		SourceKey: "k1",
@@ -72,7 +72,7 @@ func TestMessageAndLifecycleOutputsDoNotStampGeneration(t *testing.T) {
 
 	// Lifecycle outputs carry no generation.
 	opened, _, err := store.CreateManagerRoot(ctx, sessionstore.ManagerRootCreate{
-		ProjectID: projectID, Attributes: map[string]any{"manager_id": "mgr"},
+		ProjectID: projectID, Attributes: map[string]any{},
 		Name: "n", WorkDir: "/tmp/wd", Input: sessionstore.Input{Source: sessionstore.InputSourceUser, Content: "go"},
 	})
 	require.NoError(t, err)
@@ -86,11 +86,10 @@ func TestSourceKeyReplaySurvivesGenerationChange(t *testing.T) {
 	store, db, projectID := newTestStore(t)
 	ctx := context.Background()
 
-	session, err := store.CreateSession(ctx, projectID, "m", "", map[string]any{"manager_id": "mgr"})
-	require.NoError(t, err)
+	session := sessionstoretest.BareRoot(t, sDB(store), projectID, "m", "", map[string]any{})
 
 	draft := sessionstore.OutputDraft{
-		SessionID: session.ID, Type: sessionstore.OutputMessage, Content: "card",
+		SessionID: session, Type: sessionstore.OutputMessage, Content: "card",
 		SourceKey: "progress:change:x:g0",
 	}
 	commit, err := store.EnqueueOutput(ctx, draft)
@@ -98,11 +97,11 @@ func TestSourceKeyReplaySurvivesGenerationChange(t *testing.T) {
 	assert.NotContains(t, ownerAttrs(t, db, commit.OutputID), "model_input_generation")
 
 	// Advance the generation, then replay the same source key.
-	input, err := enqueueInput(ctx, store, session.ID, sessionstore.InputSourceUser, "next")
+	input, err := enqueueInput(ctx, store, session, sessionstore.InputSourceUser, "next")
 	require.NoError(t, err)
 	_, err = acceptInput(ctx, store, input.ID, "next")
 	require.NoError(t, err)
-	state, err := testStore(db).LoadCompletionCheckState(ctx, session.ID)
+	state, err := testStore(db).LoadCompletionCheckState(ctx, session)
 	require.NoError(t, err)
 	assert.Equal(t, int64(1), state.ModelInputGeneration)
 
@@ -129,7 +128,9 @@ func TestCaptureProgressCountsActiveSubagentsAcrossRootTree(t *testing.T) {
 	store, db, projectID := newTestStore(t)
 	ctx := t.Context()
 
-	root, err := store.CreateSession(ctx, projectID, "m", "", nil)
+	rootID := sessionstoretest.BareRoot(t, sDB(store), projectID, "m", "", nil)
+
+	root, err := store.GetSession(ctx, rootID)
 	require.NoError(t, err)
 	links := subagent.NewStore(db, store)
 	foreground, err := links.Create(ctx, subagent.Create{
@@ -162,19 +163,18 @@ func TestLoadCompletionCheckStateCarriesCandidateText(t *testing.T) {
 	store, db, projectID := newTestStore(t)
 	ctx := context.Background()
 
-	session, err := store.CreateSession(ctx, projectID, "m", "", map[string]any{"manager_id": "mgr"})
-	require.NoError(t, err)
+	session := sessionstoretest.BareRoot(t, sDB(store), projectID, "m", "", map[string]any{})
 
-	candidateID, err := appendMessage(ctx, store, session.ID, &transcript.Message{
+	candidateID, err := appendMessage(ctx, store, session, &transcript.Message{
 		Role: "assistant", Content: "full candidate answer", ToolCalls: jsonRaw(`[]`),
 	})
 	require.NoError(t, err)
 
 	_, err = db.ExecContext(ctx,
-		`UPDATE sessions SET completion_check_candidate_id = ? WHERE id = ?`, candidateID, session.ID)
+		`UPDATE sessions SET completion_check_candidate_id = ? WHERE id = ?`, candidateID, session)
 	require.NoError(t, err)
 
-	state, err := store.LoadCompletionCheckState(ctx, session.ID)
+	state, err := store.LoadCompletionCheckState(ctx, session)
 	require.NoError(t, err)
 	require.NotNil(t, state.CandidateID)
 	assert.Equal(t, candidateID, *state.CandidateID)
@@ -182,10 +182,10 @@ func TestLoadCompletionCheckStateCarriesCandidateText(t *testing.T) {
 
 	// No pending candidate: text is empty.
 	_, err = db.ExecContext(ctx,
-		`UPDATE sessions SET completion_check_candidate_id = NULL WHERE id = ?`, session.ID)
+		`UPDATE sessions SET completion_check_candidate_id = NULL WHERE id = ?`, session)
 	require.NoError(t, err)
 
-	state, err = store.LoadCompletionCheckState(ctx, session.ID)
+	state, err = store.LoadCompletionCheckState(ctx, session)
 	require.NoError(t, err)
 	assert.Nil(t, state.CandidateID)
 	assert.Empty(t, state.CandidateText)

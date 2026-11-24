@@ -188,9 +188,8 @@ func TestManager_Clear(t *testing.T) {
 	ctx := context.Background()
 	pid := testProject(t, s, t.TempDir())
 	id, err := mgr.Send(ctx, pid, "init", "test-model", map[string]any{
-		"channel":                               "cli",
-		"chat_id":                               float64(42),
-		controllerapi.SessionAttributeManagerID: "cli",
+		"channel": "cli",
+		"chat_id": float64(42),
 	})
 	require.NoError(t, err)
 	h.waitUntil("TestManager_Clear", func() bool {
@@ -213,7 +212,6 @@ func TestManager_Clear(t *testing.T) {
 	assert.Equal(t, "high", newRec.ReasoningLevel)
 	assert.Equal(t, "cli", newRec.Attributes["channel"])
 	assert.InDelta(t, float64(42), newRec.Attributes["chat_id"], 0.0)
-	assert.Equal(t, "cli", newRec.Attributes[controllerapi.SessionAttributeManagerID])
 
 	// Old session should be killed (Kill ran synchronously inside Clear)
 	oldRec := h.session(id)

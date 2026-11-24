@@ -6,7 +6,6 @@
       "name": "<name>",
       "work_dir": "<workdir>",
       "attributes": {
-        "manager_id": "telegram:main",
         "title": "first prompt"
       }
     },
@@ -31,7 +30,6 @@
       "name": "<name>",
       "work_dir": "<workdir>",
       "attributes": {
-        "manager_id": "telegram:main",
         "title": "first prompt"
       }
     },
@@ -84,8 +82,5 @@
       "content": "✅ Context compacted",
       "source_key": "input:2:compact:succeeded"
     }
-  ],
-  "owners": {
-    "1": "telegram:main"
-  }
+  ]
 }

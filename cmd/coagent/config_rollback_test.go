@@ -133,7 +133,7 @@ func verdictStore(t *testing.T) (*sessionstore.Store, *sql.DB) {
 	_, err = db.ExecContext(t.Context(), "INSERT INTO projects (id, work_dir, name) VALUES (1, ?, 'p')", t.TempDir())
 	require.NoError(t, err)
 	_, err = db.ExecContext(t.Context(), `INSERT INTO sessions (id, project_id, model, agent_type, attributes)
-		VALUES (7, 1, 'model', 'build', '{"manager_id":"telegram:main"}')`)
+		VALUES (7, 1, 'model', 'build', '{}')`)
 	require.NoError(t, err)
 	return sessionstore.NewStore(db), db
 }

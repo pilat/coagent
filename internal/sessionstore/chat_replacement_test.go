@@ -13,7 +13,7 @@ func TestChatFocus_ClearTransfersEveryChatAtomically(t *testing.T) {
 	ctx := t.Context()
 	store, db, project := newTestStore(t)
 	old, _, err := store.CreateManagerRoot(ctx, ManagerRootCreate{
-		ProjectID: project, Model: "model", Attributes: map[string]any{"manager_id": "owner"},
+		ProjectID: project, Model: "model", Attributes: map[string]any{},
 		Name: "test", WorkDir: "/project",
 	})
 	require.NoError(t, err)

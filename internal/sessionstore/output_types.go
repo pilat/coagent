@@ -15,8 +15,6 @@ const (
 	OutputSessionClosed   OutputType = "session_closed"
 )
 
-const managerIDAttribute = "manager_id"
-
 // ModelInputGenerationAttribute is reserved for host-owned generation state;
 // output producers cannot set it.
 const ModelInputGenerationAttribute = "model_input_generation"
@@ -32,7 +30,6 @@ const (
 
 var (
 	ErrOutputConflict = errors.New("session output identity conflict")
-	ErrOutputOwner    = errors.New("session output has no manager owner")
 	ErrOutputNotRoot  = errors.New("session output belongs to a subagent")
 )
 

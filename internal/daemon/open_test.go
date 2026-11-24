@@ -14,6 +14,7 @@ import (
 	"github.com/pilat/coagent/internal/registry"
 	"github.com/pilat/coagent/internal/schedule"
 	"github.com/pilat/coagent/internal/sessionstore"
+	"github.com/pilat/coagent/internal/sessionstore/sessionstoretest"
 	"github.com/pilat/coagent/internal/subagent"
 	"github.com/pilat/coagent/internal/tool"
 )
@@ -142,7 +143,8 @@ func TestSessionRepoRoot_InheritedAcrossDurableSubagentTree(t *testing.T) {
 	}
 	child := h.session(childID)
 	assert.Empty(t, child.Attributes["repo_root"])
-	plain, err := h.store.CreateSession(h.ctx, h.projectID, "fake-model", "", nil)
+	plainID := sessionstoretest.BareRoot(h.t, h.db, h.projectID, "fake-model", "", nil)
+	plain, err := h.store.GetSession(h.ctx, plainID)
 	require.NoError(t, err)
 	got, err := h.mgr.sessionRepoRoot(h.ctx, plain)
 	require.NoError(t, err)

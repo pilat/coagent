@@ -27,7 +27,7 @@ func testSignalEmptyTurn(t *testing.T) {
 	}})
 	h.startInboxWake()
 	watcher := modeRoot(t, h)
-	target := h.createRoot(managerAttrs("owner"))
+	target := h.createRoot(nil)
 	_, _, err := (orchestratorHost{s: h.mgr}).SendToSession(h.ctx, watcher, target, "work")
 	require.NoError(t, err)
 	h.waitUntil("empty response termination", func() bool {
@@ -65,7 +65,7 @@ func testSignalEmptyFollowUp(t *testing.T) {
 	h = newHarness(t, harnessOptions{respond: respond})
 	h.startInboxWake()
 	watcher := modeRoot(t, h)
-	target = h.createRoot(managerAttrs("owner"))
+	target = h.createRoot(nil)
 	_, _, err := (orchestratorHost{s: h.mgr}).SendToSession(h.ctx, watcher, target, "work")
 	require.NoError(t, err)
 	h.waitUntil("follow-up queued before first answer", func() bool { return len(queued) == 1 })

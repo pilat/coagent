@@ -393,7 +393,7 @@ func TestHarnessScenario_CompactSuccessChain(t *testing.T) {
 	h := newHarness(t, harnessOptions{respond: respond})
 
 	collector := h.collect()
-	root := h.send("first prompt", managerAttrs(scenarioManagerID))
+	root := h.send("first prompt", nil)
 	collector.waitMessage(root, "First answer.")
 	// Wait for teardown so compaction deterministically re-announces the session.
 	h.waitUntil("first runner gone", func() bool { return !h.mgr.HasActiveLoop(root) })

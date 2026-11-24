@@ -7,6 +7,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/pilat/coagent/internal/controllerapi"
+	"github.com/pilat/coagent/internal/sessionstore/sessionstoretest"
 )
 
 func TestCreateSession_RejectsCallerSuppliedOrchestrator(t *testing.T) {
@@ -32,33 +33,32 @@ func TestCreateSession_RejectsCallerSuppliedSpawnedBy(t *testing.T) {
 }
 
 func TestOrchestratorCapability(t *testing.T) {
-	factory, store, project := newChatControl(t)
-	root, err := store.CreateSession(t.Context(), project, "model", "", map[string]any{"manager_id": "owner"})
-	require.NoError(t, err)
+	factory, _, project, db := newChatControl(t)
+	root := sessionstoretest.BareRoot(t, db, project, "model", "", map[string]any{})
 	for _, owner := range []string{"owner", "other", ""} {
 		capability, ok := factory.ForManager(owner).(controllerapi.ChatFocusController)
 		require.True(t, ok)
 		switch owner {
 		case "owner":
-			changed, err := capability.SetOrchestrator(t.Context(), "chat", root.ID, true)
+			changed, err := capability.SetOrchestrator(t.Context(), "chat", root, true)
 			require.NoError(t, err)
 			assert.True(t, changed)
-			on, err := capability.Orchestrator(t.Context(), "chat", root.ID)
+			on, err := capability.Orchestrator(t.Context(), "chat", root)
 			require.NoError(t, err)
 			assert.True(t, on)
 			_, err = capability.SetOrchestrator(t.Context(), "chat", 0, true)
 			require.EqualError(t, err, "#0 is not a live session")
 		case "other":
-			changed, err := capability.SetOrchestrator(t.Context(), "chat", root.ID, true)
+			changed, err := capability.SetOrchestrator(t.Context(), "chat", root, true)
 			require.NoError(t, err)
 			assert.False(t, changed)
-			on, err := capability.Orchestrator(t.Context(), "chat", root.ID)
+			on, err := capability.Orchestrator(t.Context(), "chat", root)
 			require.NoError(t, err)
 			assert.True(t, on)
 		default:
-			_, err := capability.SetOrchestrator(t.Context(), "chat", root.ID, true)
+			_, err := capability.SetOrchestrator(t.Context(), "chat", root, true)
 			require.ErrorContains(t, err, "no manager identity")
-			_, err = capability.Orchestrator(t.Context(), "chat", root.ID)
+			_, err = capability.Orchestrator(t.Context(), "chat", root)
 			require.Error(t, err)
 		}
 	}

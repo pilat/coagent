@@ -12,6 +12,7 @@ import (
 
 	"github.com/pilat/coagent/internal/migrate"
 	"github.com/pilat/coagent/internal/sessionstore"
+	"github.com/pilat/coagent/internal/sessionstore/sessionstoretest"
 	"github.com/pilat/coagent/internal/subagent"
 )
 
@@ -61,17 +62,16 @@ func TestStore_CreateSubagentSession_PersistsRootAndModel(t *testing.T) {
 	s, _, projectID := newTestStore(t)
 	ctx := context.Background()
 
-	parent, err := s.CreateSession(ctx, projectID, "parent-model", "", nil)
-	require.NoError(t, err)
+	parent := sessionstoretest.BareRoot(t, sDB(s), projectID, "parent-model", "", nil)
 
-	childID, err := createChild(ctx, s, projectID, parent.ID, parent.ID, "general", "child-model", "high")
+	childID, err := createChild(ctx, s, projectID, parent, parent, "general", "child-model", "high")
 	require.NoError(t, err)
 	assert.Positive(t, childID)
 
 	rec, err := s.GetSession(ctx, childID)
 	require.NoError(t, err)
-	assert.Equal(t, parent.ID, rec.ParentID)
-	assert.Equal(t, parent.ID, rec.RootID)
+	assert.Equal(t, parent, rec.ParentID)
+	assert.Equal(t, parent, rec.RootID)
 	assert.Equal(t, "general", rec.AgentType)
 	assert.Equal(t, "child-model", rec.Model)
 	assert.Equal(t, "high", rec.ReasoningLevel)
@@ -81,7 +81,9 @@ func TestStore_GetChildSessionStats_ByRoot(t *testing.T) {
 	s, _, projectID := newTestStore(t)
 	ctx := context.Background()
 
-	root, err := s.CreateSession(ctx, projectID, "m", "", nil)
+	rootID := sessionstoretest.BareRoot(t, sDB(s), projectID, "m", "", nil)
+
+	root, err := s.GetSession(ctx, rootID)
 	require.NoError(t, err)
 
 	c1, _ := createChild(ctx, s, projectID, root.ID, root.ID, "general", "m", "")
@@ -90,9 +92,8 @@ func TestStore_GetChildSessionStats_ByRoot(t *testing.T) {
 	require.NoError(t, stepState(ctx, s, c2, 4, sessionstore.SessionStatusCompleted))
 
 	// A child of an unrelated root must not be counted.
-	other, err := s.CreateSession(ctx, projectID, "m", "", nil)
-	require.NoError(t, err)
-	oc, _ := createChild(ctx, s, projectID, other.ID, other.ID, "general", "m", "")
+	other := sessionstoretest.BareRoot(t, sDB(s), projectID, "m", "", nil)
+	oc, _ := createChild(ctx, s, projectID, other, other, "general", "m", "")
 	require.NoError(t, stepState(ctx, s, oc, 99, sessionstore.SessionStatusCompleted))
 
 	count, iters, err := s.GetChildSessionStats(ctx, root.ID)

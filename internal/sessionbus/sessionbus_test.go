@@ -61,10 +61,10 @@ func TestBus_GlobalSubscriber(t *testing.T) {
 	assert.Contains(t, sessionIDs, int64(2))
 }
 
-func TestBus_EveryManagerRootSubscriberReceivesEveryManagerRoot(t *testing.T) {
+func TestBus_EveryRootSubscriberReceivesEveryRoot(t *testing.T) {
 	ps := New()
-	alpha := ps.SubscribeManagerRoots()
-	beta := ps.SubscribeManagerRoots()
+	alpha := ps.SubscribeRoots()
+	beta := ps.SubscribeRoots()
 	observer := ps.SubscribeAll()
 	n := sessionevent.Notification{Type: sessionevent.NotifyMessage, Message: "owned"}
 
@@ -80,10 +80,10 @@ func TestBus_EveryManagerRootSubscriberReceivesEveryManagerRoot(t *testing.T) {
 	assert.Equal(t, int64(42), requireManagerNotification(t, observer).SessionID)
 }
 
-func TestBus_FullManagerRootSubscriberDoesNotCostAnother(t *testing.T) {
+func TestBus_FullRootSubscriberDoesNotCostAnother(t *testing.T) {
 	ps := New()
-	slow := ps.SubscribeManagerRoots()
-	fast := ps.SubscribeManagerRoots()
+	slow := ps.SubscribeRoots()
+	fast := ps.SubscribeRoots()
 	for i := int64(1); i <= 100; i++ {
 		ps.Publish(i, true, sessionevent.Notification{Type: sessionevent.NotifyMessage})
 		assert.Equal(t, i, requireManagerNotification(t, fast).SessionID)
@@ -93,8 +93,8 @@ func TestBus_FullManagerRootSubscriberDoesNotCostAnother(t *testing.T) {
 
 func TestBus_UnsubscribeManager(t *testing.T) {
 	ps := New()
-	ch := ps.SubscribeManagerRoots()
-	ps.UnsubscribeManagerRoots(ch)
+	ch := ps.SubscribeRoots()
+	ps.UnsubscribeRoots(ch)
 
 	ps.Publish(1, true, sessionevent.Notification{Type: sessionevent.NotifyMessage})
 

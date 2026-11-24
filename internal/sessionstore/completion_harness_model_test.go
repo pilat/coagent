@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/pilat/coagent/internal/sessionstore"
+	"github.com/pilat/coagent/internal/sessionstore/sessionstoretest"
 	"github.com/pilat/coagent/internal/subagent"
 	"github.com/pilat/coagent/internal/transcript"
 )
@@ -284,18 +285,17 @@ func TestHarnessModel_CompletionWakeRaceClosed(t *testing.T) {
 	ctx := context.Background()
 	store, db, projectID := newTestStore(t)
 
-	parent, err := store.CreateSession(ctx, projectID, "m", "", nil)
-	require.NoError(t, err)
-	childID, err := createChild(ctx, store, projectID, parent.ID, parent.ID, "general", "m", "")
+	parent := sessionstoretest.BareRoot(t, sDB(store), projectID, "m", "", nil)
+	childID, err := createChild(ctx, store, projectID, parent, parent, "general", "m", "")
 	require.NoError(t, err)
 
 	_, err = db.ExecContext(ctx, `INSERT INTO subagent_links
 		(parent_id, child_id, task_call_id, blocking, depth, state, outcome, created_at)
 		VALUES (?, ?, ?, 0, 0, 'completed', 'completed', ?)`,
-		parent.ID, childID, "task-1", time.Now().UTC().Unix())
+		parent, childID, "task-1", time.Now().UTC().Unix())
 	require.NoError(t, err)
 
-	has, err := store.HasBackgroundWakeSource(ctx, parent.ID)
+	has, err := store.HasBackgroundWakeSource(ctx, parent)
 	require.NoError(t, err)
 	assert.True(t, has,
 		"a completed undelivered child promises automatic delivery: ledger first, inbox later")
@@ -304,23 +304,22 @@ func TestHarnessModel_CompletionWakeRaceClosed(t *testing.T) {
 		SET delivered_at = ? WHERE child_id = ?`, time.Now().UTC().Unix(), childID)
 	require.NoError(t, err)
 
-	has, err = store.HasBackgroundWakeSource(ctx, parent.ID)
+	has, err = store.HasBackgroundWakeSource(ctx, parent)
 	require.NoError(t, err)
 	assert.False(t, has, "a delivered link no longer owns the next turn")
 
 	for _, state := range []string{"stopped", "killed"} {
-		other, err := store.CreateSession(ctx, projectID, "m", "", nil)
-		require.NoError(t, err)
-		otherChild, err := createChild(ctx, store, projectID, other.ID, other.ID, "general", "m", "")
+		other := sessionstoretest.BareRoot(t, sDB(store), projectID, "m", "", nil)
+		otherChild, err := createChild(ctx, store, projectID, other, other, "general", "m", "")
 		require.NoError(t, err)
 
 		_, err = db.ExecContext(ctx, `INSERT INTO subagent_links
 			(parent_id, child_id, task_call_id, blocking, depth, state, created_at)
 			VALUES (?, ?, ?, 0, 0, ?, ?)`,
-			other.ID, otherChild, "task-1", state, time.Now().UTC().Unix())
+			other, otherChild, "task-1", state, time.Now().UTC().Unix())
 		require.NoError(t, err)
 
-		has, err := store.HasBackgroundWakeSource(ctx, other.ID)
+		has, err := store.HasBackgroundWakeSource(ctx, other)
 		require.NoError(t, err)
 		assert.False(t, has, "state %s promises no wake and must not bypass the check", state)
 	}
@@ -335,18 +334,17 @@ func TestHarnessModel_CompletionDeliveryThenPromotionInvalidates(t *testing.T) {
 	ctx := context.Background()
 	store, db, projectID := newTestStore(t)
 
-	parent, err := store.CreateSession(ctx, projectID, "m", "", nil)
-	require.NoError(t, err)
-	childID, err := createChild(ctx, store, projectID, parent.ID, parent.ID, "general", "m", "")
+	parent := sessionstoretest.BareRoot(t, sDB(store), projectID, "m", "", nil)
+	childID, err := createChild(ctx, store, projectID, parent, parent, "general", "m", "")
 	require.NoError(t, err)
 
 	_, err = db.ExecContext(ctx, `INSERT INTO subagent_links
 		(parent_id, child_id, task_call_id, blocking, depth, state, outcome, created_at)
 		VALUES (?, ?, ?, 0, 0, 'completed', 'completed', ?)`,
-		parent.ID, childID, "task-1", time.Now().UTC().Unix())
+		parent, childID, "task-1", time.Now().UTC().Unix())
 	require.NoError(t, err)
 
-	seedPendingCheck(t, db, parent.ID)
+	seedPendingCheck(t, db, parent)
 
 	link, err := subagent.NewStore(db, testStore(db)).GetLink(ctx, childID)
 	require.NoError(t, err)
@@ -355,17 +353,17 @@ func TestHarnessModel_CompletionDeliveryThenPromotionInvalidates(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, won)
 
-	has, err := store.HasBackgroundWakeSource(ctx, parent.ID)
+	has, err := store.HasBackgroundWakeSource(ctx, parent)
 	require.NoError(t, err)
 	assert.True(t, has, "the pending inbox row owns the next turn after ledger delivery")
 
-	input, err := store.PeekPending(ctx, parent.ID)
+	input, err := store.PeekPending(ctx, parent)
 	require.NoError(t, err)
 
 	_, err = acceptInput(ctx, store, input.ID, input.RawContent)
 	require.NoError(t, err)
 
-	candidate, streak := readCompletionState(t, db, parent.ID)
+	candidate, streak := readCompletionState(t, db, parent)
 	assert.False(t, candidate.Valid, "promotion clears the stale candidate")
 	assert.Zero(t, streak, "promotion resets the empty streak")
 }

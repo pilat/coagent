@@ -33,7 +33,7 @@ func TestHarnessScenario_BudgetGrantDoesNotOutliveItsProcess(t *testing.T) {
 			return textReply("discarded before restart")
 		}},
 	)
-	root := first.send("/budget stop after one minute", managerAttrs("telegram:main"))
+	root := first.send("/budget stop after one minute", nil)
 	waitForScenarioSignal(t, entered, "budget model call before restart")
 	second := newHarness(
 		t,
@@ -73,7 +73,7 @@ func TestHarnessScenario_BudgetMutationRequiresAndConsumesUserGrant(t *testing.T
 	}
 	h := newHarness(t, harnessOptions{respond: respond})
 	defer close(release)
-	sessionID := h.send("/budget stop after one minute", managerAttrs("telegram:main"))
+	sessionID := h.send("/budget stop after one minute", nil)
 	h.waitUntil("budget is armed", func() bool {
 		record, loadErr := h.store.Get(h.ctx, sessionID)
 		return loadErr == nil && record.State == budget.Armed
@@ -93,7 +93,7 @@ func TestHarnessScenario_UnusedBudgetGrantSaysNothingChanged(t *testing.T) {
 	h := newHarness(t, harnessOptions{respond: func(string, []llmwire.Message) *llmwire.Response {
 		return textReply("no budget change")
 	}})
-	root := h.send("/budget stop after one minute", managerAttrs("telegram:main"))
+	root := h.send("/budget stop after one minute", nil)
 	h.waitUntil("unused grant released", func() bool {
 		return len(h.outbox(root)) > 0 && !h.mgr.HasActiveLoop(root)
 	})
@@ -122,7 +122,7 @@ func TestHarnessScenario_InputWaitsWhileAGrantIsOpen(t *testing.T) {
 		return textReply("no budget change")
 	}})
 	defer closeOnce(release)
-	root := h.send("/budget stop after one minute", managerAttrs("telegram:main"))
+	root := h.send("/budget stop after one minute", nil)
 	waitForScenarioSignal(t, entered, "command model call")
 	require.NoError(t, h.mgr.sendToSession(h.ctx, root, "hello"))
 	closeOnce(release)
@@ -154,7 +154,7 @@ func TestHarnessScenario_BudgetGrantIsSpentByTheFirstReceipt(t *testing.T) {
 			return textReply("budget configured")
 		}
 	}})
-	root := h.send("/budget stop after one minute", managerAttrs("telegram:main"))
+	root := h.send("/budget stop after one minute", nil)
 	h.waitUntil("two budget calls answered", func() bool {
 		return countToolResultsFor(h.messages(root), "set_budget") == 2 && !h.mgr.HasActiveLoop(root)
 	})
@@ -194,7 +194,7 @@ func TestHarnessScenario_BackgroundChildRetainsBudgetUntilCompletion(t *testing.
 	h := newHarness(t, harnessOptions{respond: respond})
 	collector := h.collect()
 	defer closeOnce(childRelease)
-	sessionID := h.send("/budget run a background child", managerAttrs(scenarioManagerID))
+	sessionID := h.send("/budget run a background child", nil)
 	collector.waitMessage(sessionID, "budget child still running")
 	record, err := h.store.Get(h.ctx, sessionID)
 	require.NoError(t, err)
@@ -222,7 +222,7 @@ func TestHarnessScenario_FinalOmitsTodoAndBudget(t *testing.T) {
 		return textReply("task answer")
 	}})
 	defer releaseModel()
-	sessionID := h.send("do work", managerAttrs("telegram:main"))
+	sessionID := h.send("do work", nil)
 	waitForScenarioSignal(t, entered, "model call")
 	todos := json.RawMessage(`[{"id":"todo-1","content":"ship change","status":"in_progress","priority":"high"}]`)
 	require.NoError(t, func() error {
@@ -267,7 +267,7 @@ func TestHarnessScenario_CompletionCheckBudgetCrossingOnCandidateHidesText(t *te
 	}
 	h := newHarness(t, harnessOptions{respond: respond})
 	collector := h.collect()
-	root := h.send("do work under a tight budget", managerAttrs(scenarioManagerID))
+	root := h.send("do work under a tight budget", nil)
 
 	// The limit sits below the candidate's cost: admission sees a zero tree,
 	// and only the disposition commit crosses it.
@@ -316,7 +316,7 @@ func TestSendToSessionDuringBudgetDrainExplainsParking(t *testing.T) {
 		return textReply("continued")
 	}})
 	t.Cleanup(func() { closeOnce(release); h.shutdown() })
-	root := h.send("work under a budget", managerAttrs(scenarioManagerID))
+	root := h.send("work under a budget", nil)
 	waitForScenarioSignal(t, entered, "budgeted model call")
 	_, err := h.db.ExecContext(h.ctx, `INSERT INTO session_budgets
 		(root_session_id, state, generation, armed_at, baseline_cost_usd, cost_limit_usd)
@@ -370,7 +370,7 @@ func TestHarnessScenario_BudgetChangeDuringParkRearmsAndSkipsThePark(t *testing.
 		return textReply("continued")
 	}})
 	t.Cleanup(func() { closeOnce(release); h.shutdown() })
-	root := h.send("work under a budget", managerAttrs(scenarioManagerID))
+	root := h.send("work under a budget", nil)
 	waitForScenarioSignal(t, entered, "budgeted model call")
 	_, err := h.db.ExecContext(h.ctx, `INSERT INTO session_budgets
 		(root_session_id, state, generation, armed_at, baseline_cost_usd, cost_limit_usd)
@@ -438,7 +438,7 @@ func TestResponseIntegrity_BudgetCrossingSuppressesRecoveryAndCallStubs(t *testi
 		}
 	}})
 	defer closeOnce(release)
-	sessionID := h.send("cross the budget", managerAttrs(scenarioManagerID))
+	sessionID := h.send("cross the budget", nil)
 	waitForScenarioSignal(t, entered, "budgeted model call")
 	_, err := h.db.ExecContext(h.ctx, `INSERT INTO session_budgets
 		(root_session_id, state, generation, armed_at, baseline_cost_usd, cost_limit_usd)
@@ -465,7 +465,7 @@ func TestResponseIntegrity_BudgetCrossingSuppressesRecoveryAndCallStubs(t *testi
 
 func TestBudgetParkStopsACompletedRoot(t *testing.T) {
 	h := newHarness(t, harnessOptions{respond: trivialRespond})
-	root := h.createRoot(managerAttrs(scenarioManagerID))
+	root := h.createRoot(nil)
 	require.NoError(t, h.store.UpdateSessionStatus(h.ctx, root, sessionstore.SessionStatusCompleted))
 	limit := 1.0
 	armed, err := h.store.Arm(h.ctx, budget.Mutation{

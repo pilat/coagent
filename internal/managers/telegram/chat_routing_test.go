@@ -38,7 +38,7 @@ func TestHeartbeatTypingUsesOnlyLoopChatFocus(t *testing.T) {
 func TestFocusWritesWakeLoopWithoutTheirOwnConfirmation(t *testing.T) {
 	var messages []string
 	controller := &fakeController{listSessions: []controllerapi.SessionInfo{{
-		ID: 42, Attributes: map[string]any{"manager_id": "telegram-main"},
+		ID: 42, Attributes: map[string]any{},
 	}}}
 	manager := newCmdTestManager(t, controller, &messages)
 	loop := &chatLoopStub{}

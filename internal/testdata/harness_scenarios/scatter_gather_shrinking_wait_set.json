@@ -4,11 +4,18 @@
     {
       "type": "session_created",
       "name": "<name>",
-      "work_dir": "<workdir>"
+      "work_dir": "<workdir>",
+      "attributes": {
+        "title": "scatter gather"
+      }
     },
     {
       "type": "state_changed",
       "status": "running"
+    },
+    {
+      "type": "message",
+      "message": "→ task: `wait child`\n→ task: `wait child`\n→ task: `wait child`"
     },
     {
       "type": "waiting",
@@ -31,7 +38,10 @@
     {
       "type": "session_created",
       "name": "<name>",
-      "work_dir": "<workdir>"
+      "work_dir": "<workdir>",
+      "attributes": {
+        "title": "scatter gather"
+      }
     },
     {
       "type": "state_changed",
@@ -54,7 +64,10 @@
     {
       "type": "session_created",
       "name": "<name>",
-      "work_dir": "<workdir>"
+      "work_dir": "<workdir>",
+      "attributes": {
+        "title": "scatter gather"
+      }
     },
     {
       "type": "state_changed",
@@ -73,7 +86,10 @@
     {
       "type": "session_created",
       "name": "<name>",
-      "work_dir": "<workdir>"
+      "work_dir": "<workdir>",
+      "attributes": {
+        "title": "scatter gather"
+      }
     },
     {
       "type": "state_changed",
@@ -88,5 +104,27 @@
       "status": "idle"
     }
   ],
-  "outputs": []
+  "outputs": [
+    {
+      "id": 1,
+      "session_id": 1,
+      "type": "session_opened",
+      "content": "",
+      "source_key": "session:1:opened"
+    },
+    {
+      "id": 2,
+      "session_id": 1,
+      "type": "message",
+      "content": "→ task: `wait child`\n→ task: `wait child`\n→ task: `wait child`",
+      "source_key": "message:2:reply"
+    },
+    {
+      "id": 3,
+      "session_id": 1,
+      "type": "message",
+      "content": "all children delivered",
+      "source_key": "message:20:final"
+    }
+  ]
 }

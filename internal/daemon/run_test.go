@@ -11,6 +11,7 @@ import (
 
 	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/sessionevent"
+	"github.com/pilat/coagent/internal/sessionstore/sessionstoretest"
 )
 
 func TestManager_NormalCompletion(t *testing.T) {
@@ -63,7 +64,8 @@ func TestFinishRunnerCancellationEscapesContendedTreeFence(t *testing.T) {
 	h := newHarness(t, harnessOptions{configure: withTestModels, clientFor: (&mockFactory{}).client})
 	mgr, projects := h.mgr, h.store
 	projectID := testProject(t, projects, "/tmp/runner-fence-cancel")
-	record, err := mgr.store.CreateSession(ctx, projectID, "fake-model", "", nil)
+	recordID := sessionstoretest.BareRoot(t, h.db, projectID, "fake-model", "", nil)
+	record, err := mgr.store.GetSession(ctx, recordID)
 	require.NoError(t, err)
 	unlock, err := mgr.lockSessionTree(ctx, record.ID)
 	require.NoError(t, err)

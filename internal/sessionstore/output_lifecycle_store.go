@@ -6,8 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"time"
-
-	"github.com/pilat/coagent/internal/controllerapi"
 )
 
 // lifecycleKill mirrors the daemon's canonical /kill command name.
@@ -43,7 +41,7 @@ func (s *Store) BeginLifecycleInput(
 		return nil, fmt.Errorf("%w: input %d is %s", ErrInputResolved, inputID, input.State)
 	}
 
-	if _, err := outputOwner(ctx, tx, input.SessionID); err != nil {
+	if err := requireOutputRoot(ctx, tx, input.SessionID); err != nil {
 		return nil, err
 	}
 
@@ -143,18 +141,18 @@ func (s *Store) MarkSessionKilledWithOutput(
 	}
 
 	replaced := false
-	if controllerapi.ManagerRoot(record.Attributes) {
+	if record.ParentID == 0 {
 		replaced, err = hasReplacementRow(ctx, tx, sessionID)
 		if err != nil {
 			return nil, err
 		}
 	}
 
-	if record.ParentID != 0 || !controllerapi.ManagerRoot(record.Attributes) || replaced {
+	if record.ParentID != 0 || replaced {
 		if err := tx.Commit(); err != nil {
 			return nil, fmt.Errorf("commit killed session: %w", err)
 		}
-		//nolint:nilnil // ownerless and replacement roots have no manager output.
+		//nolint:nilnil // Subagents and replacement roots have no close output.
 		return nil, nil
 	}
 

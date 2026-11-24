@@ -2,6 +2,7 @@ package schedule_test
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"testing"
 	"time"
@@ -12,6 +13,7 @@ import (
 	"github.com/pilat/coagent/internal/llmwire"
 	"github.com/pilat/coagent/internal/schedule"
 	"github.com/pilat/coagent/internal/sessionstore"
+	"github.com/pilat/coagent/internal/sessionstore/sessionstoretest"
 	"github.com/pilat/coagent/internal/transcript"
 )
 
@@ -96,11 +98,11 @@ func TestHarnessModel_StaleSleepRowRetiresOnceInAnyOrder(t *testing.T) {
 		{stepProjectLosingRace, stepSettle, stepProject},
 		{stepProjectLosingRace, stepProject, stepSettle},
 	}
-	store, projects, sessions := newTestDB(t)
+	store, projects, sessions, db := newTestDB(t)
 	for name, retirer := range retirers {
 		for i, order := range orders {
 			t.Run(fmt.Sprintf("%s/%d", name, i), func(t *testing.T) {
-				runRetirementTrace(t, store, projects, sessions, retirer, order)
+				runRetirementTrace(t, db, store, projects, sessions, retirer, order)
 			})
 		}
 	}
@@ -108,6 +110,7 @@ func TestHarnessModel_StaleSleepRowRetiresOnceInAnyOrder(t *testing.T) {
 
 func runRetirementTrace(
 	t *testing.T,
+	db *sql.DB,
 	store schedule.Store,
 	projects, sessions *sessionstore.Store,
 	retirer sleepRetirer,
@@ -117,7 +120,7 @@ func runRetirementTrace(
 	ctx := t.Context()
 	race := &retiredFirstStore{Store: store}
 	svc := schedule.NewService(race, sessions)
-	id := seedSleeps(t, projects, sessions, svc)
+	id := seedSleeps(t, db, projects, sessions, svc)
 	model := &sleepRetirementModel{callPending: true, settledRow: true, liveRow: true}
 	project := func(modelRace *sleepRetirer) {
 		t.Helper()
@@ -175,12 +178,11 @@ func retirerFunc(store schedule.Store, retirer sleepRetirer) func(context.Contex
 	}
 }
 
-func seedSleeps(t *testing.T, projects, sessions *sessionstore.Store, svc schedule.Service) int64 {
+func seedSleeps(t *testing.T, db *sql.DB, projects, sessions *sessionstore.Store, svc schedule.Service) int64 {
 	t.Helper()
 	ctx := t.Context()
-	root, err := sessions.CreateSession(ctx, testProject(t, projects, "/tmp/project"), "", "", nil)
-	require.NoError(t, err)
-	_, err = sessions.Commit(ctx, sessionstore.Commit{SessionID: root.ID, Messages: []*transcript.Message{
+	root := sessionstoretest.BareRoot(t, db, testProject(t, projects, "/tmp/project"), "", "", nil)
+	_, err := sessions.Commit(ctx, sessionstore.Commit{SessionID: root, Messages: []*transcript.Message{
 		{
 			Role: "assistant",
 			ToolCalls: fmt.Appendf(
@@ -193,8 +195,8 @@ func seedSleeps(t *testing.T, projects, sessions *sessionstore.Store, svc schedu
 	}})
 	require.NoError(t, err)
 	for _, call := range []string{settledSleepCall, liveSleepCall} {
-		_, err = svc.AddSleep(ctx, root.ID, call, time.Now().Add(time.Hour), call)
+		_, err = svc.AddSleep(ctx, root, call, time.Now().Add(time.Hour), call)
 		require.NoError(t, err)
 	}
-	return root.ID
+	return root
 }

@@ -4,11 +4,18 @@
     {
       "type": "session_created",
       "name": "<name>",
-      "work_dir": "<workdir>"
+      "work_dir": "<workdir>",
+      "attributes": {
+        "title": "sleep"
+      }
     },
     {
       "type": "state_changed",
       "status": "running"
+    },
+    {
+      "type": "message",
+      "message": "→ sleep"
     },
     {
       "type": "waiting",
@@ -23,7 +30,10 @@
     {
       "type": "session_created",
       "name": "<name>",
-      "work_dir": "<workdir>"
+      "work_dir": "<workdir>",
+      "attributes": {
+        "title": "sleep"
+      }
     },
     {
       "type": "state_changed",
@@ -38,5 +48,27 @@
       "status": "idle"
     }
   ],
-  "outputs": []
+  "outputs": [
+    {
+      "id": 1,
+      "session_id": 1,
+      "type": "session_opened",
+      "content": "",
+      "source_key": "session:1:opened"
+    },
+    {
+      "id": 2,
+      "session_id": 1,
+      "type": "message",
+      "content": "→ sleep",
+      "source_key": "message:2:reply"
+    },
+    {
+      "id": 3,
+      "session_id": 1,
+      "type": "message",
+      "content": "sleep interruption handled",
+      "source_key": "message:7:final"
+    }
+  ]
 }

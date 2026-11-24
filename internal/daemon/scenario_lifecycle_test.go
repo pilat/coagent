@@ -187,7 +187,7 @@ func TestHarnessScenario_LiveStopChain(t *testing.T) {
 
 	collector := collectEvents(t, h.mgr.bus.SubscribeAll())
 	defer collector.stop()
-	root := h.send("long work", managerAttrs(scenarioManagerID))
+	root := h.send("long work", nil)
 	waitForScenarioSignal(t, entered, "model call")
 	service := installScenarioProcessService(t, h)
 	process := startScenarioProcess(t, service, root, root, "sleep 30")
@@ -213,7 +213,7 @@ func TestHarnessScenario_InterruptedStopChain(t *testing.T) {
 	}
 	dbPath := filepath.Join(t.TempDir(), "interrupted-stop.db")
 	h1 := newHarness(t, harnessOptions{dbPath: dbPath, respond: respond})
-	root := h1.createRoot(managerAttrs(scenarioManagerID))
+	root := h1.createRoot(nil)
 	input, err := h1.store.Enqueue(
 		h1.ctx, sessionstore.Input{SessionID: root, Source: sessionstore.InputSourceUser, Content: "/stop"},
 	)
@@ -256,7 +256,7 @@ func TestHarnessScenario_LaterFreshTurnAfterStop(t *testing.T) {
 	h := newHarness(t, harnessOptions{respond: respond})
 
 	collector := h.collect()
-	root := h.send("long work", managerAttrs(scenarioManagerID))
+	root := h.send("long work", nil)
 	collector.waitMessage(root, "Working on it, done for now.")
 	h.waitUntil("first runner gone", func() bool { return !h.mgr.HasActiveLoop(root) })
 	h.say(root, "/stop")

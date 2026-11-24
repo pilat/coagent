@@ -7,9 +7,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/stretchr/testify/require"
-
 	"github.com/pilat/coagent/internal/sessionstore"
+	"github.com/pilat/coagent/internal/sessionstore/sessionstoretest"
 	"github.com/pilat/coagent/internal/subagent"
 	"github.com/pilat/coagent/internal/transcript"
 )
@@ -279,9 +278,8 @@ func freshTurn(ctx context.Context, s *sessionstore.Store,
 
 func seedCompletionSession(t *testing.T, s *sessionstore.Store, db *sql.DB, project int64) int64 {
 	t.Helper()
-	record, err := s.CreateSession(t.Context(), project, "model", "", map[string]any{"manager_id": "test-manager"})
-	require.NoError(t, err)
-	return record.ID
+	record := sessionstoretest.BareRoot(t, sDB(s), project, "model", "", map[string]any{})
+	return record
 }
 
 func assistantStopMessage(content string) *transcript.Message {

@@ -84,7 +84,6 @@ func assertEndCommand(t *testing.T, h *harness, caller, target int64, command, a
 	title, _ := h.session(caller).Attributes[controllerapi.SessionAttributeTitle].(string)
 	name := sessionstore.ChatDisplayName(project, title)
 	assert.Equal(t, map[string]any{
-		controllerapi.SessionAttributeManagerID:    "owner",
 		sessionstore.InputAttributeSenderSessionID: float64(caller),
 		sessionstore.InputAttributeSenderName:      name,
 		sessionstore.InputAttributeSenderTitle:     title,

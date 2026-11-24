@@ -3,42 +3,28 @@ package sessionstore
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
-
-	"github.com/pilat/coagent/internal/controllerapi"
 )
 
-func outputOwner(ctx context.Context, tx *sql.Tx, sessionID int64) (string, error) {
+func requireOutputRoot(ctx context.Context, tx *sql.Tx, sessionID int64) error {
 	var parentID int64
-	var attributes string
 
-	err := tx.QueryRowContext(ctx, `SELECT parent_id, attributes FROM sessions WHERE id = ?`, sessionID).
-		Scan(&parentID, &attributes)
+	err := tx.QueryRowContext(ctx, `SELECT parent_id FROM sessions WHERE id = ?`, sessionID).
+		Scan(&parentID)
 	if errors.Is(err, sql.ErrNoRows) {
-		return "", fmt.Errorf("session %d not found", sessionID)
+		return fmt.Errorf("session %d not found", sessionID)
 	}
 
 	if err != nil {
-		return "", fmt.Errorf("load output owner: %w", err)
+		return fmt.Errorf("load output root: %w", err)
 	}
 
 	if parentID != 0 {
-		return "", ErrOutputNotRoot
+		return ErrOutputNotRoot
 	}
 
-	var values map[string]any
-	if err := json.Unmarshal([]byte(attributes), &values); err != nil {
-		return "", fmt.Errorf("decode session attributes: %w", err)
-	}
-
-	owner, _ := values[managerIDAttribute].(string)
-	if !controllerapi.ManagerRoot(values) {
-		return "", ErrOutputOwner
-	}
-
-	return owner, nil
+	return nil
 }
 
 func outputSessionWritable(ctx context.Context, tx *sql.Tx, sessionID int64) error {

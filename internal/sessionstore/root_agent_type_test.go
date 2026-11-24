@@ -6,15 +6,20 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/pilat/coagent/internal/sessionstore/sessionstoretest"
 )
 
 // The sessions.agent_type schema default is 'general' — a subagent type. A root
 // session must carry its own type in the row, not inherit that default.
-func TestCreateSessionPersistsTheRootAgentType(t *testing.T) {
+func TestCreateManagerRootPersistsTheRootAgentType(t *testing.T) {
 	ctx := context.Background()
 	store, db, projectID := newTestStore(t)
 
-	rec, err := store.CreateSession(ctx, projectID, "model-a", "medium", nil)
+	rec, _, err := store.CreateManagerRoot(ctx, ManagerRootCreate{
+		ProjectID: projectID, Model: "model-a", ReasoningLevel: "medium",
+		Name: "test", WorkDir: "/project",
+	})
 	require.NoError(t, err)
 	assert.Equal(t, "build", rec.AgentType, "the returned record names the agent type it wrote")
 
@@ -34,10 +39,9 @@ func TestCreateSubagentSessionKeepsItsOwnAgentType(t *testing.T) {
 	ctx := context.Background()
 	store, _, projectID := newTestStore(t)
 
-	root, err := store.CreateSession(ctx, projectID, "model-a", "medium", nil)
-	require.NoError(t, err)
+	root := sessionstoretest.BareRoot(t, store.db, projectID, "model-a", "medium", nil)
 
-	childID, err := createChild(ctx, store, projectID, root.ID, root.ID, "explore", "model-a", "medium")
+	childID, err := createChild(ctx, store, projectID, root, root, "explore", "model-a", "medium")
 	require.NoError(t, err)
 
 	child, err := store.GetSession(ctx, childID)

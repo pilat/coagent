@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/pilat/coagent/internal/llmwire"
+	"github.com/pilat/coagent/internal/sessionstore/sessionstoretest"
 	"github.com/pilat/coagent/internal/transcript"
 )
 
@@ -18,23 +19,22 @@ func TestUpdateSessionModelWritesTheLevelVerbatim(t *testing.T) {
 	ctx := context.Background()
 	store, db, projectID := newTestStore(t)
 
-	rec, err := store.CreateSession(ctx, projectID, "model-a", "high", nil)
-	require.NoError(t, err)
+	rec := sessionstoretest.BareRoot(t, store.db, projectID, "model-a", "high", nil)
 
-	require.NoError(t, store.UpdateSessionModel(ctx, rec.ID, "model-b", ""))
+	require.NoError(t, store.UpdateSessionModel(ctx, rec, "model-b", ""))
 
 	var raw string
 	require.NoError(t,
-		db.QueryRowContext(ctx, `SELECT reasoning_level FROM sessions WHERE id = ?`, rec.ID).Scan(&raw))
+		db.QueryRowContext(ctx, `SELECT reasoning_level FROM sessions WHERE id = ?`, rec).Scan(&raw))
 	assert.Empty(t, raw)
 
-	reloaded, err := store.GetSession(ctx, rec.ID)
+	reloaded, err := store.GetSession(ctx, rec)
 	require.NoError(t, err)
 	assert.Empty(t, reloaded.ReasoningLevel, "the read path must not invent a level either")
 
-	require.NoError(t, store.UpdateSessionModel(ctx, rec.ID, "model-c", "low"))
+	require.NoError(t, store.UpdateSessionModel(ctx, rec, "model-c", "low"))
 	require.NoError(t,
-		db.QueryRowContext(ctx, `SELECT reasoning_level FROM sessions WHERE id = ?`, rec.ID).Scan(&raw))
+		db.QueryRowContext(ctx, `SELECT reasoning_level FROM sessions WHERE id = ?`, rec).Scan(&raw))
 	assert.Equal(t, "low", raw)
 }
 
@@ -49,11 +49,10 @@ func TestUpdateSessionStatusRejectsMissingSession(t *testing.T) {
 func TestMarkSessionKilledMarksTheTerminalStatus(t *testing.T) {
 	ctx := context.Background()
 	store, _, projectID := newTestStore(t)
-	record, err := store.CreateSession(ctx, projectID, "model", "", nil)
-	require.NoError(t, err)
+	record := sessionstoretest.BareRoot(t, store.db, projectID, "model", "", nil)
 
-	require.NoError(t, store.WithTx(ctx, func(tx *sql.Tx) error { return MarkSessionKilledTx(ctx, tx, record.ID) }))
-	killed, err := store.GetSession(ctx, record.ID)
+	require.NoError(t, store.WithTx(ctx, func(tx *sql.Tx) error { return MarkSessionKilledTx(ctx, tx, record) }))
+	killed, err := store.GetSession(ctx, record)
 	require.NoError(t, err)
 	assert.Equal(t, SessionStatusKilled, killed.Status)
 	assert.NotNil(t, killed.KilledAt)
@@ -63,7 +62,9 @@ func TestSessionStatusRejectsUnknownVocabulary(t *testing.T) {
 	store, _, projectID := newTestStore(t)
 	ctx := context.Background()
 
-	rec, err := store.CreateSession(ctx, projectID, "model", "", nil)
+	recID := sessionstoretest.BareRoot(t, store.db, projectID, "model", "", nil)
+
+	rec, err := store.GetSession(ctx, recID)
 	require.NoError(t, err)
 	assert.Equal(t, SessionStatusActive, rec.Status, "returned record must match the database default")
 
@@ -79,22 +80,21 @@ func TestReasoningRawSurvivesReload(t *testing.T) {
 	ctx := context.Background()
 	store, _, projectID := newTestStore(t)
 
-	rec, err := store.CreateSession(ctx, projectID, "claude-opus-5", "high", nil)
-	require.NoError(t, err)
+	rec := sessionstoretest.BareRoot(t, store.db, projectID, "claude-opus-5", "high", nil)
 
 	envelope := json.RawMessage(`{"model":"claude-opus-5","payload":[{"type":"thinking","signature":"sig"}]}`)
 
-	_, err = appendMessage(ctx, store, rec.ID, &transcript.Message{
+	_, err := appendMessage(ctx, store, rec, &transcript.Message{
 		Role:         "assistant",
 		Content:      "thinking out loud",
 		ReasoningRaw: envelope,
 	})
 	require.NoError(t, err)
 
-	_, err = appendMessage(ctx, store, rec.ID, &transcript.Message{Role: "user", Content: "next"})
+	_, err = appendMessage(ctx, store, rec, &transcript.Message{Role: "user", Content: "next"})
 	require.NoError(t, err)
 
-	loaded, err := store.LoadActiveMessages(ctx, rec.ID)
+	loaded, err := store.LoadActiveMessages(ctx, rec)
 	require.NoError(t, err)
 	require.Len(t, loaded, 2)
 
@@ -106,12 +106,11 @@ func TestAttachmentsSurviveReload(t *testing.T) {
 	ctx := context.Background()
 	store, _, projectID := newTestStore(t)
 
-	rec, err := store.CreateSession(ctx, projectID, "claude-opus-5", "high", nil)
-	require.NoError(t, err)
+	rec := sessionstoretest.BareRoot(t, store.db, projectID, "claude-opus-5", "high", nil)
 
 	refs := json.RawMessage(`[{"path":"/tmp/coagent-a1b2.png","mime":"image/png","size":1234}]`)
 
-	_, err = appendMessage(ctx, store, rec.ID, &transcript.Message{
+	_, err := appendMessage(ctx, store, rec, &transcript.Message{
 		Role:        llmwire.RoleTool,
 		Content:     "[/tmp/coagent-a1b2.png]",
 		ToolCallID:  "call-1",
@@ -119,10 +118,10 @@ func TestAttachmentsSurviveReload(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	_, err = appendMessage(ctx, store, rec.ID, &transcript.Message{Role: llmwire.RoleUser, Content: "next"})
+	_, err = appendMessage(ctx, store, rec, &transcript.Message{Role: llmwire.RoleUser, Content: "next"})
 	require.NoError(t, err)
 
-	loaded, err := store.LoadActiveMessages(ctx, rec.ID)
+	loaded, err := store.LoadActiveMessages(ctx, rec)
 	require.NoError(t, err)
 	require.Len(t, loaded, 2)
 

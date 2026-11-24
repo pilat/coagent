@@ -218,7 +218,6 @@ func TestRun_DurableTurns(t *testing.T) {
 		final       string
 		status      sessionstore.SessionStatus
 		wantError   bool
-		ownerless   bool
 	}{
 		{
 			name:      "confirmed answer",
@@ -227,15 +226,6 @@ func TestRun_DurableTurns(t *testing.T) {
 			calls:     2,
 			final:     "candidate",
 			status:    sessionstore.SessionStatusCompleted,
-		},
-		{
-			name:      "ownerless observer answer",
-			input:     "answer the request",
-			responses: []*llmwire.Response{textResponse("candidate"), textResponse("confirmed")},
-			calls:     2,
-			final:     "candidate",
-			status:    sessionstore.SessionStatusCompleted,
-			ownerless: true,
 		},
 		{
 			name:  "ordinary tool then confirmation",
@@ -302,11 +292,7 @@ func TestRun_DurableTurns(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			db, store, id := newAttachmentsStore(t)
-			if tc.ownerless {
-				_, err := db.ExecContext(t.Context(), "UPDATE sessions SET attributes = '{}' WHERE id = ?", id)
-				require.NoError(t, err)
-			}
+			_, store, id := newAttachmentsStore(t)
 			_, err := store.Enqueue(
 				t.Context(),
 				sessionstore.Input{SessionID: id, Source: sessionstore.InputSourceUser, Content: tc.input},
@@ -334,7 +320,7 @@ func TestRun_DurableTurns(t *testing.T) {
 					Store:          store,
 					Events:         noteEvents{notes: &notes},
 					OpeningContext: "project instructions",
-					OutputEnabled:  !tc.ownerless,
+					OutputEnabled:  true,
 				},
 			)
 			require.NoError(t, err)
@@ -370,7 +356,7 @@ func TestRun_DurableTurns(t *testing.T) {
 						Prompt:        prompt,
 						Store:         store,
 						Events:        noteEvents{notes: &notes},
-						OutputEnabled: !tc.ownerless,
+						OutputEnabled: true,
 					},
 				)
 				require.NoError(t, err)

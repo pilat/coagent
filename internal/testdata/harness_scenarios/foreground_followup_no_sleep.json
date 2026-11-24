@@ -4,11 +4,18 @@
     {
       "type": "session_created",
       "name": "<name>",
-      "work_dir": "<workdir>"
+      "work_dir": "<workdir>",
+      "attributes": {
+        "title": "start foreground child"
+      }
     },
     {
       "type": "state_changed",
       "status": "running"
+    },
+    {
+      "type": "message",
+      "message": "→ task: `scenario`"
     },
     {
       "type": "waiting",
@@ -23,7 +30,10 @@
     {
       "type": "session_created",
       "name": "<name>",
-      "work_dir": "<workdir>"
+      "work_dir": "<workdir>",
+      "attributes": {
+        "title": "start foreground child"
+      }
     },
     {
       "type": "state_changed",
@@ -40,11 +50,18 @@
     {
       "type": "session_created",
       "name": "<name>",
-      "work_dir": "<workdir>"
+      "work_dir": "<workdir>",
+      "attributes": {
+        "title": "start foreground child"
+      }
     },
     {
       "type": "state_changed",
       "status": "running"
+    },
+    {
+      "type": "message",
+      "message": "→ send_to_subagent\n→ sleep"
     },
     {
       "type": "message",
@@ -57,7 +74,10 @@
     {
       "type": "session_created",
       "name": "<name>",
-      "work_dir": "<workdir>"
+      "work_dir": "<workdir>",
+      "attributes": {
+        "title": "start foreground child"
+      }
     },
     {
       "type": "state_changed",
@@ -72,5 +92,48 @@
       "status": "idle"
     }
   ],
-  "outputs": []
+  "outputs": [
+    {
+      "id": 1,
+      "session_id": 1,
+      "type": "session_opened",
+      "content": "",
+      "source_key": "session:1:opened"
+    },
+    {
+      "id": 2,
+      "session_id": 1,
+      "type": "message",
+      "content": "→ task: `scenario`",
+      "source_key": "message:2:reply"
+    },
+    {
+      "id": 3,
+      "session_id": 1,
+      "type": "message",
+      "content": "initial child delivered",
+      "source_key": "message:10:final"
+    },
+    {
+      "id": 4,
+      "session_id": 1,
+      "type": "message",
+      "content": "→ send_to_subagent\n→ sleep",
+      "source_key": "message:12:reply"
+    },
+    {
+      "id": 5,
+      "session_id": 1,
+      "type": "message",
+      "content": "follow-up accepted",
+      "source_key": "message:16:final"
+    },
+    {
+      "id": 6,
+      "session_id": 1,
+      "type": "message",
+      "content": "continuation delivered",
+      "source_key": "message:23:final"
+    }
+  ]
 }

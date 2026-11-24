@@ -216,7 +216,7 @@ func TestHarnessScenario_SubagentBackgroundYieldSurvivesRestart(t *testing.T) {
 		first.projectID,
 		"research",
 		"fake-model",
-		managerAttrs(scenarioManagerID),
+		nil,
 	)
 	require.NoError(t, err)
 	link := first.waitChildYield(parentID)
@@ -249,7 +249,7 @@ func TestHarnessScenario_RootBackgroundYieldIsUnchanged(t *testing.T) {
 	}
 	h := newHarness(t, harnessOptions{respond: respond})
 	installScenarioProcessService(t, h)
-	rootID, err := h.mgr.Send(h.ctx, h.projectID, "build", "fake-model", managerAttrs(scenarioManagerID))
+	rootID, err := h.mgr.Send(h.ctx, h.projectID, "build", "fake-model", nil)
 	require.NoError(t, err)
 
 	h.waitUntil("root yield", func() bool {
@@ -272,7 +272,7 @@ func (s *backgroundChildScript) start(t *testing.T) (*harness, int64) {
 	t.Helper()
 	s.h = newHarness(t, harnessOptions{respond: s.respond})
 	installScenarioProcessService(t, s.h)
-	parentID, err := s.h.mgr.Send(s.h.ctx, s.h.projectID, "research", "fake-model", managerAttrs(scenarioManagerID))
+	parentID, err := s.h.mgr.Send(s.h.ctx, s.h.projectID, "research", "fake-model", nil)
 	require.NoError(t, err)
 	return s.h, parentID
 }

@@ -36,7 +36,7 @@ const (
 const sessionColumns = `id, project_id, model, reasoning_level, master_enabled, attributes, agent_type, parent_id, iteration, status, todo_items, created_at, updated_at, killed_at, root_id, model_input_generation, context_baseline_model, context_baseline_prompt_tokens, context_baseline_message_count, completion_check_candidate_id, empty_stop_streak, completion_check_confirmed_answer_id`
 
 // errSessionNotFound signals a lookup query matched no row.
-var errSessionNotFound = errors.New("session not found")
+var errSessionNotFound = fmt.Errorf("session not found: %w", sql.ErrNoRows)
 
 // SessionStatus is the persisted sessions.status vocabulary. It is deliberately
 // distinct from controller runtime state and daemon subagent-link state.
@@ -120,62 +120,6 @@ func NewStore(db *sql.DB) *Store {
 	return &Store{db: db, wokenSessions: make(map[int64]struct{}), woken: make(chan struct{}, 1)}
 }
 
-func (s *Store) CreateSession(
-	ctx context.Context,
-	projectID int64,
-	model, reasoningLevel string,
-	attrs map[string]any,
-) (*SessionRecord, error) {
-	if reasoningLevel == "" {
-		reasoningLevel = defaultReasoningLevel
-	}
-
-	if attrs == nil {
-		attrs = map[string]any{}
-	}
-
-	attrsJSON, err := json.Marshal(attrs)
-	if err != nil {
-		return nil, fmt.Errorf("marshal attributes: %w", err)
-	}
-
-	now := time.Now().UTC()
-
-	result, err := s.db.ExecContext(
-		ctx,
-		`INSERT INTO sessions (project_id, model, reasoning_level, attributes, agent_type, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		projectID,
-		model,
-		reasoningLevel,
-		string(attrsJSON),
-		rootAgentType,
-		now,
-		now,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("insert session: %w", err)
-	}
-
-	newID, err := result.LastInsertId()
-	if err != nil {
-		return nil, fmt.Errorf("last insert id: %w", err)
-	}
-
-	rec := &SessionRecord{
-		ID:             newID,
-		ProjectID:      projectID,
-		Model:          model,
-		ReasoningLevel: reasoningLevel,
-		Status:         SessionStatusActive,
-		AgentType:      rootAgentType,
-		Attributes:     attrs,
-		CreatedAt:      now,
-		UpdatedAt:      now,
-	}
-
-	return rec, nil
-}
-
 func (s *Store) CreateSubagentSession(
 	ctx context.Context,
 	projectID, parentID, rootID int64,
@@ -221,60 +165,6 @@ func (s *Store) CreateSubagentSession(
 	}
 
 	return id, nil
-}
-
-//nolint:wsl_v5 // Fencing and replacement creation must remain one transaction.
-func (s *Store) CreateReplacementSession(
-	ctx context.Context,
-	oldSessionID int64,
-) (*SessionRecord, error) {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, fmt.Errorf("begin ownerless replacement: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	old, err := scanSession(
-		tx.QueryRowContext(ctx, `SELECT `+sessionColumns+` FROM sessions WHERE id = ?`, oldSessionID),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("load ownerless replacement: %w", err)
-	}
-	now := time.Now().UTC()
-	result, err := tx.ExecContext(ctx, `UPDATE sessions SET status = 'terminating', updated_at = ?
-		WHERE id = ? AND parent_id = 0 AND killed_at IS NULL
-			AND status NOT IN ('terminating', 'killed')`, now, oldSessionID)
-	if err != nil {
-		return nil, fmt.Errorf("fence ownerless replacement: %w", err)
-	}
-	if err := requireOneSessionUpdate(result, oldSessionID); err != nil {
-		return nil, err
-	}
-
-	attrs, err := json.Marshal(old.Attributes)
-	if err != nil {
-		return nil, fmt.Errorf("marshal ownerless replacement attributes: %w", err)
-	}
-	result, err = tx.ExecContext(ctx, `INSERT INTO sessions
-		(project_id, model, reasoning_level, attributes, agent_type, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		old.ProjectID, old.Model, old.ReasoningLevel, string(attrs), rootAgentType, now, now)
-	if err != nil {
-		return nil, fmt.Errorf("insert ownerless replacement: %w", err)
-	}
-	id, err := result.LastInsertId()
-	if err != nil {
-		return nil, fmt.Errorf("ownerless replacement id: %w", err)
-	}
-	if err := tx.Commit(); err != nil {
-		return nil, fmt.Errorf("commit ownerless replacement: %w", err)
-	}
-
-	return &SessionRecord{
-		ID: id, ProjectID: old.ProjectID, Model: old.Model, ReasoningLevel: old.ReasoningLevel,
-		Status: SessionStatusActive, AgentType: rootAgentType, Attributes: old.Attributes,
-		CreatedAt: now, UpdatedAt: now,
-	}, nil
 }
 
 func (s *Store) UpdateSessionModel(ctx context.Context, id int64, model, reasoningLevel string) error {

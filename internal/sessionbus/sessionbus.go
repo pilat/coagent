@@ -14,10 +14,10 @@ const subscriberBufferSize = 64
 
 // Bus publishes session notifications to session, manager and global subscribers.
 type Bus struct {
-	mu           sync.RWMutex
-	subs         map[int64][]chan sessionevent.Notification // per-session subscribers
-	globals      []chan controllerapi.SessionNotification   // wildcard subscribers (carry session ID)
-	managerRoots []chan controllerapi.SessionNotification
+	mu      sync.RWMutex
+	subs    map[int64][]chan sessionevent.Notification // per-session subscribers
+	globals []chan controllerapi.SessionNotification   // wildcard subscribers (carry session ID)
+	roots   []chan controllerapi.SessionNotification
 }
 
 func New() *Bus {
@@ -26,12 +26,12 @@ func New() *Bus {
 	}
 }
 
-// SubscribeManagerRoots receives every manager root's events.
-func (ps *Bus) SubscribeManagerRoots() <-chan controllerapi.SessionNotification {
+// SubscribeRoots receives every root's events.
+func (ps *Bus) SubscribeRoots() <-chan controllerapi.SessionNotification {
 	ch := make(chan controllerapi.SessionNotification, subscriberBufferSize)
 
 	ps.mu.Lock()
-	ps.managerRoots = append(ps.managerRoots, ch)
+	ps.roots = append(ps.roots, ch)
 	ps.mu.Unlock()
 
 	return ch
@@ -92,21 +92,21 @@ func (ps *Bus) UnsubscribeAll(ch <-chan controllerapi.SessionNotification) {
 	}
 }
 
-// UnsubscribeManagerRoots removes a manager-root subscriber without closing it.
-func (ps *Bus) UnsubscribeManagerRoots(ch <-chan controllerapi.SessionNotification) {
+// UnsubscribeRoots removes a root subscriber without closing it.
+func (ps *Bus) UnsubscribeRoots(ch <-chan controllerapi.SessionNotification) {
 	ps.mu.Lock()
 	defer ps.mu.Unlock()
 
-	for i, subscriber := range ps.managerRoots {
+	for i, subscriber := range ps.roots {
 		if subscriber == ch {
-			ps.managerRoots = append(ps.managerRoots[:i], ps.managerRoots[i+1:]...)
+			ps.roots = append(ps.roots[:i], ps.roots[i+1:]...)
 			break
 		}
 	}
 }
 
-// Publish fans an event out to observers and, for a manager root, to every manager-root subscriber.
-func (ps *Bus) Publish(sessionID int64, managerRoot bool, n sessionevent.Notification) {
+// Publish fans an event out to observers and, for a root, to every root subscriber.
+func (ps *Bus) Publish(sessionID int64, root bool, n sessionevent.Notification) {
 	log := logger.Named("sessionbus")
 
 	ps.mu.RLock()
@@ -114,8 +114,8 @@ func (ps *Bus) Publish(sessionID int64, managerRoot bool, n sessionevent.Notific
 	globals := append([]chan controllerapi.SessionNotification(nil), ps.globals...)
 	var managerSubscribers []chan controllerapi.SessionNotification
 
-	if managerRoot {
-		managerSubscribers = append(managerSubscribers, ps.managerRoots...)
+	if root {
+		managerSubscribers = append(managerSubscribers, ps.roots...)
 	}
 
 	ps.mu.RUnlock()
@@ -151,7 +151,7 @@ func (ps *Bus) Publish(sessionID int64, managerRoot bool, n sessionevent.Notific
 		case ch <- sn:
 		default:
 			log.Warn(
-				"pubsub_slow_manager_subscriber",
+				"pubsub_slow_root_subscriber",
 				zap.Int64("session_id", sessionID),
 				zap.String("type", string(n.Type)),
 			)
