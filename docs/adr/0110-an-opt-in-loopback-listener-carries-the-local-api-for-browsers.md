@@ -48,9 +48,11 @@ path, query or fragment, and no opaque URL or query delimiter. Explicit ports mu
 
 The browser guard enforces this order:
 
-1. `r.Host` equals the bound listener address or `localhost:<same port>`, case-insensitively. These two
-   allowed hosts come from the bound listener. Anything else, including empty, returns 403 before origin
+1. The request host (`r.Host`) equals the bound listener address or `localhost:<same port>`, case-insensitively.
+   These two allowed hosts come from the bound listener. Anything else, including empty, returns 403 before origin
    or token work. DNS rebinding retains the attacker's hostname in Host, so it cannot pass this rule.
+   For an absolute-form request line, Go takes the request host (`r.Host`) from the request target,
+   and the guard checks that value.
 2. An absent Origin passes. A present Origin must match `api.origins` exactly; `null` is always refused.
    Host and origin refusals use the same plain `forbidden` body without CORS headers or Connect work.
 3. `OPTIONS`, a path starting with `/`, an allowed Origin and a requested-method header form a preflight.
@@ -82,6 +84,9 @@ Explicit listener closes release binds even if serving has not begun.
 
 - On TCP the 256-bit token is the only boundary. Every local OS user and every container in the host
   network namespace can connect; there is no peer-UID check.
+- If another local OS user binds the `api.listen` port before the daemon does, they receive whatever a browser
+  sends there, including its bearer token; the daemon only logs `local_api_start_failed`, so a failed bind in
+  the log means do not use that port.
 - A sandboxed session reaches the loopback listener like any loopback service and gains nothing beyond
   `api.sock`: with a readable token file it could already act through that socket (ADR-0104).
 - A tunnel changing the port is refused by Host. Keep the port (`-L 7878:127.0.0.1:7878`) or set Host at the proxy.

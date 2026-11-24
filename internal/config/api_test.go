@@ -155,7 +155,7 @@ func TestAPIListen_NeedsAClient(t *testing.T) {
 func TestAPIOrigins_Validation(t *testing.T) {
 	accepted := []string{"http://localhost:5173", "http://127.0.0.1:8080", "https://app.example", "http://[::1]:3000"}
 	refused := []string{
-		"*", "null", "http://localhost:5173/", "http://localhost:5173/app", "HTTP://localhost:5173",
+		"null", "http://localhost:5173/", "http://localhost:5173/app", "HTTP://localhost:5173",
 		"http://LOCALHOST:5173", "http://localhost:80", "https://app.example:443", "ftp://host",
 		"http://user@localhost:5173", "http://", "http://localhost:5173?x=1", "http://localhost:5173#f",
 		"http://localhost:0", "http://localhost:65536", "http://localhost:05173", "http://localhost:",
@@ -175,6 +175,15 @@ func TestAPIOrigins_Validation(t *testing.T) {
 			require.EqualError(t, cfg.validateAPI(), fmt.Sprintf(
 				"api origin %q must be scheme://host[:port] with scheme http or https, "+
 					"in lowercase, without a default port, path, query or credentials", origin,
+			))
+		})
+	}
+	for _, origin := range []string{"*", "http://*", "https://*.example.com"} {
+		t.Run(origin, func(t *testing.T) {
+			cfg := apiListenConfig()
+			cfg.API.Origins = []string{origin}
+			require.EqualError(t, cfg.validateAPI(), fmt.Sprintf(
+				"api origin %q must be an exact origin; wildcards are not supported", origin,
 			))
 		})
 	}

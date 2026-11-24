@@ -40,13 +40,16 @@ with the address in `socket`; the daemon and API socket keep serving.
 `origins` requires `listen`. Each distinct entry must be a lowercase `http://host[:port]` or
 `https://host[:port]`, without credentials, a path (even `/`), query or fragment. An explicit port must
 be decimal 1–65535 without leading zeros, and must omit the scheme default (`80` for HTTP, `443` for HTTPS).
-`null` and `*` are refused. Copy the browser's serialized origin exactly; comparison is exact.
+`null` is refused, and `*` is refused anywhere in an origin: origins are exact and wildcards are not supported.
+Copy the browser's serialized origin exactly; comparison is exact.
 
 The browser guard runs before the shared token check and Connect handler:
 
-1. `Host` must equal the bound address or `localhost:<same port>`, case-insensitively. An empty or other
-   host gets HTTP 403 before origin or token work. This stops DNS rebinding: an attacker's hostname is
+1. The request host (`r.Host`) must equal the bound address or `localhost:<same port>`, case-insensitively.
+   An empty or other host gets HTTP 403 before origin or token work. This stops DNS rebinding: an attacker's hostname is
    still in `Host` after rebinding, and the attacker controls neither the literal address nor `localhost`.
+   For an absolute-form request line, Go takes the request host (`r.Host`) from the request target,
+   and the guard checks that value.
 2. A present `Origin` must match an entry exactly. `Origin: null` is always refused. Host and origin
    refusals have the same plain `forbidden` body and no CORS headers.
 3. An `OPTIONS` request whose path starts with `/`, with an allowed origin and
@@ -95,7 +98,11 @@ A tunnel that changes the destination port, such as `ssh -L 9000:127.0.0.1:7878`
 `Host: localhost:9000`. Keep the port (`-L 7878:127.0.0.1:7878`) or set `Host` at the proxy.
 
 On TCP the 256-bit token is the only boundary: every local OS user and every container in the host network
-namespace can connect. There is no peer-UID check, rate limit or token lockout. A sandboxed session reaches
+namespace can connect.
+If another local OS user binds the `api.listen` port before the daemon does, they receive whatever a browser
+sends there, including its bearer token; the daemon only logs `local_api_start_failed`, so a failed bind in
+the log means do not use that port.
+There is no peer-UID check, rate limit or token lockout. A sandboxed session reaches
 the loopback listener like any loopback service and gains nothing beyond what `api.sock` already gives it:
 with a readable token it can already act through the API socket. Remote access belongs to the operator's
 tunnel or proxy. See [ADR-0110](adr/0110-an-opt-in-loopback-listener-carries-the-local-api-for-browsers.md).

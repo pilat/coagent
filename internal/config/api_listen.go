@@ -33,6 +33,10 @@ func (c APIConfig) validateAPIOrigins() error {
 	seen := make(map[string]bool)
 
 	for _, origin := range c.Origins {
+		if strings.Contains(origin, "*") {
+			return fmt.Errorf("api origin %q must be an exact origin; wildcards are not supported", origin)
+		}
+
 		if !validAPIOrigin(origin) {
 			return fmt.Errorf("api origin %q must be scheme://host[:port] with scheme http or https, "+
 				"in lowercase, without a default port, path, query or credentials", origin)

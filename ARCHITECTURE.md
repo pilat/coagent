@@ -947,9 +947,11 @@ socket or token; configuration binds the author, never request fields
 The opt-in loopback listener (`api.listen`) carries the API socket's same handler
 and token check. Configuration requires a canonical loopback IP literal and port;
 binding independently refuses non-loopback addresses. The browser guard first
-limits `Host` to the bound address or `localhost:<port>`, then requires an absent
-or explicitly listed `Origin`. It answers preflights without a token, before
-authenticating every other request. There are no cookies, credentials header or TLS.
+limits the request host (`r.Host`) to the bound address or `localhost:<port>`, then requires an absent
+or explicitly listed `Origin`. For an absolute-form request line, Go takes the request host (`r.Host`)
+from the request target, and the guard checks that value.
+It answers preflights without a token, before authenticating every other request.
+There are no cookies, credentials header or TLS.
 Every local OS user and host-network container can connect: on TCP the token is
 the only boundary. `GetStatus` is not served there. A failed bind is logged and
 leaves the daemon and API socket running
