@@ -154,7 +154,7 @@ func TestHarnessE2E_DaemonAnswersReadinessAndStatus(t *testing.T) {
 		response, err := client.Do(request)
 		require.NoError(t, err)
 		require.NoError(t, response.Body.Close())
-		assert.Equal(t, http.StatusNotFound, response.StatusCode)
+		assert.Equal(t, http.StatusNotImplemented, response.StatusCode)
 	}
 }
 
