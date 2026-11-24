@@ -755,6 +755,7 @@ func runDueStoppedRootSchedule(
 	})
 	executor.Stop()
 	collector.waitMessage(rootID, tc.answer)
+	collector.waitIdleAfter(rootID, tc.answer)
 	return entry
 }
 
