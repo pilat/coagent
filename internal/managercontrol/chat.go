@@ -241,7 +241,7 @@ func (c *controller) chatSession(ctx context.Context, sessionID int64) (*session
 		return nil, fmt.Errorf("#%d is not a live session", sessionID)
 	}
 
-	return c.app.managerRoot(ctx, sessionID)
+	return c.app.requireRoot(ctx, sessionID)
 }
 
 func chatOutput(record *sessionstore.SessionRecord, row sessionstore.ChatOutput) controllerapi.ChatOutput {

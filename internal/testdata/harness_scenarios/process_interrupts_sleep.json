@@ -6,7 +6,6 @@
       "name": "<name>",
       "work_dir": "<workdir>",
       "attributes": {
-        "manager_id": "telegram:main",
         "title": "start process sleep"
       }
     },
@@ -33,7 +32,6 @@
       "name": "<name>",
       "work_dir": "<workdir>",
       "attributes": {
-        "manager_id": "telegram:main",
         "title": "start process sleep"
       }
     },
@@ -72,8 +70,5 @@
       "content": "process interrupted sleep",
       "source_key": "message:7:final"
     }
-  ],
-  "owners": {
-    "1": "telegram:main"
-  }
+  ]
 }

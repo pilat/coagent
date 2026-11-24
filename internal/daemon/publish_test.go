@@ -25,21 +25,12 @@ func TestPublishGate_RootPasses(t *testing.T) {
 func TestPublishGate_RoutesRootToEveryManager(t *testing.T) {
 	h := newHarness(t, harnessOptions{configure: withTestModels, clientFor: (&mockFactory{}).client})
 	mgr := h.mgr
-	alpha := mgr.bus.SubscribeManagerRoots()
-	beta := mgr.bus.SubscribeManagerRoots()
-	rec := h.createRoot(managerAttrs("alpha"))
+	alpha := mgr.bus.SubscribeRoots()
+	beta := mgr.bus.SubscribeRoots()
+	rec := h.createRoot(nil)
 	mgr.NotifySession(rec, sessionevent.Notification{Type: sessionevent.NotifyMessage, Message: "private"})
 	assert.Equal(t, rec, requireNotification(t, alpha).SessionID)
 	assert.Equal(t, rec, requireNotification(t, beta).SessionID)
-}
-
-func TestPublishGate_OwnerlessRootReachesNoManager(t *testing.T) {
-	h := newHarness(t, harnessOptions{configure: withTestModels, clientFor: (&mockFactory{}).client})
-	mgr := h.mgr
-	alpha := mgr.bus.SubscribeManagerRoots()
-	rec := h.createRoot(nil)
-	mgr.NotifySession(rec, sessionevent.Notification{Type: sessionevent.NotifyMessage, Message: "unowned"})
-	requireNoManagerNotification(t, alpha)
 }
 
 func TestPublishGate_DropsMalformedEventBeforeSessionLookup(t *testing.T) {

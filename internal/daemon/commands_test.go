@@ -15,6 +15,7 @@ import (
 	"github.com/pilat/coagent/internal/session"
 	"github.com/pilat/coagent/internal/sessionevent"
 	"github.com/pilat/coagent/internal/sessionstore"
+	"github.com/pilat/coagent/internal/sessionstore/sessionstoretest"
 )
 
 func TestControllerRejectsEverySessionOperationOnANonRoot(t *testing.T) {
@@ -23,15 +24,14 @@ func TestControllerRejectsEverySessionOperationOnANonRoot(t *testing.T) {
 	mgr, store := h.mgr, h.store
 	ctx := context.Background()
 	projectID := testProject(t, store, "/tmp/controller-owner-operations")
-	alphaRecord, err := mgr.store.CreateSession(ctx, projectID, "model", "", managerAttrs("alpha"))
-	require.NoError(t, err)
-	betaID, err := store.CreateSubagentSession(ctx, projectID, alphaRecord.ID, alphaRecord.ID, "general", "model", "")
+	alphaRecord := sessionstoretest.BareRoot(t, h.db, projectID, "model", "", nil)
+	betaID, err := store.CreateSubagentSession(ctx, projectID, alphaRecord, alphaRecord, "general", "model", "")
 	require.NoError(t, err)
 	controller := newTestController(mgr).ForManager("alpha")
 	sessions, err := controller.ListSessions(ctx)
 	require.NoError(t, err)
 	require.Len(t, sessions, 1)
-	assert.Equal(t, alphaRecord.ID, sessions[0].ID)
+	assert.Equal(t, alphaRecord, sessions[0].ID)
 	operations := []struct {
 		name string
 		call func() error
@@ -60,29 +60,6 @@ func TestControllerRejectsEverySessionOperationOnANonRoot(t *testing.T) {
 	assert.Nil(t, stored.KilledAt)
 	assert.Equal(t, "model", stored.Model)
 	assert.NotContains(t, stored.Attributes, "topic")
-}
-
-func TestCreateSession_PersistsOnlyTheBoundManagerOwner(t *testing.T) {
-	ctx := context.Background()
-	h := newHarness(t, harnessOptions{configure: withTestModels, clientFor: (&mockFactory{}).client})
-	mgr := h.mgr
-	ctrl := newTestController(mgr).ForManager("alpha")
-	workDir := t.TempDir()
-	ownedID, err := ctrl.CreateSession(ctx, controllerapi.SessionCreateData{
-		WorkDir:    workDir,
-		Attributes: map[string]any{controllerapi.SessionAttributeManagerID: "spoofed", "channel": "test"},
-	})
-	require.NoError(t, err)
-	owned := h.session(ownedID)
-	assert.Equal(t, "alpha", owned.Attributes[controllerapi.SessionAttributeManagerID])
-	assert.Equal(t, "test", owned.Attributes["channel"])
-	secondID, err := ctrl.CreateSession(ctx, controllerapi.SessionCreateData{
-		WorkDir:    workDir,
-		Attributes: managerAttrs("spoofed"),
-	})
-	require.NoError(t, err)
-	second := h.session(secondID)
-	assert.Equal(t, "alpha", second.Attributes[controllerapi.SessionAttributeManagerID])
 }
 
 func TestManager_Send(t *testing.T) {
@@ -333,23 +310,22 @@ func TestSendSessionMessageWithARepeatedKeyAppendsOneInput(t *testing.T) {
 	h := newHarness(t, harnessOptions{configure: withTestModels, clientFor: (&mockFactory{}).client})
 	projectID, err := h.store.GetOrCreateProject(ctx, t.TempDir())
 	require.NoError(t, err)
-	root, err := h.store.CreateSession(ctx, projectID, "fake-model", "", managerAttrs("alpha"))
-	require.NoError(t, err)
+	root := sessionstoretest.BareRoot(t, h.db, projectID, "fake-model", "", nil)
 	controller := newTestController(h.mgr).ForManager("alpha")
 	for _, key := range []string{"k1", "k1", "k2"} {
 		require.NoError(t, controller.SendSessionMessage(ctx, controllerapi.SessionMessageData{
-			SessionID: root.ID, Message: "hello", IdempotencyKey: key,
+			SessionID: root, Message: "hello", IdempotencyKey: key,
 		}))
 	}
 	for _, key := range []string{"user:k1", "user:k2"} {
 		var count int
 		require.NoError(t, h.db.QueryRowContext(ctx,
-			"SELECT count(*) FROM session_inbox WHERE session_id = ? AND delivery_key = ?", root.ID, key).Scan(&count))
+			"SELECT count(*) FROM session_inbox WHERE session_id = ? AND delivery_key = ?", root, key).Scan(&count))
 		assert.Equal(t, 1, count)
 	}
 	var count int
 	require.NoError(t, h.db.QueryRowContext(ctx,
-		"SELECT count(*) FROM session_inbox WHERE session_id = ?", root.ID).Scan(&count))
+		"SELECT count(*) FROM session_inbox WHERE session_id = ?", root).Scan(&count))
 	assert.Equal(t, 2, count)
 }
 
@@ -358,17 +334,16 @@ func TestRepeatedKeyedStatusAnswersOnce(t *testing.T) {
 	h := newHarness(t, harnessOptions{configure: withTestModels, clientFor: (&mockFactory{}).client})
 	projectID, err := h.store.GetOrCreateProject(ctx, t.TempDir())
 	require.NoError(t, err)
-	root, err := h.store.CreateSession(ctx, projectID, "fake-model", "", managerAttrs("alpha"))
-	require.NoError(t, err)
+	root := sessionstoretest.BareRoot(t, h.db, projectID, "fake-model", "", nil)
 	controller := newTestController(h.mgr).ForManager("alpha")
 	for _, key := range []string{"s1", "s1", "s2"} {
 		require.NoError(t, controller.SendSessionMessage(ctx, controllerapi.SessionMessageData{
-			SessionID: root.ID, Message: "/status", IdempotencyKey: key,
+			SessionID: root, Message: "/status", IdempotencyKey: key,
 		}))
 	}
 	var count int
 	require.NoError(t, h.db.QueryRowContext(ctx,
-		"SELECT count(*) FROM session_outbox WHERE session_id = ? AND type = 'message'", root.ID).Scan(&count))
+		"SELECT count(*) FROM session_outbox WHERE session_id = ? AND type = 'message'", root).Scan(&count))
 	assert.Equal(t, 2, count)
 }
 
@@ -378,13 +353,12 @@ func TestSendSessionMessageFollowsOwnedReplacement(t *testing.T) {
 	mgr, store := h.mgr, h.store
 	projectID, err := store.GetOrCreateProject(ctx, t.TempDir())
 	require.NoError(t, err)
-	old, err := mgr.store.CreateSession(ctx, projectID, "fake-model", "", managerAttrs("cli"))
-	require.NoError(t, err)
-	newID, err := mgr.clear(ctx, lifecycleInput(ctx, t, mgr, old.ID, "/clear"))
+	old := sessionstoretest.BareRoot(t, h.db, projectID, "fake-model", "", nil)
+	newID, err := mgr.clear(ctx, lifecycleInput(ctx, t, mgr, old, "/clear"))
 	require.NoError(t, err)
 	controller := newTestController(mgr).ForManager("cli")
 	err = controller.SendSessionMessage(ctx, controllerapi.SessionMessageData{
-		SessionID: old.ID, Message: "racing clear",
+		SessionID: old, Message: "racing clear",
 	})
 	require.NoError(t, err)
 	input, err := store.PeekPending(ctx, newID)

@@ -11,6 +11,7 @@ import (
 	"github.com/pilat/coagent/internal/config"
 	"github.com/pilat/coagent/internal/orchestrator"
 	"github.com/pilat/coagent/internal/projectpath"
+	"github.com/pilat/coagent/internal/sessionstore/sessionstoretest"
 )
 
 func TestOrchestratorSpawnEffort(t *testing.T) {
@@ -23,11 +24,10 @@ func TestOrchestratorSpawnEffort(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			provider := newSpawnEffortProvider(t)
 			h := orchestratorEffortHarness(t, provider.url)
-			caller, err := h.store.CreateSession(h.ctx, h.projectID, "caller-model", "", managerAttrs("owner"))
+			caller := sessionstoretest.BareRoot(h.t, h.db, h.projectID, "caller-model", "", nil)
+			_, err := h.store.SetOrchestrator(h.ctx, caller, true)
 			require.NoError(t, err)
-			_, err = h.store.SetOrchestrator(h.ctx, caller.ID, true)
-			require.NoError(t, err)
-			id, _, err := (orchestratorHost{h.mgr}).SpawnSession(h.ctx, caller.ID, orchestrator.SpawnRequest{
+			id, _, err := (orchestratorHost{h.mgr}).SpawnSession(h.ctx, caller, orchestrator.SpawnRequest{
 				Project: h.workDir(),
 				Prompt:  "do work",
 				Model:   tc.model,
@@ -40,7 +40,7 @@ func TestOrchestratorSpawnEffort(t *testing.T) {
 			h.startInboxWake()
 			h.waitAnswer(id, "done")
 			assert.Equal(t, tc.effort, provider.effortFor(tc.wantModel))
-			assertSpawnedRoot(t, h, caller.ID, id, h.projectID, "do work")
+			assertSpawnedRoot(t, h, caller, id, h.projectID, "do work")
 		})
 	}
 }

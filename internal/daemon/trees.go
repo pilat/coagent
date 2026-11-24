@@ -203,7 +203,7 @@ func (s *Service) killLocked(ctx context.Context, sessionID int64) error {
 
 func (s *Service) stopLocked(ctx context.Context, record *sessionstore.SessionRecord, inputID int64) error {
 	sessionID := record.ID
-	explicit := inputID > 0 && controllerapi.ManagerRoot(record.Attributes)
+	explicit := inputID > 0 && record.ParentID == 0
 
 	if !explicit {
 		s.publish(sessionID, sessionevent.Notification{
@@ -363,22 +363,14 @@ func (s *Service) clearLocked(ctx context.Context, sessionID, inputID int64) (in
 	projectName, _ := s.store.GetProjectName(ctx, rec.ProjectID)
 	var newRec *sessionstore.SessionRecord
 
-	//nolint:nestif // Manager root replacement preserves the chat surface.
-	if controllerapi.ManagerRoot(rec.Attributes) {
-		if inputID > 0 {
-			newRec, _, err = s.store.ReplaceManagerRootForInput(ctx, sessionID, inputID, projectName, workDir)
-		} else {
-			newRec, _, err = s.store.ReplaceManagerRoot(ctx, sessionID, projectName, workDir)
-		}
-
-		if err != nil {
-			return 0, fmt.Errorf("replace manager session: %w", err)
-		}
+	if inputID > 0 {
+		newRec, _, err = s.store.ReplaceManagerRootForInput(ctx, sessionID, inputID, projectName, workDir)
 	} else {
-		newRec, err = s.store.CreateReplacementSession(ctx, sessionID)
-		if err != nil {
-			return 0, fmt.Errorf("create replacement session: %w", err)
-		}
+		newRec, _, err = s.store.ReplaceManagerRoot(ctx, sessionID, projectName, workDir)
+	}
+
+	if err != nil {
+		return 0, fmt.Errorf("replace manager session: %w", err)
 	}
 
 	name := fmt.Sprintf("%s - %d", projectName, newRec.ID)

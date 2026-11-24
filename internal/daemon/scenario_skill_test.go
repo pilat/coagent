@@ -85,7 +85,7 @@ func TestHarnessScenario_SkillActivationReceiptOrdersTheOutputChain(t *testing.T
 
 	collector := collectEvents(t, h.mgr.bus.SubscribeAll())
 	defer collector.stop()
-	root := h.send("start the skill scenario", managerAttrs(scenarioManagerID))
+	root := h.send("start the skill scenario", nil)
 	collector.waitMessage(root, "probe answer")
 	// Settle before the next input: sending into a live loop keeps the same
 	// runner and races the session re-creation the golden trace records.

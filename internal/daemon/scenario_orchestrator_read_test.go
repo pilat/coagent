@@ -30,7 +30,7 @@ func TestOrchestratorReadSessionRefusals(t *testing.T) {
 	h := newHarness(t, harnessOptions{respond: trivialRespond})
 	h.startInboxWake()
 	caller := modeRoot(t, h)
-	foreign := h.createRoot(managerAttrs("other"))
+	foreign := h.createRoot(nil)
 	child := h.createChild(caller, subagent.Link{TaskCallID: "owned-read-child"})
 	foreignChild := h.createChild(foreign, subagent.Link{TaskCallID: "foreign-read-child"})
 	for _, tc := range []struct {
@@ -63,7 +63,7 @@ func TestOrchestratorReadSessionFollowsTargetTurns(t *testing.T) {
 	h := newHarness(t, harnessOptions{respond: turns.respond})
 	h.startInboxWake()
 	caller := modeRoot(t, h)
-	target := h.createRoot(managerAttrs("owner"))
+	target := h.createRoot(nil)
 	h.reply(target, "FIRST_TURN", "first answer")
 	seedReadFocus(t, h, target)
 	page := readWithoutTargetChanges(t, h, caller, target)

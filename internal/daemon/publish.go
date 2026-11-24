@@ -6,15 +6,13 @@ import (
 
 	"go.uber.org/zap"
 
-	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/logger"
 	"github.com/pilat/coagent/internal/sessionevent"
 )
 
 type routes struct {
-	mu          sync.Mutex
-	child       map[int64]bool
-	managerRoot map[int64]bool
+	mu    sync.Mutex
+	child map[int64]bool
 }
 
 type sessionEvents struct {
@@ -42,7 +40,7 @@ func (s *Service) publish(sessionID int64, n sessionevent.Notification) {
 		return
 	}
 
-	isChild, managerRoot, known := s.routes.lookup(sessionID)
+	isChild, known := s.routes.lookup(sessionID)
 	if !known {
 		// Background: NotifySession carries no ctx, and inheriting a caller's dead
 		// one would fail the check and mis-drop.
@@ -59,40 +57,30 @@ func (s *Service) publish(sessionID int64, n sessionevent.Notification) {
 		}
 
 		isChild = rec.ParentID != 0
-		managerRoot = controllerapi.ManagerRoot(rec.Attributes)
-		managerRoot = s.routes.cache(sessionID, isChild, managerRoot)
+		s.routes.cache(sessionID, isChild)
 	}
 
 	if isChild {
 		return
 	}
 
-	s.bus.Publish(sessionID, managerRoot, n)
+	s.bus.Publish(sessionID, true, n)
 }
 
-// lookupPublishRoute reports the immutable root/marker route for a session.
-func (r *routes) lookup(sessionID int64) (bool, bool, bool) {
+func (r *routes) lookup(sessionID int64) (bool, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	isChild, known := r.child[sessionID]
-	managerRoot := r.managerRoot[sessionID]
 
-	return isChild, managerRoot, known
+	return isChild, known
 }
 
-func (r *routes) cache(sessionID int64, isChild, managerRoot bool) bool {
+func (r *routes) cache(sessionID int64, isChild bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	if cached, known := r.managerRoot[sessionID]; known {
-		managerRoot = cached
-	}
-
 	r.child[sessionID] = isChild
-	r.managerRoot[sessionID] = managerRoot
-
-	return managerRoot
 }
 
 func (e *sessionEvents) Emit(n sessionevent.Notification) {

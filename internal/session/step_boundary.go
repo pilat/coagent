@@ -554,13 +554,12 @@ func (s *Session) acceptBoundaryText(
 		ModelBound: true,
 	}
 
-	owner, _ := input.Attributes["manager_id"].(string)
-	if prepared.SkillName != "" && input.Source == sessionstore.InputSourceUser && owner != "" {
+	if prepared.SkillName != "" && input.Source == sessionstore.InputSourceUser && s.outputEnabled {
 		accept.Receipt = loader.SkillReceipt(prepared.SkillName)
 	}
 
 	if toolID := s.activationIndex[command]; toolID != "" && input.Source == sessionstore.InputSourceUser &&
-		owner != "" {
+		s.outputEnabled {
 		accept.Content += activationInstruction(toolID, command)
 		batch.grant = &tool.ActivationGrant{
 			SessionID: s.id,

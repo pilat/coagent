@@ -8,19 +8,19 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/pilat/coagent/internal/sessionstore/sessionstoretest"
 	"github.com/pilat/coagent/internal/transcript"
 )
 
 func TestOutputStore_AppendsAndReplaysWithoutMutatingHistory(t *testing.T) {
 	store, db, project := newTestStore(t)
-	root, err := store.CreateSession(t.Context(), project, "model", "", map[string]any{"manager_id": "owner"})
-	require.NoError(t, err)
-	draft := OutputDraft{SessionID: root.ID, Type: OutputMessage, Content: "first", SourceKey: "first"}
+	root := sessionstoretest.BareRoot(t, store.db, project, "model", "", nil)
+	draft := OutputDraft{SessionID: root, Type: OutputMessage, Content: "first", SourceKey: "first"}
 	first, err := store.EnqueueOutput(t.Context(), draft)
 	require.NoError(t, err)
 	second, err := store.EnqueueOutput(
 		t.Context(),
-		OutputDraft{SessionID: root.ID, Type: OutputMessage, Content: "second"},
+		OutputDraft{SessionID: root, Type: OutputMessage, Content: "second"},
 	)
 	require.NoError(t, err)
 	store = testStore(db)
@@ -31,7 +31,7 @@ func TestOutputStore_AppendsAndReplaysWithoutMutatingHistory(t *testing.T) {
 	assert.Equal(t, first.OutputID, replay.OutputID)
 	assert.Equal(t, "first", replay.Content)
 	assert.Less(t, first.OutputID, second.OutputID)
-	rows, err := store.ChatOutputs(t.Context(), root.ID, 0, 100)
+	rows, err := store.ChatOutputs(t.Context(), root, 0, 100)
 	require.NoError(t, err)
 	require.Len(t, rows, 2)
 	assert.Equal(t, "first", rows[0].Content)
@@ -39,22 +39,20 @@ func TestOutputStore_AppendsAndReplaysWithoutMutatingHistory(t *testing.T) {
 	assert.Equal(t, first.OutputID, rows[0].ID)
 }
 
-func TestOutputStore_SkipsOwnerlessSessionsAndSubagents(t *testing.T) {
+func TestOutputStore_SkipsSubagents(t *testing.T) {
 	ctx := context.Background()
 	store, _, projectID := newTestStore(t)
-	owned, err := store.CreateSession(ctx, projectID, "model", "", map[string]any{"manager_id": "alpha"})
-	require.NoError(t, err)
-	ownerless, err := store.CreateSession(ctx, projectID, "model", "", nil)
-	require.NoError(t, err)
-	child, err := createChild(ctx, store, projectID, owned.ID, owned.ID, "general", "model", "")
+	owned := sessionstoretest.BareRoot(t, store.db, projectID, "model", "", nil)
+	ownerless := sessionstoretest.BareRoot(t, store.db, projectID, "model", "", nil)
+	child, err := createChild(ctx, store, projectID, owned, owned, "general", "model", "")
 	require.NoError(t, err)
 
 	skipped, err := store.EnqueueOutput(
 		ctx,
-		OutputDraft{SessionID: ownerless.ID, Type: OutputMessage, Content: "x"},
+		OutputDraft{SessionID: ownerless, Type: OutputMessage, Content: "x"},
 	)
 	require.NoError(t, err)
-	assert.Nil(t, skipped)
+	require.NotNil(t, skipped)
 	skipped, err = store.EnqueueOutput(ctx, OutputDraft{SessionID: child, Type: OutputMessage, Content: "x"})
 	require.NoError(t, err)
 	assert.Nil(t, skipped)
@@ -63,16 +61,15 @@ func TestOutputStore_SkipsOwnerlessSessionsAndSubagents(t *testing.T) {
 func TestOutputStore_MarkSessionKilledWithOutputCommitsBoth(t *testing.T) {
 	ctx := context.Background()
 	store, db, projectID := newTestStore(t)
-	record, err := store.CreateSession(ctx, projectID, "model", "", map[string]any{"manager_id": "alpha"})
+	record := sessionstoretest.BareRoot(t, store.db, projectID, "model", "", nil)
+	childID, err := createChild(ctx, store, projectID, record, record, "general", "model", "")
 	require.NoError(t, err)
-	childID, err := createChild(ctx, store, projectID, record.ID, record.ID, "general", "model", "")
-	require.NoError(t, err)
-	rootInput, err := enqueueFact(ctx, store, record.ID, InputSourceProcess, "root process", nil)
+	rootInput, err := enqueueFact(ctx, store, record, InputSourceProcess, "root process", nil)
 	require.NoError(t, err)
 	childInput, err := enqueueFact(ctx, store, childID, InputSourceSubagent, "child completion", nil)
 	require.NoError(t, err)
 
-	output, err := store.MarkSessionKilledWithOutput(ctx, record.ID, 3)
+	output, err := store.MarkSessionKilledWithOutput(ctx, record, 3)
 	require.NoError(t, err)
 	require.NotNil(t, output)
 
@@ -80,7 +77,7 @@ func TestOutputStore_MarkSessionKilledWithOutputCommitsBoth(t *testing.T) {
 	var cancelledProcesses int
 	var killedAt time.Time
 	require.NoError(t, db.QueryRowContext(ctx,
-		`SELECT status, killed_at FROM sessions WHERE id = ?`, record.ID).Scan(&status, &killedAt))
+		`SELECT status, killed_at FROM sessions WHERE id = ?`, record).Scan(&status, &killedAt))
 	require.NoError(t, db.QueryRowContext(ctx, `
 		SELECT type, content, json_extract(attributes, '$.cancelled_processes')
 		FROM session_outbox WHERE id = ?`, output.OutputID,
@@ -98,27 +95,25 @@ func TestOutputStore_CreatesManagerRootWithLifecycleAndInitialInputAtomically(t 
 	ctx := context.Background()
 	store, db, projectID := newTestStore(t)
 	record, output, err := store.CreateManagerRoot(ctx, ManagerRootCreate{
-		ProjectID: projectID, Model: "model", Attributes: map[string]any{"manager_id": "telegram"},
+		ProjectID: projectID, Model: "model", Attributes: nil,
 		Input: Input{Source: InputSourceUser, Content: "start"}, Name: "project", WorkDir: "/work/project",
 	})
 	require.NoError(t, err)
 	require.NotZero(t, record.ID)
 	require.NotZero(t, output.OutputID)
 
-	var outputType, inputContent, inputOwner string
+	var outputType, inputContent string
 	var episodeStartedAt time.Time
 	require.NoError(
 		t,
 		db.QueryRowContext(ctx, `SELECT type FROM session_outbox WHERE id = ?`, output.OutputID).Scan(&outputType),
 	)
 	require.NoError(t, db.QueryRowContext(ctx, `
-		SELECT raw_content, json_extract(attributes, '$.manager_id')
-		FROM session_inbox WHERE session_id = ?`, record.ID).Scan(&inputContent, &inputOwner))
+		SELECT raw_content FROM session_inbox WHERE session_id = ?`, record.ID).Scan(&inputContent))
 	require.NoError(t, db.QueryRowContext(ctx,
 		`SELECT episode_started_at FROM sessions WHERE id = ?`, record.ID).Scan(&episodeStartedAt))
 	assert.Equal(t, string(OutputSessionOpened), outputType)
 	assert.Equal(t, "start", inputContent)
-	assert.Equal(t, "telegram", inputOwner)
 	assert.False(t, episodeStartedAt.IsZero())
 }
 
@@ -126,12 +121,12 @@ func TestOutputStore_CreatesManagerRootWithAgentInputAndCreatorWatch(t *testing.
 	ctx := t.Context()
 	store, db, projectID := newTestStore(t)
 	watcher, _, err := store.CreateManagerRoot(ctx, ManagerRootCreate{
-		ProjectID: projectID, Model: "model", Attributes: map[string]any{"manager_id": "owner"},
+		ProjectID: projectID, Model: "model", Attributes: nil,
 		Name: "project", WorkDir: "/work/project",
 	})
 	require.NoError(t, err)
 	record, output, err := store.CreateManagerRoot(ctx, ManagerRootCreate{
-		ProjectID: projectID, Model: "model", Attributes: map[string]any{"manager_id": "owner"},
+		ProjectID: projectID, Model: "model", Attributes: nil,
 		Name: "project", WorkDir: "/work/project", Watcher: watcher.ID,
 		Input: Input{
 			Source: InputSourceAgent, Content: "spawned work",
@@ -172,7 +167,7 @@ func TestOutputStore_ReplacesManagerRootWithOneLifecycleOutput(t *testing.T) {
 	ctx := context.Background()
 	store, db, projectID := newTestStore(t)
 	old, _, err := store.CreateManagerRoot(ctx, ManagerRootCreate{
-		ProjectID: projectID, Model: "model", Attributes: map[string]any{"manager_id": "telegram"},
+		ProjectID: projectID, Model: "model", Attributes: nil,
 		Name: "project", WorkDir: "/work/project",
 	})
 	require.NoError(t, err)
@@ -196,7 +191,7 @@ func TestOutputStore_ClearInputReplacesRootAndAcknowledgesAtomically(t *testing.
 	ctx := context.Background()
 	store, db, projectID := newTestStore(t)
 	old, _, err := store.CreateManagerRoot(ctx, ManagerRootCreate{
-		ProjectID: projectID, Model: "model", Attributes: map[string]any{"manager_id": "telegram"},
+		ProjectID: projectID, Model: "model", Attributes: nil,
 		Name: "project", WorkDir: "/work/project",
 	})
 	require.NoError(t, err)
@@ -232,15 +227,14 @@ func TestOutputStore_ClearInputReplacesRootAndAcknowledgesAtomically(t *testing.
 func TestOutputStore_LifecycleInputSetsFenceAndAcknowledgementTogether(t *testing.T) {
 	ctx := context.Background()
 	store, db, projectID := newTestStore(t)
-	record, err := store.CreateSession(ctx, projectID, "model", "", map[string]any{"manager_id": "telegram"})
-	require.NoError(t, err)
-	input, err := enqueueInput(ctx, store, record.ID, InputSourceUser, "/stop")
+	record := sessionstoretest.BareRoot(t, store.db, projectID, "model", "", nil)
+	input, err := enqueueInput(ctx, store, record, InputSourceUser, "/stop")
 	require.NoError(t, err)
 	commit, err := store.BeginLifecycleInput(ctx, input.ID, "stop", "⏹ Stopping...")
 	require.NoError(t, err)
 
 	var status, inputState, content string
-	require.NoError(t, db.QueryRowContext(ctx, `SELECT status FROM sessions WHERE id = ?`, record.ID).Scan(&status))
+	require.NoError(t, db.QueryRowContext(ctx, `SELECT status FROM sessions WHERE id = ?`, record).Scan(&status))
 	require.NoError(
 		t,
 		db.QueryRowContext(ctx, `SELECT state FROM session_inbox WHERE id = ?`, input.ID).Scan(&inputState),
@@ -259,16 +253,15 @@ func TestOutputStore_LifecycleInputSetsFenceAndAcknowledgementTogether(t *testin
 func TestOutputStore_KillInputFencesTerminating(t *testing.T) {
 	ctx := context.Background()
 	store, db, projectID := newTestStore(t)
-	record, err := store.CreateSession(ctx, projectID, "model", "", map[string]any{"manager_id": "telegram"})
-	require.NoError(t, err)
-	input, err := enqueueInput(ctx, store, record.ID, InputSourceUser, "/kill")
+	record := sessionstoretest.BareRoot(t, store.db, projectID, "model", "", nil)
+	input, err := enqueueInput(ctx, store, record, InputSourceUser, "/kill")
 	require.NoError(t, err)
 
 	_, err = store.BeginLifecycleInput(ctx, input.ID, "kill", "Stopping session...")
 	require.NoError(t, err)
 
 	var status string
-	require.NoError(t, db.QueryRowContext(ctx, `SELECT status FROM sessions WHERE id = ?`, record.ID).Scan(&status))
+	require.NoError(t, db.QueryRowContext(ctx, `SELECT status FROM sessions WHERE id = ?`, record).Scan(&status))
 	assert.Equal(t, string(SessionStatusTerminating), status)
 }
 
@@ -279,14 +272,14 @@ func TestOutputStore_BootReconciliationEmitsCloseWithoutReplacement(t *testing.T
 	store, db, projectID := newTestStore(t)
 
 	killed, _, err := store.CreateManagerRoot(ctx, ManagerRootCreate{
-		ProjectID: projectID, Model: "model", Attributes: map[string]any{"manager_id": "telegram"},
+		ProjectID: projectID, Model: "model", Attributes: nil,
 		Name: "project", WorkDir: "/work/project",
 	})
 	require.NoError(t, err)
 	require.NoError(t, store.UpdateSessionStatus(ctx, killed.ID, SessionStatusTerminating))
 
 	cleared, _, err := store.CreateManagerRoot(ctx, ManagerRootCreate{
-		ProjectID: projectID, Model: "model", Attributes: map[string]any{"manager_id": "telegram"},
+		ProjectID: projectID, Model: "model", Attributes: nil,
 		Name: "project", WorkDir: "/work/project",
 	})
 	require.NoError(t, err)
@@ -328,10 +321,9 @@ func TestOutputStore_BootReconciliationEmitsCloseWithoutReplacement(t *testing.T
 func TestOutputStore_RejectsAssistantOutputAfterLifecycleFence(t *testing.T) {
 	ctx := context.Background()
 	store, _, projectID := newTestStore(t)
-	record, err := store.CreateSession(ctx, projectID, "model", "", map[string]any{"manager_id": "telegram"})
-	require.NoError(t, err)
-	require.NoError(t, store.UpdateSessionStatus(ctx, record.ID, SessionStatusStopping))
-	_, _, err = appendPublished(ctx, store, record.ID, &transcript.Message{
+	record := sessionstoretest.BareRoot(t, store.db, projectID, "model", "", nil)
+	require.NoError(t, store.UpdateSessionStatus(ctx, record, SessionStatusStopping))
+	_, _, err := appendPublished(ctx, store, record, &transcript.Message{
 		Role: "assistant", Content: "late answer",
 	}, OutputMessage, "✅ late answer", true)
 	require.ErrorIs(t, err, ErrSessionStopping)
@@ -341,7 +333,7 @@ func TestOutputStore_ResolvesManagerOwnedReplacementChain(t *testing.T) {
 	ctx := context.Background()
 	store, _, projectID := newTestStore(t)
 	old, _, err := store.CreateManagerRoot(ctx, ManagerRootCreate{
-		ProjectID: projectID, Model: "model", Attributes: map[string]any{"manager_id": "telegram-test"},
+		ProjectID: projectID, Model: "model", Attributes: nil,
 		Name: "project", WorkDir: "/work/project",
 	})
 	require.NoError(t, err)

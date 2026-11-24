@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/pilat/coagent/internal/schedule"
+	"github.com/pilat/coagent/internal/sessionstore/sessionstoretest"
 )
 
 func TestRender_PreservesLiteralCronValues(t *testing.T) {
@@ -30,15 +31,14 @@ func TestRender_PreservesLiteralCronValues(t *testing.T) {
 			t.Parallel()
 
 			ctx := context.Background()
-			store, projects, sessions := newTestDB(t)
+			store, projects, sessions, db := newTestDB(t)
 			projectID := testProject(t, projects, "/tmp/project")
-			session, err := sessions.CreateSession(ctx, projectID, "", "", nil)
-			require.NoError(t, err)
+			session := sessionstoretest.BareRoot(t, db, projectID, "", "", nil)
 			svc := schedule.NewService(store, sessions)
-			created, err := svc.AddRecurring(ctx, session.ID, tt.value, "check", false)
+			created, err := svc.AddRecurring(ctx, session, tt.value, "check", false)
 			require.NoError(t, err)
 
-			rendered, err := svc.Render(ctx, session.ID)
+			rendered, err := svc.Render(ctx, session)
 			require.NoError(t, err)
 			want := "## Schedules (1)\n" +
 				fmt.Sprintf("- #%d · cron %s (UTC) · check\n", created.ID, tt.quoted) +

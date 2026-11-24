@@ -33,9 +33,9 @@ func (s *Store) EnqueueOutput(ctx context.Context, draft OutputDraft) (*OutputCo
 }
 
 func insertOutputTx(ctx context.Context, tx *sql.Tx, draft OutputDraft, mode CommitMode) (*OutputCommit, error) {
-	owner, err := outputOwner(ctx, tx, draft.SessionID)
-	if errors.Is(err, ErrOutputOwner) || errors.Is(err, ErrOutputNotRoot) {
-		//nolint:nilnil // Ownerless sessions and subagents have no manager delivery obligations.
+	err := requireOutputRoot(ctx, tx, draft.SessionID)
+	if errors.Is(err, ErrOutputNotRoot) {
+		//nolint:nilnil // Subagents have no manager delivery obligations.
 		return nil, nil
 	}
 
@@ -54,7 +54,6 @@ func insertOutputTx(ctx context.Context, tx *sql.Tx, draft OutputDraft, mode Com
 	}
 
 	attributes := cloneAttributes(draft.Attributes)
-	attributes[managerIDAttribute] = owner
 
 	encoded, err := json.Marshal(attributes)
 	if err != nil {

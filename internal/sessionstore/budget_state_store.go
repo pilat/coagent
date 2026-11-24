@@ -184,7 +184,7 @@ func nextBudgetGenerationTx(ctx context.Context, tx *sql.Tx, rootID int64) (int6
 }
 
 func budgetRootFacts(ctx context.Context, tx *sql.Tx, rootID int64) (float64, error) {
-	_, err := outputOwner(ctx, tx, rootID)
+	err := requireOutputRoot(ctx, tx, rootID)
 	if err != nil {
 		return 0, err
 	}

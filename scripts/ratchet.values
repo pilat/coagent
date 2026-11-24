@@ -56,9 +56,9 @@ lines internal/coagenthome 143
 lines internal/config 1467
 lines internal/configapply 290
 lines internal/configops 518
-lines internal/controllerapi 333
+lines internal/controllerapi 324
 lines internal/ctl 1038
-lines internal/daemon 5617
+lines internal/daemon 5562
 lines internal/git 868
 lines internal/humanize 24
 lines internal/id 17
@@ -70,7 +70,7 @@ lines internal/loader 1605
 lines internal/localapi 1229
 lines internal/logger 369
 lines internal/lsp 3093
-lines internal/managercontrol 676
+lines internal/managercontrol 678
 lines internal/managerdelivery 451
 lines internal/managerdiscovery 237
 lines internal/managers 205
@@ -88,12 +88,13 @@ lines internal/registry 468
 lines internal/safefile 926
 lines internal/sandboxpolicy 785
 lines internal/schedule 1364
-lines internal/session 5213
+lines internal/session 5212
 lines internal/sessionbuild 789
 lines internal/sessionbus 160
 lines internal/sessionevent 263
 lines internal/sessionprompt 1082
-lines internal/sessionstore 6581
+lines internal/sessionstore 6424
+lines internal/sessionstore/sessionstoretest 42
 lines internal/shellenv 975
 lines internal/subagent 1608
 lines internal/todo 226
@@ -102,4 +103,4 @@ lines internal/tool/builtin 7429
 lines internal/transcript 30
 lines internal/version 8
 lines internal/worktree 206
-nolint total 124
+nolint total 122

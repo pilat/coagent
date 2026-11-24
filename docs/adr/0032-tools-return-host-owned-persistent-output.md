@@ -2,6 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-08-26
+- **Amended by:** [ADR-0107](0107-every-root-is-a-root.md)
 
 ## Context
 

@@ -121,8 +121,7 @@ func (b *apiBackend) HasActiveLoop(int64) bool { return false }
 func (b *apiBackend) NotifySession(id int64, n sessionevent.Notification) {
 	record, err := b.store.GetSession(context.Background(), id)
 	if err == nil {
-		managerRoot := controllerapi.ManagerRoot(record.Attributes)
-		b.bus.Publish(id, managerRoot, n)
+		b.bus.Publish(id, record.ParentID == 0, n)
 	}
 }
 

@@ -12,6 +12,7 @@ import (
 
 	"github.com/pilat/coagent/internal/schedule"
 	"github.com/pilat/coagent/internal/sessionstore"
+	"github.com/pilat/coagent/internal/sessionstore/sessionstoretest"
 	"github.com/pilat/coagent/internal/transcript"
 )
 
@@ -120,9 +121,8 @@ func TestMigrate_00050_ClaimsDoNotAcknowledgeAnotherSession(t *testing.T) {
 			f := newScheduleClaimUpgrade(t, kind)
 			project, err := f.sessions.GetOrCreateProject(t.Context(), t.TempDir())
 			require.NoError(t, err)
-			other, err := f.sessions.CreateSession(t.Context(), project, "model", "", nil)
-			require.NoError(t, err)
-			f.input.SessionID = other.ID
+			other := sessionstoretest.BareRoot(t, f.db, project, "model", "", nil)
+			f.input.SessionID = other
 			f.claim(t, "inbox", f.input.DeliveryKey)
 			f.claim(t, "legacy", f.input.DeliveryKey)
 			before := dumpRows(t, f.db, `SELECT * FROM schedules ORDER BY id`)
@@ -149,15 +149,14 @@ func newScheduleClaimUpgrade(t *testing.T, kind string) *scheduleClaimUpgrade {
 	sessions := sessionstore.NewStore(db)
 	project, err := sessions.GetOrCreateProject(t.Context(), t.TempDir())
 	require.NoError(t, err)
-	root, err := sessions.CreateSession(t.Context(), project, "model", "", nil)
-	require.NoError(t, err)
+	root := sessionstoretest.BareRoot(t, db, project, "model", "", nil)
 	f := &scheduleClaimUpgrade{
 		db:       db,
 		sessions: sessions,
 		store:    schedule.NewStore(db, sessions),
 		minute:   time.Now().UTC().Truncate(time.Minute),
 	}
-	f.addSchedule(t, root.ID, kind)
+	f.addSchedule(t, root, kind)
 	return f
 }
 

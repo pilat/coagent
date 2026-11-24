@@ -11,6 +11,7 @@ import (
 	"github.com/pilat/coagent/internal/llmwire"
 	"github.com/pilat/coagent/internal/migrate"
 	"github.com/pilat/coagent/internal/sessionstore"
+	"github.com/pilat/coagent/internal/sessionstore/sessionstoretest"
 	"github.com/pilat/coagent/internal/transcript"
 )
 
@@ -30,15 +31,14 @@ func TestRejectedAttemptProjectionNeverReachesProviderConverters(t *testing.T) {
 	_, err = db.ExecContext(t.Context(), `INSERT INTO projects (id, work_dir, name) VALUES (1, ?, 'p')`, t.TempDir())
 	require.NoError(t, err)
 	store := sessionstore.NewStore(db)
-	session, err := store.CreateSession(t.Context(), 1, "model", "", nil)
-	require.NoError(t, err)
+	session := sessionstoretest.BareRoot(t, db, 1, "model", "", nil)
 	_, err = store.Commit(t.Context(), sessionstore.Commit{
-		SessionID: session.ID,
+		SessionID: session,
 		Messages:  []*transcript.Message{{Role: llmwire.RoleUser, Content: "task"}},
 	})
 	require.NoError(t, err)
 	_, err = store.Commit(t.Context(), sessionstore.Commit{
-		SessionID: session.ID, RootID: session.ID, State: sessionstore.StatePatch{Iteration: new(1)},
+		SessionID: session, RootID: session, State: sessionstore.StatePatch{Iteration: new(1)},
 		Messages: []*transcript.Message{{
 			Role: llmwire.RoleAssistant, Content: "rejected provider text",
 			FinishType: llmwire.FinishLength, RejectedReason: sessionstore.RejectedReasonOutputLength,
@@ -46,7 +46,7 @@ func TestRejectedAttemptProjectionNeverReachesProviderConverters(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	stored, err := store.LoadActiveMessages(t.Context(), session.ID)
+	stored, err := store.LoadActiveMessages(t.Context(), session)
 	require.NoError(t, err)
 
 	messages := make([]llmwire.Message, len(stored))

@@ -7,6 +7,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/pilat/coagent/internal/sessionstore/sessionstoretest"
 )
 
 type asyncInboxModelRow struct {
@@ -19,24 +21,23 @@ func TestHarnessModel_AsyncInboxMixedFIFOStopErrorKillAndRestart(t *testing.T) {
 
 	ctx := context.Background()
 	store, db, projectID := newTestStore(t)
-	record, err := store.CreateSession(ctx, projectID, "model", "", nil)
-	require.NoError(t, err)
+	record := sessionstoretest.BareRoot(t, store.db, projectID, "model", "", nil)
 
 	model := []asyncInboxModelRow{
 		{source: InputSourceProcess, state: InputStatePending},
 		{source: InputSourceUser, state: InputStatePending},
 		{source: InputSourceSubagent, state: InputStatePending},
 	}
-	process, err := enqueueFact(ctx, store, record.ID, InputSourceProcess, "process", nil)
+	process, err := enqueueFact(ctx, store, record, InputSourceProcess, "process", nil)
 	require.NoError(t, err)
-	user, err := enqueueInput(ctx, store, record.ID, InputSourceUser, "user")
+	user, err := enqueueInput(ctx, store, record, InputSourceUser, "user")
 	require.NoError(t, err)
-	child, err := enqueueFact(ctx, store, record.ID, InputSourceSubagent, "subagent", nil)
+	child, err := enqueueFact(ctx, store, record, InputSourceSubagent, "subagent", nil)
 	require.NoError(t, err)
-	assertAsyncInboxMatchesModel(t, db, record.ID, model)
+	assertAsyncInboxMatchesModel(t, db, record, model)
 
 	for i, input := range []*InboxInput{process, user, child} {
-		head, peekErr := store.PeekPending(ctx, record.ID)
+		head, peekErr := store.PeekPending(ctx, record)
 		require.NoError(t, peekErr)
 		assert.Equal(t, input.ID, head.ID, "production peek preserves the mixed-source FIFO")
 		message, promoteErr := acceptInput(ctx, store, input.ID, input.RawContent)
@@ -45,53 +46,53 @@ func TestHarnessModel_AsyncInboxMixedFIFOStopErrorKillAndRestart(t *testing.T) {
 		duplicate, duplicateErr := acceptInput(ctx, store, input.ID, "changed duplicate")
 		require.ErrorIs(t, duplicateErr, ErrInputResolved)
 		assert.Nil(t, duplicate)
-		messages, readErr := store.LoadActiveMessages(ctx, record.ID)
+		messages, readErr := store.LoadActiveMessages(ctx, record)
 		require.NoError(t, readErr)
 		require.Len(t, messages, i+1)
 		assert.Equal(t, message.ID, messages[i].ID)
-		assertAsyncInboxMatchesModel(t, db, record.ID, model)
+		assertAsyncInboxMatchesModel(t, db, record, model)
 	}
 
-	require.NoError(t, store.UpdateSessionStatus(ctx, record.ID, SessionStatusError))
-	_, err = enqueueFact(ctx, store, record.ID, InputSourceProcess, "retained error fact", nil)
+	require.NoError(t, store.UpdateSessionStatus(ctx, record, SessionStatusError))
+	_, err = enqueueFact(ctx, store, record, InputSourceProcess, "retained error fact", nil)
 	require.NoError(t, err)
 	model = append(model, asyncInboxModelRow{source: InputSourceProcess, state: InputStatePending})
 	store = testStore(db)
 	recoverable, err := store.ListSessionsWithRecoverableInput(ctx)
 	require.NoError(t, err)
-	assert.NotContains(t, recoverable, record.ID, "async-only error input stays parked")
-	_, err = enqueueInput(ctx, store, record.ID, InputSourceUser, "explicit retry")
+	assert.NotContains(t, recoverable, record, "async-only error input stays parked")
+	_, err = enqueueInput(ctx, store, record, InputSourceUser, "explicit retry")
 	require.NoError(t, err)
 	model = append(model, asyncInboxModelRow{source: InputSourceUser, state: InputStatePending})
 	recoverable, err = store.ListSessionsWithRecoverableInput(ctx)
 	require.NoError(t, err)
-	assert.Contains(t, recoverable, record.ID)
+	assert.Contains(t, recoverable, record)
 
-	count, err := store.CancelPendingInputsForStop(ctx, []int64{record.ID}, "stopped")
+	count, err := store.CancelPendingInputsForStop(ctx, []int64{record}, "stopped")
 	require.NoError(t, err)
 	assert.Equal(t, int64(1), count)
 	model[4].state = InputStateCancelled
-	require.NoError(t, store.UpdateSessionStatus(ctx, record.ID, SessionStatusStopped))
+	require.NoError(t, store.UpdateSessionStatus(ctx, record, SessionStatusStopped))
 	store = testStore(db)
 	recoverable, err = store.ListSessionsWithRecoverableInput(ctx)
 	require.NoError(t, err)
-	assert.NotContains(t, recoverable, record.ID)
-	_, err = enqueueInput(ctx, store, record.ID, InputSourceAgent, "explicit resume")
+	assert.NotContains(t, recoverable, record)
+	_, err = enqueueInput(ctx, store, record, InputSourceAgent, "explicit resume")
 	require.NoError(t, err)
 	model = append(model, asyncInboxModelRow{source: InputSourceAgent, state: InputStatePending})
 	recoverable, err = store.ListSessionsWithRecoverableInput(ctx)
 	require.NoError(t, err)
-	assert.Contains(t, recoverable, record.ID)
-	assertAsyncInboxMatchesModel(t, db, record.ID, model)
+	assert.Contains(t, recoverable, record)
+	assertAsyncInboxMatchesModel(t, db, record, model)
 
-	require.NoError(t, store.WithTx(ctx, func(tx *sql.Tx) error { return MarkSessionKilledTx(ctx, tx, record.ID) }))
+	require.NoError(t, store.WithTx(ctx, func(tx *sql.Tx) error { return MarkSessionKilledTx(ctx, tx, record) }))
 	model[3].state = InputStateCancelled
 	model[5].state = InputStateCancelled
 	store = testStore(db)
 	recoverable, err = store.ListSessionsWithRecoverableInput(ctx)
 	require.NoError(t, err)
-	assert.NotContains(t, recoverable, record.ID)
-	assertAsyncInboxMatchesModel(t, db, record.ID, model)
+	assert.NotContains(t, recoverable, record)
+	assertAsyncInboxMatchesModel(t, db, record, model)
 }
 
 func assertAsyncInboxMatchesModel(

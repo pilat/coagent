@@ -13,7 +13,7 @@ import (
 
 func TestSetOrchestrator(t *testing.T) {
 	store, db, project := newTestStore(t)
-	root := chatTestRoot(t, store, project, "owner")
+	root := chatTestRoot(t, store, project)
 	for i, on := range []bool{true, true, false, false} {
 		changed, err := store.SetOrchestrator(t.Context(), root.ID, on)
 		require.NoError(t, err)
@@ -21,7 +21,7 @@ func TestSetOrchestrator(t *testing.T) {
 		assertOrchestratorMode(t, store, root.ID, on)
 	}
 	for _, invalid := range []any{1, "true", false, nil} {
-		raw, err := json.Marshal(map[string]any{"manager_id": "owner", "orchestrator": invalid})
+		raw, err := json.Marshal(map[string]any{"orchestrator": invalid})
 		require.NoError(t, err)
 		_, err = db.ExecContext(t.Context(), "UPDATE sessions SET attributes = ? WHERE id = ?", string(raw), root.ID)
 		require.NoError(t, err)
@@ -31,14 +31,14 @@ func TestSetOrchestrator(t *testing.T) {
 		assert.True(t, changed)
 		assertOrchestratorMode(t, store, root.ID, true)
 	}
-	killed := chatTestRoot(t, store, project, "owner")
+	killed := chatTestRoot(t, store, project)
 	_, err := store.MarkSessionKilledWithOutput(t.Context(), killed.ID, 0)
 	require.NoError(t, err)
 	child, err := store.CreateSubagentSession(t.Context(), project, root.ID, root.ID, "general", "model", "")
 	require.NoError(t, err)
 	_, err = db.ExecContext(
 		t.Context(),
-		`UPDATE sessions SET attributes = '{"manager_id":"owner"}' WHERE id = ?`,
+		`UPDATE sessions SET attributes = '{}' WHERE id = ?`,
 		child,
 	)
 	require.NoError(t, err)
@@ -54,7 +54,7 @@ func TestSetOrchestrator(t *testing.T) {
 
 func TestReplaceManagerRootKeepsOrchestratorMode(t *testing.T) {
 	store, _, project := newTestStore(t)
-	root := chatTestRoot(t, store, project, "owner")
+	root := chatTestRoot(t, store, project)
 	require.NoError(t, store.SetSessionTitle(t.Context(), root.ID, "old title"))
 	_, err := store.SetOrchestrator(t.Context(), root.ID, true)
 	require.NoError(t, err)

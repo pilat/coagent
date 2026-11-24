@@ -6,7 +6,6 @@
       "name": "<name>",
       "work_dir": "<workdir>",
       "attributes": {
-        "manager_id": "telegram:main",
         "title": "start the skill scenario"
       }
     },
@@ -31,7 +30,6 @@
       "name": "<name>",
       "work_dir": "<workdir>",
       "attributes": {
-        "manager_id": "telegram:main",
         "title": "start the skill scenario"
       }
     },
@@ -106,8 +104,5 @@
       "content": "model activation complete",
       "source_key": "message:15:final"
     }
-  ],
-  "owners": {
-    "1": "telegram:main"
-  }
+  ]
 }

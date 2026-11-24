@@ -14,7 +14,7 @@ func TestNumberedCommandsAcceptOneHash(t *testing.T) {
 			t.Parallel()
 			var messages []string
 			ctrl := &fakeController{focus: 42, listSessions: []controllerapi.SessionInfo{
-				{ID: 12, Name: "work", Attributes: map[string]any{"manager_id": "telegram-main"}},
+				{ID: 12, Name: "work", Attributes: map[string]any{}},
 			}}
 			manager := newCmdTestManager(t, ctrl, &messages)
 			manager.handleChatText(t.Context(), "/kill "+prefix+"12")

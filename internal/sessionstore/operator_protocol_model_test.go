@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/pilat/coagent/internal/budget"
+	"github.com/pilat/coagent/internal/sessionstore/sessionstoretest"
 	"github.com/pilat/coagent/internal/transcript"
 )
 
@@ -21,17 +22,10 @@ func TestOperatorProtocolModel_ParallelCrossingReleaseAndReplay(t *testing.T) {
 			t.Parallel()
 			ctx := context.Background()
 			store, db, projectID := newTestStore(t)
-			root, err := store.CreateSession(
-				ctx,
-				projectID,
-				"priced",
-				"",
-				map[string]any{"manager_id": "telegram-test"},
-			)
-			require.NoError(t, err)
+			root := sessionstoretest.BareRoot(t, store.db, projectID, "priced", "", map[string]any{})
 			limit := 1.0
-			_, err = store.Arm(ctx, budget.Mutation{
-				RootSessionID: root.ID, ToolCallID: "arm", CostLimitUSD: &limit, Receipt: "Budget armed",
+			_, err := store.Arm(ctx, budget.Mutation{
+				RootSessionID: root, ToolCallID: "arm", CostLimitUSD: &limit, Receipt: "Budget armed",
 			})
 			require.NoError(t, err)
 
@@ -40,7 +34,7 @@ func TestOperatorProtocolModel_ParallelCrossingReleaseAndReplay(t *testing.T) {
 				callID := fmt.Sprintf("call-%d", i)
 				result, responseErr := store.Commit(
 					ctx,
-					Commit{SessionID: root.ID, RootID: root.ID, ObserveBudget: true, Messages: []*transcript.Message{{
+					Commit{SessionID: root, RootID: root, ObserveBudget: true, Messages: []*transcript.Message{{
 						Role: "assistant", CostUSD: cost,
 						ToolCalls: json.RawMessage(fmt.Sprintf(`[{"ID":%q,"Name":"bash"}]`, callID)),
 					}}},
@@ -52,15 +46,15 @@ func TestOperatorProtocolModel_ParallelCrossingReleaseAndReplay(t *testing.T) {
 
 			var checkpoints, skipped int
 			require.NoError(t, db.QueryRowContext(ctx, `SELECT COUNT(*) FROM session_outbox
-				WHERE session_id = ? AND source_key = 'budget:1:checkpoint'`, root.ID).Scan(&checkpoints))
+				WHERE session_id = ? AND source_key = 'budget:1:checkpoint'`, root).Scan(&checkpoints))
 			require.NoError(t, db.QueryRowContext(ctx, `SELECT COUNT(*) FROM messages
-				WHERE session_id = ? AND role = 'tool'`, root.ID).Scan(&skipped))
+				WHERE session_id = ? AND role = 'tool'`, root).Scan(&skipped))
 			assert.Equal(t, 1, checkpoints)
 			assert.Positive(t, skipped)
 
-			_, err = enqueueUser(ctx, store, root.ID, "continue")
+			_, err = enqueueUser(ctx, store, root, "continue")
 			require.NoError(t, err)
-			record, err := store.Get(ctx, root.ID)
+			record, err := store.Get(ctx, root)
 			require.NoError(t, err)
 			assert.Equal(t, budget.Released, record.State)
 		})

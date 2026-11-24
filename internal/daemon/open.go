@@ -84,7 +84,7 @@ func (s *Service) openSession(
 
 	in.Status = status
 
-	in.OutputEnabled = rec.ParentID == 0 && controllerapi.ManagerRoot(rec.Attributes)
+	in.OutputEnabled = rec.ParentID == 0
 	in.ToolTrail = in.OutputEnabled
 	in.ActiveSubagents = s.activeSubagentInfos(ctx, sessionID)
 	in.ActiveProcesses = s.activeProcessInfos(ctx, sessionID)
@@ -236,17 +236,15 @@ func (s *Service) ownerTools(rec *sessionstore.SessionRecord, ldr *loader.Servic
 
 	if rec.ParentID == 0 {
 		tools = append(tools, s.administrationTools(rec, rec.ProjectID)...)
-		if controllerapi.ManagerRoot(rec.Attributes) {
-			if controllerapi.OrchestratorMode(rec.Attributes) {
-				tools = append(tools, orchestrator.NewTools(orchestrator.Host(orchestratorHost{s}), rec.ID)...)
-			}
-
-			tools = append(
-				tools,
-				configapply.NewConfigEdit(rec.ID, s.applier),
-				configapply.NewConfigRead(rec.ID, s.applier),
-			)
+		if controllerapi.OrchestratorMode(rec.Attributes) {
+			tools = append(tools, orchestrator.NewTools(orchestrator.Host(orchestratorHost{s}), rec.ID)...)
 		}
+
+		tools = append(
+			tools,
+			configapply.NewConfigEdit(rec.ID, s.applier),
+			configapply.NewConfigRead(rec.ID, s.applier),
+		)
 	}
 
 	return tools

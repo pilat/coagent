@@ -100,7 +100,7 @@ func (s *Service) fireOutcome(
 		return fmt.Errorf("load outcome session: %w", err)
 	}
 
-	if record.ParentID != 0 || !controllerapi.ManagerRoot(record.Attributes) {
+	if record.ParentID != 0 {
 		return nil
 	}
 

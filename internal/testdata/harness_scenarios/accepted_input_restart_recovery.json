@@ -4,7 +4,10 @@
     {
       "type": "session_created",
       "name": "<name>",
-      "work_dir": "<workdir>"
+      "work_dir": "<workdir>",
+      "attributes": {
+        "title": "accepted before crash"
+      }
     },
     {
       "type": "state_changed",
@@ -19,5 +22,13 @@
       "status": "idle"
     }
   ],
-  "outputs": []
+  "outputs": [
+    {
+      "id": 1,
+      "session_id": 1,
+      "type": "message",
+      "content": "accepted input recovered",
+      "source_key": "message:4:final"
+    }
+  ]
 }

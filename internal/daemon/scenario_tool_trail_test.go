@@ -25,7 +25,7 @@ func TestHarnessScenario_WorkToolStepsPublishOneMessageEach(t *testing.T) {
 		}, llmwire.ToolCall{ID: "silent-glob", Name: "glob", Arguments: []byte(`{"pattern":"*.go"}`)})
 	}})
 	collector := h.collect()
-	root := h.send("inspect files", managerAttrs(scenarioManagerID))
+	root := h.send("inspect files", nil)
 	collector.waitIdleAfter(root, "Work complete.")
 	assert.Equal(t, 1, assistantSayCount(t, h, root, "Work complete."))
 	assertNarratedOutputOrder(t, h, root, "→ ls: `.`\n→ glob: `*.go`", "Checking files\n\n→ ls: `.`", "Work complete.")
@@ -55,7 +55,7 @@ func TestHarnessScenario_SubagentToolStepsHaveNoOutbox(t *testing.T) {
 			`{"prompt":"TRAIL_CHILD","description":"inspect child","subagent_type":"general"}`,
 		)
 	}})
-	root := h.send("inspect with a child", managerAttrs(scenarioManagerID))
+	root := h.send("inspect with a child", nil)
 	h.waitUntil("parent finished", func() bool {
 		return lastAssistantTextDTO(h.messages(root)) == "Parent complete." && !h.mgr.HasActiveLoop(root)
 	})

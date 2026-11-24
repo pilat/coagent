@@ -16,6 +16,7 @@ import (
 	"github.com/pilat/coagent/internal/budget"
 	"github.com/pilat/coagent/internal/migrate"
 	"github.com/pilat/coagent/internal/sessionstore"
+	"github.com/pilat/coagent/internal/sessionstore/sessionstoretest"
 	"github.com/pilat/coagent/internal/tool"
 )
 
@@ -48,11 +49,10 @@ func newBudgetFixture(ctx context.Context, t *testing.T) *budgetFixture {
 	require.NoError(t, err)
 
 	store := sessionstore.NewStore(db)
-	root, err := store.CreateSession(ctx, projectID, "priced", "", map[string]any{"manager_id": "telegram-test"})
-	require.NoError(t, err)
-	fGrant(ctx, t, store, root.ID)
+	root := sessionstoretest.BareRoot(t, db, projectID, "priced", "", map[string]any{})
+	fGrant(ctx, t, store, root)
 
-	return &budgetFixture{t: t, db: db, store: store, svc: budget.New(store), rootID: root.ID}
+	return &budgetFixture{t: t, db: db, store: store, svc: budget.New(store), rootID: root}
 }
 
 // fGrant enqueues the user turn whose running session would hold the grant.

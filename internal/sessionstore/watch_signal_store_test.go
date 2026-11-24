@@ -168,7 +168,7 @@ func TestWatchSignals_ActorIsNotSignalled(t *testing.T) {
 	store, _, actor, target := signalTestPair(t)
 	record, err := store.GetSession(t.Context(), target)
 	require.NoError(t, err)
-	other := chatTestRoot(t, store, record.ProjectID, "owner")
+	other := chatTestRoot(t, store, record.ProjectID)
 	_, err = store.SetOrchestrator(t.Context(), other.ID, true)
 	require.NoError(t, err)
 	signalTestArm(t, store, actor, target, false)
@@ -194,8 +194,8 @@ func TestWatchSignals_ActorIsNotSignalled(t *testing.T) {
 func signalTestPair(t *testing.T) (*Store, *sql.DB, int64, int64) {
 	t.Helper()
 	store, db, project := newTestStore(t)
-	watcher := chatTestRoot(t, store, project, "owner")
-	target := chatTestRoot(t, store, project, "owner")
+	watcher := chatTestRoot(t, store, project)
+	target := chatTestRoot(t, store, project)
 	_, err := store.SetOrchestrator(t.Context(), watcher.ID, true)
 	require.NoError(t, err)
 	return store, db, watcher.ID, target.ID

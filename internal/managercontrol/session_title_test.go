@@ -8,28 +8,28 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/pilat/coagent/internal/controllerapi"
+	"github.com/pilat/coagent/internal/sessionstore/sessionstoretest"
 )
 
 func TestChatCapability_SetSessionTitle(t *testing.T) {
 	t.Parallel()
-	factory, store, project := newChatControl(t)
+	factory, store, project, db := newChatControl(t)
 	chat := chatCapability(t, factory, "owner")
-	root, err := store.CreateSession(t.Context(), project, "model", "", map[string]any{"manager_id": "owner"})
-	require.NoError(t, err)
-	require.NoError(t, chat.SetSessionTitle(t.Context(), "chat", root.ID, " fix login 500 "))
-	reloaded, err := store.GetSession(t.Context(), root.ID)
+	root := sessionstoretest.BareRoot(t, db, project, "model", "", map[string]any{})
+	require.NoError(t, chat.SetSessionTitle(t.Context(), "chat", root, " fix login 500 "))
+	reloaded, err := store.GetSession(t.Context(), root)
 	require.NoError(t, err)
 	assert.Equal(t, "fix login 500", reloaded.Attributes[controllerapi.SessionAttributeTitle])
-	require.NoError(t, chatCapability(t, factory, "other").SetSessionTitle(t.Context(), "chat", root.ID, "foreign"))
+	require.NoError(t, chatCapability(t, factory, "other").SetSessionTitle(t.Context(), "chat", root, "foreign"))
 	require.Error(t, chat.SetSessionTitle(t.Context(), "chat", 0, "invalid"))
 	require.EqualError(
 		t,
-		chat.SetSessionTitle(t.Context(), "chat", root.ID, strings.Repeat("界", 81)),
+		chat.SetSessionTitle(t.Context(), "chat", root, strings.Repeat("界", 81)),
 		"title must be one line of 1-80 characters",
 	)
 	require.ErrorContains(
 		t,
-		chatCapability(t, factory, "").SetSessionTitle(t.Context(), "chat", root.ID, "x"),
+		chatCapability(t, factory, "").SetSessionTitle(t.Context(), "chat", root, "x"),
 		"no manager identity",
 	)
 }

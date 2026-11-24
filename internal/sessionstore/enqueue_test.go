@@ -8,14 +8,14 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/pilat/coagent/internal/budget"
+	"github.com/pilat/coagent/internal/sessionstore/sessionstoretest"
 )
 
 func TestEnqueueTx_UserCommand(t *testing.T) {
 	t.Parallel()
 	store, _, projectID := newTestStore(t)
-	root, err := store.CreateSession(t.Context(), projectID, "model", "", map[string]any{"manager_id": "mgr"})
-	require.NoError(t, err)
-	result, err := store.Enqueue(t.Context(), Input{SessionID: root.ID, Source: InputSourceUser, Content: "/budget 5$"})
+	root := sessionstoretest.BareRoot(t, store.db, projectID, "model", "", map[string]any{})
+	result, err := store.Enqueue(t.Context(), Input{SessionID: root, Source: InputSourceUser, Content: "/budget 5$"})
 	require.NoError(t, err)
 	require.True(t, result.Applied)
 	assert.Equal(t, "/budget 5$", result.Input.RawContent)
@@ -25,7 +25,7 @@ func TestEnqueueAgentInputActivatesStoppedRoot(t *testing.T) {
 	for _, kind := range []string{"stopped root", "fired budget", "subagent"} {
 		t.Run(kind, func(t *testing.T) {
 			store, db, project := newTestStore(t)
-			root := chatTestRoot(t, store, project, "owner")
+			root := chatTestRoot(t, store, project)
 			id := root.ID
 			if kind == "subagent" {
 				var err error

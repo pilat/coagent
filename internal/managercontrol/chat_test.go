@@ -12,6 +12,7 @@ import (
 	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/migrate"
 	"github.com/pilat/coagent/internal/sessionstore"
+	"github.com/pilat/coagent/internal/sessionstore/sessionstoretest"
 )
 
 type chatTestBackend struct {
@@ -24,10 +25,11 @@ func TestChatCapability_EveryControllerReachesEveryRootsChat(t *testing.T) {
 	t.Parallel()
 
 	ctx := t.Context()
-	factory, store, project := newChatControl(t)
+	factory, store, project, db := newChatControl(t)
 	one := chatCapability(t, factory, "one")
 	two := chatCapability(t, factory, "two")
-	root, err := store.CreateSession(ctx, project, "model", "", map[string]any{"manager_id": "one"})
+	rootID := sessionstoretest.BareRoot(t, db, project, "model", "", map[string]any{})
+	root, err := store.GetSession(ctx, rootID)
 	require.NoError(t, err)
 	output, err := store.EnqueueOutput(ctx, sessionstore.OutputDraft{
 		SessionID: root.ID, Type: sessionstore.OutputMessage, Content: "private output",
@@ -88,38 +90,37 @@ func TestChatCapability_KillFenceDoesNotBecomeKilledBeforeClose(t *testing.T) {
 	t.Parallel()
 
 	ctx := t.Context()
-	factory, store, project := newChatControl(t)
+	factory, store, project, db := newChatControl(t)
 	chat := chatCapability(t, factory, "owner")
-	root, err := store.CreateSession(ctx, project, "model", "", map[string]any{"manager_id": "owner"})
-	require.NoError(t, err)
-	require.NoError(t, chat.SetChatFocus(ctx, "chat", root.ID))
+	root := sessionstoretest.BareRoot(t, db, project, "model", "", map[string]any{})
+	require.NoError(t, chat.SetChatFocus(ctx, "chat", root))
 	input, err := store.Enqueue(ctx, sessionstore.Input{
-		SessionID: root.ID, Source: sessionstore.InputSourceUser, Content: "/kill",
+		SessionID: root, Source: sessionstore.InputSourceUser, Content: "/kill",
 	})
 	require.NoError(t, err)
 	_, err = store.BeginLifecycleInput(ctx, input.Input.ID, "kill", "Stopping session...")
 	require.NoError(t, err)
-	killed, err := chat.SessionKilled(ctx, root.ID)
+	killed, err := chat.SessionKilled(ctx, root)
 	require.NoError(t, err)
 	assert.False(t, killed)
-	require.EqualError(t, chat.SetChatFocus(ctx, "chat", root.ID), fmt.Sprintf("#%d is not a live session", root.ID))
-	closed, err := store.MarkSessionKilledWithOutput(ctx, root.ID, 0)
+	require.EqualError(t, chat.SetChatFocus(ctx, "chat", root), fmt.Sprintf("#%d is not a live session", root))
+	closed, err := store.MarkSessionKilledWithOutput(ctx, root, 0)
 	require.NoError(t, err)
-	killed, err = chat.SessionKilled(ctx, root.ID)
+	killed, err = chat.SessionKilled(ctx, root)
 	require.NoError(t, err)
 	assert.True(t, killed)
-	require.EqualError(t, chat.SetChatFocus(ctx, "chat", root.ID), fmt.Sprintf("#%d is not a live session", root.ID))
-	rows, err := chat.ChatOutputs(ctx, "chat", root.ID, 0, 10)
+	require.EqualError(t, chat.SetChatFocus(ctx, "chat", root), fmt.Sprintf("#%d is not a live session", root))
+	rows, err := chat.ChatOutputs(ctx, "chat", root, 0, 10)
 	require.NoError(t, err)
 	require.Len(t, rows, 2)
 	assert.Equal(t, controllerapi.OutputSessionClosed, rows[1].Type)
-	entered, err := chat.EnterChat(ctx, "chat", root.ID, 0)
+	entered, err := chat.EnterChat(ctx, "chat", root, 0)
 	require.NoError(t, err)
 	require.True(t, entered)
-	advanced, err := chat.AdvanceChat(ctx, "chat", root.ID, closed.OutputID)
+	advanced, err := chat.AdvanceChat(ctx, "chat", root, closed.OutputID)
 	require.NoError(t, err)
 	require.True(t, advanced)
-	reset, err := chat.ResetChatFocus(ctx, "chat", root.ID)
+	reset, err := chat.ResetChatFocus(ctx, "chat", root)
 	require.NoError(t, err)
 	assert.True(t, reset)
 	session, cursor, entered, err := chat.ChatCursor(ctx, "chat")
@@ -132,7 +133,7 @@ func TestChatCapability_KillFenceDoesNotBecomeKilledBeforeClose(t *testing.T) {
 func TestChatCapability_RejectsAnUnboundManager(t *testing.T) {
 	t.Parallel()
 
-	factory, _, _ := newChatControl(t)
+	factory, _, _, _ := newChatControl(t)
 	chat := chatCapability(t, factory, "")
 	require.ErrorContains(t, chat.BindChat(t.Context(), "chat"), "no manager identity")
 	_, _, _, err := chat.ChatCursor(t.Context(), "chat")
@@ -152,7 +153,7 @@ func TestChatCapability_RejectsAnUnboundManager(t *testing.T) {
 
 func TestChatCapability_BindsOnlyItsManager(t *testing.T) {
 	t.Parallel()
-	factory, _, _ := newChatControl(t)
+	factory, _, _, _ := newChatControl(t)
 	chat := chatCapability(t, factory, "owner")
 	require.NoError(t, chat.BindChat(t.Context(), "chat"))
 	other := chatCapability(t, factory, "other")
@@ -161,7 +162,7 @@ func TestChatCapability_BindsOnlyItsManager(t *testing.T) {
 	assert.Zero(t, focus)
 }
 
-func newChatControl(t *testing.T) (controllerapi.ManagerControllerFactory, *sessionstore.Store, int64) {
+func newChatControl(t *testing.T) (controllerapi.ManagerControllerFactory, *sessionstore.Store, int64, *sql.DB) {
 	t.Helper()
 
 	ctx := t.Context()
@@ -179,7 +180,7 @@ func newChatControl(t *testing.T) (controllerapi.ManagerControllerFactory, *sess
 	require.NoError(t, err)
 	backend := &chatTestBackend{store: store, project: project}
 
-	return New(backend, store, nil, nil, nil), store, project
+	return New(backend, store, nil, nil, nil), store, project, db
 }
 
 func chatCapability(

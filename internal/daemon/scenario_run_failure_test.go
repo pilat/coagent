@@ -26,7 +26,7 @@ func TestHarnessScenario_NewInputMakesRepeatedRunFailureVisible(t *testing.T) {
 		return client, nil
 	}})
 	collector := h.collect()
-	root := h.send("try the task", managerAttrs(scenarioManagerID))
+	root := h.send("try the task", nil)
 	var generation int64
 	for attempt := 1; attempt <= 2; attempt++ {
 		if attempt == 2 {
@@ -69,7 +69,7 @@ func TestHarnessModel_RunFailureNoticePerInputAcrossRebuilds(t *testing.T) {
 					h.projectID,
 					"try the task",
 					"fake-model",
-					managerAttrs(scenarioManagerID),
+					nil,
 				)
 				require.NoError(t, err)
 			} else {

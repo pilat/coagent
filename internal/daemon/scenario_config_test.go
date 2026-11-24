@@ -125,7 +125,7 @@ func TestScenario_ConcurrentAppliesResolveExactlyOnce(t *testing.T) {
 				first.projectID,
 				prompt,
 				"fake-model",
-				managerAttrs("telegram:"+prompt[:7]),
+				nil,
 			)
 			mu.Lock()
 			sessions[prompt[:7]] = id
@@ -469,7 +469,7 @@ func startConfigEditSession(t *testing.T, d *applyDaemon, prompt string) int64 {
 
 func openConfigRoot(t *testing.T, d *applyDaemon, owner, prompt string) int64 {
 	t.Helper()
-	id, err := d.mgr.Send(d.ctx, d.projectID, prompt, "fake-model", managerAttrs(owner))
+	id, err := d.mgr.Send(d.ctx, d.projectID, prompt, "fake-model", nil)
 	require.NoError(t, err)
 	d.waitUntil("root opener settled", func() bool { return !d.mgr.HasActiveLoop(id) })
 	return id
@@ -542,7 +542,7 @@ func (h *configHarness) grantedCall(t *testing.T, callID, document string) error
 // liveSession creates a real session record, so notification delivery has somewhere to land.
 func (h *configHarness) liveSession(t *testing.T) int64 {
 	t.Helper()
-	rec := h.createRoot(map[string]any{"channel": "cli", "manager_id": "cli"})
+	rec := h.createRoot(map[string]any{"channel": "cli"})
 	return rec
 }
 

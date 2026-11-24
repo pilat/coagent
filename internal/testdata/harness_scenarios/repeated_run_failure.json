@@ -6,7 +6,6 @@
       "name": "<name>",
       "work_dir": "<workdir>",
       "attributes": {
-        "manager_id": "telegram:main",
         "title": "try the task"
       }
     },
@@ -27,7 +26,6 @@
       "name": "<name>",
       "work_dir": "<workdir>",
       "attributes": {
-        "manager_id": "telegram:main",
         "title": "try the task"
       }
     },
@@ -66,8 +64,5 @@
       "content": "❌ LLM error: chat completion: openrouter api error: status=400, body=scripted provider failure 2\n",
       "source_key": "run:2:0:error"
     }
-  ],
-  "owners": {
-    "1": "telegram:main"
-  }
+  ]
 }

@@ -15,6 +15,7 @@ import (
 	"github.com/pilat/coagent/internal/registry"
 	"github.com/pilat/coagent/internal/sessionbuild"
 	"github.com/pilat/coagent/internal/sessionstore"
+	"github.com/pilat/coagent/internal/sessionstore/sessionstoretest"
 	"github.com/pilat/coagent/internal/tool"
 )
 
@@ -86,7 +87,8 @@ func TestSetModelPreservesAgentSearchPolicy(t *testing.T) {
 			h.mgr.models = newModels(cfg)
 			require.True(t, cfg.UnifiedConfig.SearchNativeActive("after"))
 			project := testProject(t, h.store, cfg.WorkDir)
-			record, err := h.store.CreateSession(h.ctx, project, "before", "", nil)
+			recordID := sessionstoretest.BareRoot(h.t, h.db, project, "before", "", nil)
+			record, err := h.store.GetSession(h.ctx, recordID)
 			require.NoError(t, err)
 			_, err = h.db.ExecContext(h.ctx, `UPDATE sessions SET agent_type = ? WHERE id = ?`, tc.agent, record.ID)
 			require.NoError(t, err)

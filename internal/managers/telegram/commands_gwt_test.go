@@ -34,7 +34,7 @@ func TestParseGwtCommand(t *testing.T) {
 func TestGwtDispatchCreatesWorktreeSession(t *testing.T) {
 	var messages []string
 	ctrl := &fakeController{focus: 42, listSessions: []controllerapi.SessionInfo{{
-		ID: 42, WorkDir: "/repo/work", Attributes: map[string]any{"manager_id": "telegram-main"},
+		ID: 42, WorkDir: "/repo/work", Attributes: map[string]any{},
 	}}}
 	m := newCmdTestManager(t, ctrl, &messages)
 	m.handleChatText(t.Context(), "/gwt api")

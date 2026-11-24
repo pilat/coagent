@@ -8,12 +8,38 @@
     {
       "trace": "accepted_input_restart_recovery.json",
       "source_test": "TestHarnessScenario_RestartResumesAcceptedInputWithoutAssistant",
-      "calls": null
+      "calls": [
+        {
+          "method": "sendMessage",
+          "chat_id": 7,
+          "text": "<b>→ #1 &lt;name&gt;</b>",
+          "parse_mode": "HTML"
+        },
+        {
+          "method": "sendMessage",
+          "chat_id": 7,
+          "text": "<b>#1 &lt;name&gt;</b>\n\naccepted input recovered",
+          "parse_mode": "HTML"
+        }
+      ]
     },
     {
       "trace": "accepted_input_tool_progress_restart.json",
       "source_test": "TestHarnessScenario_RestartResumesAcceptedInputAfterToolResult",
-      "calls": null
+      "calls": [
+        {
+          "method": "sendMessage",
+          "chat_id": 7,
+          "text": "<b>→ #1 &lt;name&gt;</b>",
+          "parse_mode": "HTML"
+        },
+        {
+          "method": "sendMessage",
+          "chat_id": 7,
+          "text": "<b>#1 &lt;name&gt;</b>\n\naccepted input recovered",
+          "parse_mode": "HTML"
+        }
+      ]
     },
     {
       "trace": "background_child_no_sleep.json",
@@ -74,11 +100,6 @@
           "parse_mode": "HTML"
         }
       ]
-    },
-    {
-      "trace": "cli_conversation_manager_owned.json",
-      "source_test": "TestHarnessScenario_CLIConversationIsManagerOwned",
-      "calls": null
     },
     {
       "trace": "compact_success_chain.json",
@@ -173,7 +194,32 @@
     {
       "trace": "foreground_followup_no_sleep.json",
       "source_test": "TestHarnessScenario_ForegroundChildContinuesWithoutSleep",
-      "calls": null
+      "calls": [
+        {
+          "method": "sendMessage",
+          "chat_id": 7,
+          "text": "<b>→ #1 &lt;name&gt;</b>",
+          "parse_mode": "HTML"
+        },
+        {
+          "method": "sendMessage",
+          "chat_id": 7,
+          "text": "<b>#1 &lt;name&gt;</b>\n\n→ send_to_subagent\n→ sleep",
+          "parse_mode": "HTML"
+        },
+        {
+          "method": "sendMessage",
+          "chat_id": 7,
+          "text": "<b>#1 &lt;name&gt;</b>\n\nfollow-up accepted",
+          "parse_mode": "HTML"
+        },
+        {
+          "method": "sendMessage",
+          "chat_id": 7,
+          "text": "<b>#1 &lt;name&gt;</b>\n\ncontinuation delivered",
+          "parse_mode": "HTML"
+        }
+      ]
     },
     {
       "trace": "help_includes_gwt.json",
@@ -316,7 +362,26 @@
     {
       "trace": "process_busy_boundary.json",
       "source_test": "TestHarnessScenario_ProcessCompletionAtBusyToolBoundary",
-      "calls": null
+      "calls": [
+        {
+          "method": "sendMessage",
+          "chat_id": 7,
+          "text": "<b>→ #1 &lt;name&gt;</b>",
+          "parse_mode": "HTML"
+        },
+        {
+          "method": "sendMessage",
+          "chat_id": 7,
+          "text": "<b>#1 &lt;name&gt;</b>\n\n→ ls: <code>.</code>",
+          "parse_mode": "HTML"
+        },
+        {
+          "method": "sendMessage",
+          "chat_id": 7,
+          "text": "<b>#1 &lt;name&gt;</b>\n\nbusy process completion observed",
+          "parse_mode": "HTML"
+        }
+      ]
     },
     {
       "trace": "process_completed_root.json",
@@ -399,7 +464,26 @@
     {
       "trace": "process_waits_for_foreground.json",
       "source_test": "TestHarnessScenario_ProcessCompletionWaitsForForegroundChild",
-      "calls": null
+      "calls": [
+        {
+          "method": "sendMessage",
+          "chat_id": 7,
+          "text": "<b>→ #1 &lt;name&gt;</b>",
+          "parse_mode": "HTML"
+        },
+        {
+          "method": "sendMessage",
+          "chat_id": 7,
+          "text": "<b>#1 &lt;name&gt;</b>\n\n→ task: <code>block</code>",
+          "parse_mode": "HTML"
+        },
+        {
+          "method": "sendMessage",
+          "chat_id": 7,
+          "text": "<b>#1 &lt;name&gt;</b>\n\nforeground result preceded process input",
+          "parse_mode": "HTML"
+        }
+      ]
     },
     {
       "trace": "repeated_run_failure.json",
@@ -428,7 +512,26 @@
     {
       "trace": "scatter_gather_shrinking_wait_set.json",
       "source_test": "TestHarnessScenario_ForegroundScatterGatherProjectsShrinkingAllWaitSet",
-      "calls": null
+      "calls": [
+        {
+          "method": "sendMessage",
+          "chat_id": 7,
+          "text": "<b>→ #1 &lt;name&gt;</b>",
+          "parse_mode": "HTML"
+        },
+        {
+          "method": "sendMessage",
+          "chat_id": 7,
+          "text": "<b>#1 &lt;name&gt;</b>\n\n→ task: <code>wait child</code>\n→ task: <code>wait child</code>\n→ task: <code>wait child</code>",
+          "parse_mode": "HTML"
+        },
+        {
+          "method": "sendMessage",
+          "chat_id": 7,
+          "text": "<b>#1 &lt;name&gt;</b>\n\nall children delivered",
+          "parse_mode": "HTML"
+        }
+      ]
     },
     {
       "trace": "scheduled_turn_chain.json",
@@ -463,7 +566,26 @@
     {
       "trace": "second_input_no_replay.json",
       "source_test": "TestHarnessScenario_SecondInputDoesNotReplayPreviousFinal",
-      "calls": null
+      "calls": [
+        {
+          "method": "sendMessage",
+          "chat_id": 7,
+          "text": "<b>→ #1 &lt;name&gt;</b>",
+          "parse_mode": "HTML"
+        },
+        {
+          "method": "sendMessage",
+          "chat_id": 7,
+          "text": "<b>#1 &lt;name&gt;</b>\n\nfirst answer",
+          "parse_mode": "HTML"
+        },
+        {
+          "method": "sendMessage",
+          "chat_id": 7,
+          "text": "<b>#1 &lt;name&gt;</b>\n\nsecond answer",
+          "parse_mode": "HTML"
+        }
+      ]
     },
     {
       "trace": "set_manager_patch_restart.json",
@@ -508,7 +630,26 @@
     {
       "trace": "sleep_interrupted_by_input.json",
       "source_test": "TestHarnessScenario_SleepProjectsWakeAtAndUserInputInterruptsIt",
-      "calls": null
+      "calls": [
+        {
+          "method": "sendMessage",
+          "chat_id": 7,
+          "text": "<b>→ #1 &lt;name&gt;</b>",
+          "parse_mode": "HTML"
+        },
+        {
+          "method": "sendMessage",
+          "chat_id": 7,
+          "text": "<b>#1 &lt;name&gt;</b>\n\n→ sleep",
+          "parse_mode": "HTML"
+        },
+        {
+          "method": "sendMessage",
+          "chat_id": 7,
+          "text": "<b>#1 &lt;name&gt;</b>\n\nsleep interruption handled",
+          "parse_mode": "HTML"
+        }
+      ]
     },
     {
       "trace": "stop_interrupted_chain.json",
@@ -609,17 +750,86 @@
     {
       "trace": "stopped_root_fresh_schedule_turn.json",
       "source_test": "TestHarnessScenario_StoppedRootScheduleStartsOneTurn/fresh",
-      "calls": null
+      "calls": [
+        {
+          "method": "sendMessage",
+          "chat_id": 7,
+          "text": "<b>→ #1 &lt;name&gt;</b>",
+          "parse_mode": "HTML"
+        },
+        {
+          "method": "sendMessage",
+          "chat_id": 7,
+          "text": "<b>#1 &lt;name&gt;</b>\n\nfresh scheduled turn completed",
+          "parse_mode": "HTML"
+        },
+        {
+          "method": "sendMessage",
+          "chat_id": 7,
+          "text": "<b>#1 &lt;name&gt;</b>\n\n⏳ Stopping…",
+          "parse_mode": "HTML"
+        },
+        {
+          "method": "sendMessage",
+          "chat_id": 7,
+          "text": "<b>#1 &lt;name&gt;</b>\n\n⏸️ Session stopped\nCancelled background processes: 0",
+          "parse_mode": "HTML"
+        }
+      ]
     },
     {
       "trace": "stopped_root_schedule_turn.json",
       "source_test": "TestHarnessScenario_StoppedRootScheduleStartsOneTurn/normal",
-      "calls": null
+      "calls": [
+        {
+          "method": "sendMessage",
+          "chat_id": 7,
+          "text": "<b>→ #1 &lt;name&gt;</b>",
+          "parse_mode": "HTML"
+        },
+        {
+          "method": "sendMessage",
+          "chat_id": 7,
+          "text": "<b>#1 &lt;name&gt;</b>\n\nscheduled turn completed",
+          "parse_mode": "HTML"
+        },
+        {
+          "method": "sendMessage",
+          "chat_id": 7,
+          "text": "<b>#1 &lt;name&gt;</b>\n\n⏳ Stopping…",
+          "parse_mode": "HTML"
+        },
+        {
+          "method": "sendMessage",
+          "chat_id": 7,
+          "text": "<b>#1 &lt;name&gt;</b>\n\n⏸️ Session stopped\nCancelled background processes: 0",
+          "parse_mode": "HTML"
+        }
+      ]
     },
     {
       "trace": "subagent_text_with_tools.json",
       "source_test": "TestHarnessScenario_SubagentTextWithToolsCompletes",
-      "calls": null
+      "calls": [
+        {
+          "method": "sendMessage",
+          "chat_id": 7,
+          "text": "<b>→ #1 &lt;name&gt;</b>",
+          "parse_mode": "HTML"
+        },
+        {
+          "method": "sendMessage",
+          "chat_id": 7,
+          "text": "<b>#1 &lt;name&gt;</b>\n\n→ task: <code>scenario</code>",
+          "parse_mode": "HTML"
+        },
+        {
+          "method": "sendMessage",
+          "chat_id": 7,
+          "text": "<b>#1 &lt;name&gt;</b>\n\nchild completion delivered",
+          "parse_mode": "HTML"
+        }
+      ]
     },
     {
       "trace": "tool_trail_work_steps.json",

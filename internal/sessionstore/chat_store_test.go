@@ -7,6 +7,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/pilat/coagent/internal/sessionstore/sessionstoretest"
 )
 
 func TestChatFocus_CAS(t *testing.T) {
@@ -14,8 +16,8 @@ func TestChatFocus_CAS(t *testing.T) {
 
 	ctx := t.Context()
 	store, db, project := newTestStore(t)
-	first := chatTestRoot(t, store, project, "owner")
-	second := chatTestRoot(t, store, project, "owner")
+	first := chatTestRoot(t, store, project)
+	second := chatTestRoot(t, store, project)
 	focus, err := store.ChatFocus(ctx, "owner", "chat")
 	require.NoError(t, err)
 	assert.Zero(t, focus)
@@ -47,10 +49,10 @@ func TestChatFocus_RefusesNonLiveOwnedRootsWithoutChangingSelection(t *testing.T
 
 	ctx := t.Context()
 	store, _, project := newTestStore(t)
-	current := chatTestRoot(t, store, project, "owner")
-	terminating := chatTestRoot(t, store, project, "owner")
+	current := chatTestRoot(t, store, project)
+	terminating := chatTestRoot(t, store, project)
 	require.NoError(t, store.UpdateSessionStatus(ctx, terminating.ID, SessionStatusTerminating))
-	killed := chatTestRoot(t, store, project, "owner")
+	killed := chatTestRoot(t, store, project)
 	_, err := store.MarkSessionKilledWithOutput(ctx, killed.ID, 0)
 	require.NoError(t, err)
 	child, err := store.CreateSubagentSession(ctx, project, current.ID, current.ID, "general", "model", "")
@@ -71,12 +73,12 @@ func TestChatOutputs_OrderedBatchesIncludeLifecycleRows(t *testing.T) {
 	ctx := t.Context()
 	store, _, project := newTestStore(t)
 	root, opened, err := store.CreateManagerRoot(ctx, ManagerRootCreate{
-		ProjectID: project, Model: "model", Attributes: map[string]any{"manager_id": "owner"},
+		ProjectID: project, Model: "model", Attributes: map[string]any{},
 		Name: "test", WorkDir: "/project",
 	})
 	require.NoError(t, err)
 	first := chatTestOutput(t, store, root.ID, "first")
-	other := chatTestRoot(t, store, project, "owner")
+	other := chatTestRoot(t, store, project)
 	chatTestOutput(t, store, other.ID, "other session")
 	second := chatTestOutput(t, store, root.ID, "second")
 	outputs, err := store.ChatOutputs(ctx, root.ID, 0, 2)
@@ -106,10 +108,12 @@ func TestChatOutputs_OrderedBatchesIncludeLifecycleRows(t *testing.T) {
 	}, outputs)
 }
 
-func chatTestRoot(t *testing.T, store *Store, project int64, owner string) *SessionRecord {
+func chatTestRoot(t *testing.T, store *Store, project int64) *SessionRecord {
 	t.Helper()
 
-	root, err := store.CreateSession(t.Context(), project, "model", "", map[string]any{"manager_id": owner})
+	rootID := sessionstoretest.BareRoot(t, store.db, project, "model", "", map[string]any{})
+
+	root, err := store.GetSession(t.Context(), rootID)
 	require.NoError(t, err)
 
 	return root

@@ -6,7 +6,6 @@
       "name": "<name>",
       "work_dir": "<workdir>",
       "attributes": {
-        "manager_id": "telegram-main",
         "title": "initialize"
       }
     },
@@ -85,8 +84,5 @@
       "content": "⏸️ Session stopped\nCancelled background processes: 0",
       "source_key": "input:4:stop:completed"
     }
-  ],
-  "owners": {
-    "1": "telegram-main"
-  }
+  ]
 }

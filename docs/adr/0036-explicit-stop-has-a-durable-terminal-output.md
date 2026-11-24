@@ -2,6 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-08-29
+- **Amended by:** [ADR-0107](0107-every-root-is-a-root.md)
 - **Amended by:** [ADR-0072](0072-flat-chat-with-a-focus.md) — output is persistent only: `⏳ Stopping…` is no longer replaceable, and output readiness is gone
 
 ## Context

@@ -6,8 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"slices"
-
-	"github.com/pilat/coagent/internal/controllerapi"
 )
 
 func (s *Store) ResolveReplacement(ctx context.Context, sessionID int64) (int64, error) {
@@ -69,8 +67,7 @@ func (s *Store) ReplacementChain(ctx context.Context, sessionID int64) ([]int64,
 			return nil, fmt.Errorf("load predecessor session: %w", err)
 		}
 
-		if prior.ParentID != 0 || prior.ProjectID != record.ProjectID ||
-			!controllerapi.ManagerRoot(prior.Attributes) {
+		if prior.ParentID != 0 || prior.ProjectID != record.ProjectID {
 			break
 		}
 
@@ -102,8 +99,8 @@ func (s *Store) forwardReplacements(
 			return nil, nil, err
 		}
 
-		if !controllerapi.ManagerRoot(record.Attributes) {
-			return nil, nil, ErrOutputOwner
+		if record.ParentID != 0 {
+			return nil, nil, ErrOutputNotRoot
 		}
 
 		chain = append(chain, sessionID)
@@ -131,7 +128,7 @@ func (s *Store) forwardReplacements(
 			return nil, nil, err
 		}
 
-		if next.ParentID != 0 || next.ProjectID != record.ProjectID || !controllerapi.ManagerRoot(next.Attributes) {
+		if next.ParentID != 0 || next.ProjectID != record.ProjectID {
 			return nil, nil, errors.New("invalid replacement session")
 		}
 

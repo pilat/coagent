@@ -7,6 +7,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/pilat/coagent/internal/sessionstore/sessionstoretest"
 )
 
 func TestSessionTitle_FirstAcceptedInput(t *testing.T) {
@@ -22,7 +24,7 @@ func TestSessionTitle_FirstAcceptedInput(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			store, _, project := newTestStore(t)
-			root := chatTestRoot(t, store, project, "owner")
+			root := chatTestRoot(t, store, project)
 			_, err := store.Enqueue(
 				t.Context(),
 				Input{SessionID: root.ID, Source: InputSourceUser, Content: tt.content},
@@ -46,23 +48,17 @@ func TestSessionTitle_FirstAcceptedInput(t *testing.T) {
 
 func TestSessionTitle_ExcludedAndDuplicateInputs(t *testing.T) {
 	t.Parallel()
-	store, db, project := newTestStore(t)
-	root := chatTestRoot(t, store, project, "owner")
+	store, _, project := newTestStore(t)
+	root := chatTestRoot(t, store, project)
 	child, err := store.CreateSubagentSession(t.Context(), project, root.ID, root.ID, "general", "model", "")
 	require.NoError(t, err)
-	_, err = db.ExecContext(
-		t.Context(),
-		`UPDATE sessions SET attributes = '{"manager_id":"owner"}' WHERE id = ?`,
-		child,
-	)
-	require.NoError(t, err)
-	ownerless, err := store.CreateSession(t.Context(), project, "model", "", nil)
-	require.NoError(t, err)
-	for _, id := range []int64{child, ownerless.ID} {
+	ownerless := sessionstoretest.BareRoot(t, store.db, project, "model", "", nil)
+	for _, id := range []int64{child, ownerless} {
 		_, err = store.Enqueue(t.Context(), Input{SessionID: id, Source: InputSourceUser, Content: "no title"})
 		require.NoError(t, err)
-		assertSessionTitle(t, store, id, "")
 	}
+	assertSessionTitle(t, store, child, "")
+	assertSessionTitle(t, store, ownerless, "no title")
 	_, err = store.Enqueue(t.Context(), Input{SessionID: root.ID, Source: InputSourceSchedule, Content: "scheduled"})
 	require.NoError(t, err)
 	assertSessionTitle(t, store, root.ID, "")
@@ -84,7 +80,7 @@ func TestSessionTitle_CreateAndClear(t *testing.T) {
 	t.Parallel()
 	store, _, project := newTestStore(t)
 	for _, title := range []string{"", "chosen"} {
-		attrs := map[string]any{"manager_id": "owner"}
+		attrs := map[string]any{}
 		if title != "" {
 			attrs[TitleAttribute] = title
 		}
@@ -113,7 +109,6 @@ func TestSessionTitle_CreateAndClear(t *testing.T) {
 		)
 		require.NoError(t, err)
 		assert.NotContains(t, replacement.Attributes, TitleAttribute)
-		assert.Equal(t, "owner", replacement.Attributes["manager_id"])
 		assertSessionTitle(t, store, replacement.ID, "")
 		_, err = store.Enqueue(
 			t.Context(),
@@ -127,13 +122,15 @@ func TestSessionTitle_CreateAndClear(t *testing.T) {
 func TestSessionTitle_RenameAuthorityAndOrder(t *testing.T) {
 	t.Parallel()
 	store, _, project := newTestStore(t)
-	root := chatTestRoot(t, store, project, "owner")
+	id := sessionstoretest.BareRoot(t, store.db, project, "model", "", map[string]any{"channel": "telegram"})
+	root, err := store.GetSession(t.Context(), id)
+	require.NoError(t, err)
 	require.NoError(t, store.SetSessionTitle(t.Context(), root.ID, " chosen "))
 	assertSessionTitle(t, store, root.ID, "chosen")
 	updated, err := store.GetSession(t.Context(), root.ID)
 	require.NoError(t, err)
 	assert.Equal(t, root.UpdatedAt, updated.UpdatedAt)
-	assert.Equal(t, "owner", updated.Attributes["manager_id"])
+	assert.Equal(t, "telegram", updated.Attributes["channel"])
 	for _, raw := range []string{"", strings.Repeat("界", 81), "two\nlines", "two\rlines"} {
 		require.EqualError(
 			t,

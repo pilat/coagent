@@ -8,6 +8,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/pilat/coagent/internal/sessionstore/sessionstoretest"
 )
 
 func TestLatestActivityByProject(t *testing.T) {
@@ -19,14 +21,13 @@ func TestLatestActivityByProject(t *testing.T) {
 	pid3 := insertProject(t, db, "/tmp/p3", "p3") // no sessions
 
 	add := func(p int64, ts time.Time, killed bool) {
-		rec, err := store.CreateSession(ctx, p, "m", "", nil)
-		require.NoError(t, err)
+		rec := sessionstoretest.BareRoot(t, store.db, p, "m", "", nil)
 
 		var execErr error
 		if killed {
-			_, execErr = db.ExecContext(ctx, `UPDATE sessions SET updated_at=?, killed_at=? WHERE id=?`, ts, ts, rec.ID)
+			_, execErr = db.ExecContext(ctx, `UPDATE sessions SET updated_at=?, killed_at=? WHERE id=?`, ts, ts, rec)
 		} else {
-			_, execErr = db.ExecContext(ctx, `UPDATE sessions SET updated_at=? WHERE id=?`, ts, rec.ID)
+			_, execErr = db.ExecContext(ctx, `UPDATE sessions SET updated_at=? WHERE id=?`, ts, rec)
 		}
 
 		require.NoError(t, execErr)

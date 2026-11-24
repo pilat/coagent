@@ -23,7 +23,7 @@ func TestSpawnedByCopiesAcrossClear(t *testing.T) {
 	assert.Equal(t, caller, controllerapi.SpawnedBy(h.session(spawned).Attributes))
 	replacement := clearReadTarget(t, h, spawned)
 	assert.Equal(t, caller, controllerapi.SpawnedBy(h.session(replacement).Attributes))
-	human := h.createRoot(managerAttrs("owner"))
+	human := h.createRoot(nil)
 	assert.Zero(t, controllerapi.SpawnedBy(h.session(human).Attributes))
 	humanReplacement := clearReadTarget(t, h, human)
 	assert.Zero(t, controllerapi.SpawnedBy(h.session(humanReplacement).Attributes))

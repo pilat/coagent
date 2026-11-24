@@ -49,8 +49,6 @@ func (s *service) createSession(
 		data.Attributes = make(map[string]any)
 	}
 
-	data.Attributes[controllerapi.SessionAttributeManagerID] = managerID
-
 	sessionID, err := s.backend.CreateSession(
 		ctx,
 		projectID,
@@ -80,7 +78,7 @@ func (s *service) sendSessionMessage(
 		return err
 	}
 
-	if _, err := s.managerRoot(ctx, data.SessionID); err != nil {
+	if _, err := s.requireRoot(ctx, data.SessionID); err != nil {
 		return err
 	}
 
@@ -111,7 +109,7 @@ func (s *service) listSessions(
 
 	infos := make([]controllerapi.SessionInfo, 0, len(records))
 	for _, record := range records {
-		if record.ParentID != 0 || !controllerapi.ManagerRoot(record.Attributes) {
+		if record.ParentID != 0 {
 			continue
 		}
 
@@ -138,7 +136,7 @@ func (s *service) setSessionModel(
 		return err
 	}
 
-	if _, err := s.managerRoot(ctx, data.SessionID); err != nil {
+	if _, err := s.requireRoot(ctx, data.SessionID); err != nil {
 		return err
 	}
 
@@ -154,7 +152,7 @@ func (s *service) subscribe(managerID string) <-chan controllerapi.SessionNotifi
 		return make(chan controllerapi.SessionNotification)
 	}
 
-	return s.bus.SubscribeManagerRoots()
+	return s.bus.SubscribeRoots()
 }
 
 func (s *service) publishInputReceived(sessionID int64, message, source string) {

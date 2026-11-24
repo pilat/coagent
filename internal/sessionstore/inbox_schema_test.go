@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/pilat/coagent/internal/sessionstore"
+	"github.com/pilat/coagent/internal/sessionstore/sessionstoretest"
 	"github.com/pilat/coagent/internal/subagent"
 	"github.com/pilat/coagent/internal/transcript"
 )
@@ -19,9 +20,8 @@ func TestSessionInboxSchema_ResolutionTruthTable(t *testing.T) {
 
 	ctx := context.Background()
 	store, db, projectID := newTestStore(t)
-	rec, err := store.CreateSession(ctx, projectID, "model", "", nil)
-	require.NoError(t, err)
-	messageID, err := appendMessage(ctx, store, rec.ID, &transcript.Message{Role: "user", Content: "accepted"})
+	rec := sessionstoretest.BareRoot(t, sDB(store), projectID, "model", "", nil)
+	messageID, err := appendMessage(ctx, store, rec, &transcript.Message{Role: "user", Content: "accepted"})
 	require.NoError(t, err)
 	now := time.Now().UTC()
 
@@ -64,7 +64,7 @@ func TestSessionInboxSchema_ResolutionTruthTable(t *testing.T) {
 				INSERT INTO session_inbox
 					(session_id, source, raw_content, received_at, state, resolved_at, resolution_reason, accepted_message_id)
 				VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-				rec.ID, tt.source, tt.content, now, tt.state, tt.resolved, tt.reason, tt.messageID,
+				rec, tt.source, tt.content, now, tt.state, tt.resolved, tt.reason, tt.messageID,
 			)
 			if tt.wantErr {
 				require.Error(t, err)
@@ -80,8 +80,7 @@ func TestSessionInboxSchema_PendingIndex(t *testing.T) {
 
 	ctx := context.Background()
 	store, db, projectID := newTestStore(t)
-	_, err := store.CreateSession(ctx, projectID, "model", "", nil)
-	require.NoError(t, err)
+	sessionstoretest.BareRoot(t, sDB(store), projectID, "model", "", nil)
 
 	var indexSQL sql.NullString
 	require.NoError(t, db.QueryRowContext(ctx, `
@@ -113,17 +112,16 @@ func TestSessionOutboxSchema_SessionTailIndex(t *testing.T) {
 
 	ctx := context.Background()
 	store, db, projectID := newTestStore(t)
-	record, err := store.CreateSession(ctx, projectID, "model", "", map[string]any{"manager_id": "telegram"})
-	require.NoError(t, err)
-	_, err = store.EnqueueOutput(ctx, sessionstore.OutputDraft{
-		SessionID: record.ID, Type: sessionstore.OutputMessage, Content: "logged",
+	record := sessionstoretest.BareRoot(t, sDB(store), projectID, "model", "", map[string]any{})
+	_, err := store.EnqueueOutput(ctx, sessionstore.OutputDraft{
+		SessionID: record, Type: sessionstore.OutputMessage, Content: "logged",
 	})
 	require.NoError(t, err)
 
 	rows, err := db.QueryContext(ctx, `EXPLAIN QUERY PLAN
 		SELECT id FROM session_outbox
 		WHERE session_id = ? AND id > ?
-		ORDER BY id LIMIT 100`, record.ID, 0)
+		ORDER BY id LIMIT 100`, record, 0)
 	require.NoError(t, err)
 	defer rows.Close()
 
@@ -147,10 +145,9 @@ func TestSubagentLinkSchema_ActivationSequenceStartsAtOne(t *testing.T) {
 
 	ctx := context.Background()
 	store, db, projectID := newTestStore(t)
-	parent, err := store.CreateSession(ctx, projectID, "model", "", nil)
-	require.NoError(t, err)
+	parent := sessionstoretest.BareRoot(t, sDB(store), projectID, "model", "", nil)
 	childID, err := subagent.NewStore(db, store).Create(ctx, subagent.Create{
-		ProjectID: projectID, ParentID: parent.ID, RootID: parent.ID,
+		ProjectID: projectID, ParentID: parent, RootID: parent,
 		Model: "model", TaskCallID: "task-1", State: "spawned",
 	})
 	require.NoError(t, err)

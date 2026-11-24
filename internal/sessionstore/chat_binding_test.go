@@ -11,7 +11,7 @@ import (
 func TestBindChat_PreservesSelection(t *testing.T) {
 	t.Parallel()
 	store, db, project := newTestStore(t)
-	root := chatTestRoot(t, store, project, "owner")
+	root := chatTestRoot(t, store, project)
 	for range 2 {
 		require.NoError(t, store.BindChat(t.Context(), "owner", "chat"))
 	}

@@ -19,7 +19,6 @@ import (
 
 	"github.com/pilat/coagent/internal/backgroundprocess"
 	"github.com/pilat/coagent/internal/configapply"
-	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/llm/llmtest"
 	"github.com/pilat/coagent/internal/llmwire"
 	agentregistry "github.com/pilat/coagent/internal/registry"
@@ -78,7 +77,7 @@ func TestHarnessScenario_ActiveProcessPromptAndSleepGuard(t *testing.T) {
 	collector := collectEvents(t, h.mgr.bus.SubscribeAll())
 	defer collector.stop()
 	var err error
-	root := h.createRoot(managerAttrs(scenarioManagerID))
+	root := h.createRoot(nil)
 	now := time.Now().UTC()
 	require.NoError(t, h.mgr.processStore.InsertProcess(context.Background(), backgroundprocess.Process{
 		ID: "bgp_prompt_guard", SessionID: root, RootSessionID: root,
@@ -236,8 +235,7 @@ func TestHarnessScenario_HelpIncludesGWT(t *testing.T) {
 	}})
 	collector := h.collect()
 	sessionID := h.send("open session", map[string]any{
-		controllerapi.SessionAttributeManagerID: scenarioManagerID,
-		"channel":                               "telegram",
+		"channel": "telegram",
 	})
 	collector.waitMessage(sessionID, "session ready")
 	h.waitAnswer(sessionID, "")
@@ -325,7 +323,7 @@ func assertInitialRegistryProjection(
 		assert.Contains(t, firstSchemas, id, "root activation must expose daemon-registered %q", id)
 	}
 	for _, id := range configToolsForPromptScenario() {
-		assert.NotContains(t, firstSchemas, id)
+		assert.Contains(t, firstSchemas, id)
 	}
 	assert.NotContains(t, firstSchemas, "mcp__fake__ping")
 	firstPrompt := prompts.first(t, strconv.FormatInt(parentID, 10))
@@ -354,7 +352,7 @@ func assertNextRegistryProjection(
 	assert.Contains(t, lastSchemas, "mcp__fake__ping")
 	assert.Contains(t, lastSchemas, tool.IDTask)
 	for _, id := range configToolsForPromptScenario() {
-		assert.NotContains(t, lastSchemas, id)
+		assert.Contains(t, lastSchemas, id)
 	}
 	assert.Contains(t, toolResultForCallID(h.messages(parentID), "ping-next-activation").Content, "pong from registry")
 	lastPrompt := prompts.last(t, strconv.FormatInt(parentID, 10))

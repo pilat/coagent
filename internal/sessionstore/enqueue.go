@@ -63,10 +63,9 @@ func EnqueueTx(ctx context.Context, tx *sql.Tx, in Input) (*Enqueued, error) {
 	var parentID int64
 	var status SessionStatus
 	var killed sql.NullTime
-	var attrs string
 
-	err := tx.QueryRowContext(ctx, `SELECT parent_id,status,killed_at,attributes FROM sessions WHERE id = ?`, in.SessionID).
-		Scan(&parentID, &status, &killed, &attrs)
+	err := tx.QueryRowContext(ctx, `SELECT parent_id,status,killed_at FROM sessions WHERE id = ?`, in.SessionID).
+		Scan(&parentID, &status, &killed)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrSessionNotAcceptingInput
 	}
@@ -95,7 +94,7 @@ func EnqueueTx(ctx context.Context, tx *sql.Tx, in Input) (*Enqueued, error) {
 
 	now := time.Now().UTC()
 
-	attributes, err := prepareEnqueueAttributesTx(ctx, tx, in, parentID, attrs, now)
+	attributes, err := prepareEnqueueAttributesTx(ctx, tx, in, parentID, now)
 	if err != nil {
 		return nil, err
 	}
@@ -388,17 +387,13 @@ func prepareEnqueueAttributesTx(
 	tx *sql.Tx,
 	in Input,
 	parentID int64,
-	raw string,
 	at time.Time,
 ) (map[string]any, error) {
 	attributes := cloneAttributes(in.Attributes)
 
-	owner, _ := unmarshalAttributes(raw)[managerIDAttribute].(string)
-	if in.Source != InputSourceUser || owner == "" {
+	if in.Source != InputSourceUser || parentID != 0 {
 		return attributes, nil
 	}
-
-	attributes[managerIDAttribute] = owner
 
 	if title := TitleFromInput(in.Content); title != "" {
 		if _, err := tx.ExecContext(ctx, `UPDATE sessions

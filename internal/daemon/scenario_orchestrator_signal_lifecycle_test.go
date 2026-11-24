@@ -16,7 +16,7 @@ func TestOrchestratorSignalOneUnreadUntilRead(t *testing.T) {
 	h := newHarness(t, harnessOptions{respond: trivialRespond})
 	h.startInboxWake()
 	watcher := modeRoot(t, h)
-	target := h.createRoot(managerAttrs("owner"))
+	target := h.createRoot(nil)
 	host := orchestratorHost{s: h.mgr}
 	_, _, err := host.Subscribe(h.ctx, watcher, target)
 	require.NoError(t, err)
@@ -37,7 +37,7 @@ func TestOrchestratorSignalRespectsWatcherStop(t *testing.T) {
 	h := newHarness(t, harnessOptions{respond: trivialRespond})
 	h.startInboxWake()
 	watcher := modeRoot(t, h)
-	target := h.createRoot(managerAttrs("owner"))
+	target := h.createRoot(nil)
 	h.say(watcher, "/stop")
 	h.waitUntil(
 		"watcher stopped",
@@ -93,7 +93,7 @@ func TestOrchestratorSignalStopsWhenModeOff(t *testing.T) {
 			defer closeOnce(release)
 			h.startInboxWake()
 			watcher := modeRoot(t, h)
-			target := h.createRoot(managerAttrs("owner"))
+			target := h.createRoot(nil)
 			host := orchestratorHost{s: h.mgr}
 			if standing {
 				_, _, err := host.Subscribe(h.ctx, watcher, target)
@@ -131,7 +131,7 @@ func TestOrchestratorSignalSurvivesRestart(t *testing.T) {
 		defer closeOnce(release)
 		h.startInboxWake()
 		watcher := modeRoot(t, h)
-		target := h.createRoot(managerAttrs("owner"))
+		target := h.createRoot(nil)
 		_, _, err := (orchestratorHost{s: h.mgr}).SendToSession(h.ctx, watcher, target, "blocked work")
 		require.NoError(t, err)
 		h.waitUntil("target entered", func() bool { return hasUserContaining(h.messages(target), "blocked work") })
@@ -144,7 +144,7 @@ func TestOrchestratorSignalSurvivesRestart(t *testing.T) {
 		h := newHarness(t, harnessOptions{respond: trivialRespond})
 		h.startInboxWake()
 		watcher := modeRoot(t, h)
-		target := h.createRoot(managerAttrs("owner"))
+		target := h.createRoot(nil)
 		h.say(watcher, "/stop")
 		h.waitUntil("stopped", func() bool { return h.session(watcher).Status == sessionstore.SessionStatusStopped })
 		_, _, err := (orchestratorHost{s: h.mgr}).SendToSession(h.ctx, watcher, target, "work")
@@ -162,7 +162,7 @@ func TestOrchestratorClearedWatcherGoesInert(t *testing.T) {
 	h := newHarness(t, harnessOptions{respond: trivialRespond})
 	h.startInboxWake()
 	watcher := modeRoot(t, h)
-	target := h.createRoot(managerAttrs("owner"))
+	target := h.createRoot(nil)
 	_, _, err := (orchestratorHost{s: h.mgr}).Subscribe(h.ctx, watcher, target)
 	require.NoError(t, err)
 	replacement := clearReadTarget(t, h, watcher)

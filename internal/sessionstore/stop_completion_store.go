@@ -64,7 +64,7 @@ func (s *Store) CompleteExplicitStop(
 		return nil, fmt.Errorf("%w: session %d", ErrStopNotStopping, rootID)
 	}
 
-	if _, err := outputOwner(ctx, tx, rootID); err != nil {
+	if err := requireOutputRoot(ctx, tx, rootID); err != nil {
 		return nil, err
 	}
 

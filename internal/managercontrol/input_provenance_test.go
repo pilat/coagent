@@ -19,7 +19,7 @@ type inputBackend struct {
 
 func TestManagerInputAttributesRemainSessionOnly(t *testing.T) {
 	t.Parallel()
-	_, store, project := newChatControl(t)
+	_, store, project, _ := newChatControl(t)
 	backend := &inputBackend{store: store}
 	service := &service{backend: backend, store: store}
 	workDir, err := store.GetProjectWorkDir(t.Context(), project)
@@ -37,7 +37,7 @@ func TestManagerInputAttributesRemainSessionOnly(t *testing.T) {
 	require.Len(t, inputs, 2)
 	for _, in := range inputs {
 		assert.NotContains(t, in.Attributes, "injected")
-		assert.Equal(t, "owner", in.Attributes["manager_id"])
+		assert.NotContains(t, in.Attributes, "manager_id")
 	}
 }
 

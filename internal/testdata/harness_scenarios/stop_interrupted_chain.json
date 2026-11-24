@@ -22,8 +22,5 @@
       "content": "⏸️ Session stopped\nCancelled background processes: 0",
       "source_key": "input:1:stop:completed"
     }
-  ],
-  "owners": {
-    "1": "telegram:main"
-  }
+  ]
 }

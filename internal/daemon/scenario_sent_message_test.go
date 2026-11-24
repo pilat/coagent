@@ -21,7 +21,7 @@ func TestHarnessScenario_SentMessageWakesStoppedRootAtRuntime(t *testing.T) {
 		return textReply("ok")
 	}})
 	h.startInboxWake()
-	id := h.send("init", managerAttrs("telegram-main"))
+	id := h.send("init", nil)
 	h.waitAnswer(id, "ok")
 	h.say(id, "/stop")
 	h.waitUntil("stopped", func() bool { return h.session(id).Status == sessionstore.SessionStatusStopped })
@@ -40,7 +40,7 @@ func TestCommandOnlyStoppedRootRequiresHumanSource(t *testing.T) {
 		calls.Add(1)
 		return textReply("must stay parked")
 	}})
-	id := h.createRoot(managerAttrs("owner"))
+	id := h.createRoot(nil)
 	limit := 1.0
 	armed, err := h.store.Arm(
 		h.ctx,

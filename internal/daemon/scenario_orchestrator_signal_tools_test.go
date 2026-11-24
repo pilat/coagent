@@ -16,9 +16,9 @@ func TestOrchestratorSubscribeRefusals(t *testing.T) {
 	h := newHarness(t, harnessOptions{respond: trivialRespond})
 	h.startInboxWake()
 	watcher, target := modeRoot(t, h), modeRoot(t, h)
-	foreign := h.createUnlinkedChild(h.createRoot(managerAttrs("other")))
+	foreign := h.createUnlinkedChild(h.createRoot(nil))
 	child := h.createChild(watcher, subagent.Link{TaskCallID: "subscribe-child"})
-	killed := h.createRoot(managerAttrs("owner"))
+	killed := h.createRoot(nil)
 	h.say(killed, "/kill")
 	h.waitUntil("killed", func() bool { return h.session(killed).KilledAt != nil })
 	host := orchestratorHost{s: h.mgr}
@@ -76,9 +76,9 @@ func TestOrchestratorListShowsWatchState(t *testing.T) {
 	defer closeOnce(release)
 	h.startInboxWake()
 	watcher := modeRoot(t, h)
-	standing := h.createRoot(managerAttrs("owner"))
-	awaiting := h.createRoot(managerAttrs("owner"))
-	unread := h.createRoot(managerAttrs("owner"))
+	standing := h.createRoot(nil)
+	awaiting := h.createRoot(nil)
+	unread := h.createRoot(nil)
 	h.say(watcher, "/stop")
 	h.waitUntil(
 		"watcher stopped",

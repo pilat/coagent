@@ -58,7 +58,7 @@ func (s *Store) FireBudget(
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	_, err = outputOwner(ctx, tx, rootID)
+	err = requireOutputRoot(ctx, tx, rootID)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -125,7 +125,7 @@ func (s *Store) ObserveBudget(
 		content = assistantText + "\n\n" + content
 	}
 
-	_, err = outputOwner(ctx, tx, rootID)
+	err = requireOutputRoot(ctx, tx, rootID)
 	if err != nil {
 		return nil, false, err
 	}

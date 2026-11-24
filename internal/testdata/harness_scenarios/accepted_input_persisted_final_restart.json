@@ -4,7 +4,10 @@
     {
       "type": "session_created",
       "name": "<name>",
-      "work_dir": "<workdir>"
+      "work_dir": "<workdir>",
+      "attributes": {
+        "title": "answered before crash"
+      }
     },
     {
       "type": "state_changed",

@@ -2,6 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-10-29
+- **Amended by:** [ADR-0107](0107-every-root-is-a-root.md)
 - **Supersedes:** [ADR-0028](0028-telegram-manager-owns-one-forum-target.md),
   [ADR-0035](0035-model-input-generations-delimit-replaceable-output.md),
   [ADR-0060](0060-telegram-service-topics-own-daemon-management.md)

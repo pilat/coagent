@@ -30,11 +30,6 @@ func createManagerRootTx(
 	tx *sql.Tx,
 	create ManagerRootCreate,
 ) (*SessionRecord, *OutputCommit, error) {
-	err := requireManagerOwner(create.Attributes)
-	if err != nil {
-		return nil, nil, err
-	}
-
 	if create.ProjectID <= 0 || create.Name == "" || create.WorkDir == "" {
 		return nil, nil, errors.New("manager root requires project, name, and work dir")
 	}
@@ -184,10 +179,6 @@ func loadReplacementRoot(ctx context.Context, tx *sql.Tx, sessionID int64) (*Ses
 		return nil, fmt.Errorf("load replacement root: %w", err)
 	}
 
-	if err := requireManagerOwner(record.Attributes); err != nil {
-		return nil, err
-	}
-
 	if record.ParentID != 0 || record.KilledAt != nil || record.Status == SessionStatusTerminating ||
 		record.Status == SessionStatusKilled {
 		return nil, errors.New("session cannot be replaced")
@@ -229,21 +220,16 @@ func replaceChatTx(ctx context.Context, tx *sql.Tx, oldID, newID, inputID int64,
 	return nil
 }
 
-func requireManagerOwner(attrs map[string]any) error {
-	owner, _ := attrs[managerIDAttribute].(string)
-	if owner == "" {
-		return ErrOutputOwner
-	}
-
-	return nil
-}
-
 func insertManagerRoot(
 	ctx context.Context,
 	tx *sql.Tx,
 	create ManagerRootCreate,
 	now time.Time,
 ) (*SessionRecord, error) {
+	if create.Attributes == nil {
+		create.Attributes = map[string]any{}
+	}
+
 	attrs, err := json.Marshal(create.Attributes)
 	if err != nil {
 		return nil, fmt.Errorf("marshal manager root attributes: %w", err)

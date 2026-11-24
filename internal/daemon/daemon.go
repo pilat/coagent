@@ -84,7 +84,7 @@ func New(
 		bus:       pubsub,
 		progress:  progressSvc,
 		trees:     &treeLocks{},
-		routes:    &routes{child: make(map[int64]bool), managerRoot: make(map[int64]bool)},
+		routes:    &routes{child: make(map[int64]bool)},
 		life:      newLifetime(),
 		models:    newModels(cfg),
 		browser:   sessionbuild.BrowserSettings(cfg.UnifiedConfig),

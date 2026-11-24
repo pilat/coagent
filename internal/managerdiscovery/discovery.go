@@ -44,7 +44,7 @@ func (s *Service) ListSkills(
 		return nil, fmt.Errorf("session %d not found", data.SessionID)
 	}
 
-	if record.ParentID != 0 || !controllerapi.ManagerRoot(record.Attributes) {
+	if record.ParentID != 0 {
 		return nil, fmt.Errorf("session %d is not a root session", data.SessionID)
 	}
 

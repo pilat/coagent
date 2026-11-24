@@ -163,10 +163,6 @@ func (h orchestratorHost) caller(ctx context.Context, id int64) (*sessionstore.S
 		return nil, errors.New("orchestrator mode is off for this session")
 	}
 
-	if !controllerapi.ManagerRoot(record.Attributes) {
-		return nil, errors.New("orchestrator mode is off for this session")
-	}
-
 	if !controllerapi.OrchestratorMode(record.Attributes) {
 		return nil, errors.New("orchestrator mode is off for this session")
 	}
@@ -182,10 +178,6 @@ func (h orchestratorHost) rootTarget(ctx context.Context, id int64) error {
 
 	if record.ParentID != 0 {
 		return fmt.Errorf("session #%d is a subagent, not a root session", id)
-	}
-
-	if !controllerapi.ManagerRoot(record.Attributes) {
-		return fmt.Errorf("session #%d not found", id)
 	}
 
 	return nil

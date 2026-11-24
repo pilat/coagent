@@ -11,7 +11,7 @@ func TestChatOutputs_DisplayNameSurvivesKill(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
 	store, _, project := newTestStore(t)
-	root := chatTestRoot(t, store, project, "owner")
+	root := chatTestRoot(t, store, project)
 	chatTestOutput(t, store, root.ID, "answer")
 	for _, title := range []string{"", "chosen title"} {
 		if title != "" {

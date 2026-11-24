@@ -21,6 +21,7 @@ import (
 	"github.com/pilat/coagent/internal/loader"
 	"github.com/pilat/coagent/internal/migrate"
 	"github.com/pilat/coagent/internal/sessionstore"
+	"github.com/pilat/coagent/internal/sessionstore/sessionstoretest"
 	"github.com/pilat/coagent/internal/todo"
 	"github.com/pilat/coagent/internal/tool/builtin"
 )
@@ -55,13 +56,12 @@ func TestImageTurns_ReadThroughDriverProjection(t *testing.T) {
 	projectID, err := res.LastInsertId()
 	require.NoError(t, err)
 	store := sessionstore.NewStore(db)
-	sess, err := store.CreateSession(ctx, projectID, "model", "", nil)
-	require.NoError(t, err)
+	sess := sessionstoretest.BareRoot(t, db, projectID, "model", "", nil)
 
 	s := newTestAgent()
-	s.id, s.rootID, s.store = sess.ID, sess.ID, store
+	s.id, s.rootID, s.store = sess, sess, store
 	s.registry = stack.Registry
-	s.ms = newMessageStore(store, sess.ID)
+	s.ms = newMessageStore(store, sess)
 
 	// The synthetic upload turn is plain text everywhere — no refs exist yet.
 	require.NoError(t, appendTestUser(ctx, s.ms,

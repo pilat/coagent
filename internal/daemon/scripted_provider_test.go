@@ -462,7 +462,6 @@ type harnessTraceFile struct {
 	SourceTest string               `json:"source_test"`
 	Trace      []harnessTraceEvent  `json:"trace"`
 	Outputs    []harnessTraceOutput `json:"outputs"`
-	Owners     map[int64]string     `json:"owners,omitempty"`
 }
 
 type harnessTraceOutput struct {
@@ -491,30 +490,24 @@ type harnessTraceWait struct {
 	Wake  string `json:"wake,omitempty"`
 }
 
-func scenarioOutputs(t *testing.T, h *harness) ([]harnessTraceOutput, map[int64]string) {
+func scenarioOutputs(t *testing.T, h *harness) []harnessTraceOutput {
 	t.Helper()
-	rows, err := h.db.QueryContext(t.Context(), `SELECT id, session_id, type, content, COALESCE(source_key, ''),
-		COALESCE(json_extract(attributes, '$.manager_id'), '') FROM session_outbox ORDER BY id`)
+	rows, err := h.db.QueryContext(t.Context(), `SELECT id, session_id, type, content, COALESCE(source_key, '')
+		FROM session_outbox ORDER BY id`)
 	require.NoError(t, err)
 	defer rows.Close()
 	outputs := make([]harnessTraceOutput, 0)
-	owners := make(map[int64]string)
 	for rows.Next() {
 		var output harnessTraceOutput
-		var owner string
 		require.NoError(
 			t,
-			rows.Scan(&output.ID, &output.SessionID, &output.Type, &output.Content, &output.SourceKey, &owner),
+			rows.Scan(&output.ID, &output.SessionID, &output.Type, &output.Content, &output.SourceKey),
 		)
 		output.Content = elapsedPattern.ReplaceAllString(output.Content, "⌚ <elapsed>")
 		outputs = append(outputs, output)
-		owners[output.SessionID] = owner
 	}
 	require.NoError(t, rows.Err())
-	if len(owners) == 0 {
-		owners = nil
-	}
-	return outputs, owners
+	return outputs
 }
 
 func assertHarnessTrace(
@@ -537,7 +530,7 @@ func assertHarnessTraceForScenario(
 ) {
 	t.Helper()
 	got := harnessTraceFile{SourceTest: sourceTest, Trace: normalizeHarnessTrace(t, events, sessionID)}
-	got.Outputs, got.Owners = scenarioOutputs(t, h)
+	got.Outputs = scenarioOutputs(t, h)
 	path := harnessTracePath(name)
 	if *updateHarnessTraces {
 		writeHarnessTrace(t, path, got)
@@ -547,7 +540,6 @@ func assertHarnessTraceForScenario(
 	assert.Equal(t, want.SourceTest, got.SourceTest, "golden %s belongs to another scenario", name)
 	assert.Equal(t, want.Trace, got.Trace, "controller-visible notification trace")
 	assert.Equal(t, want.Outputs, got.Outputs, "ordered durable output log")
-	assert.Equal(t, want.Owners, got.Owners, "durable output ownership")
 }
 
 // Daemon and manager tests must consume the same trace artifacts to prevent contract drift.

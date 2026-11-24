@@ -14,7 +14,7 @@ func TestEnqueueBudgetCheckpointRequiresHumanInput(t *testing.T) {
 		t.Run(kind, func(t *testing.T) {
 			t.Parallel()
 			store, _, project := newTestStore(t)
-			root := chatTestRoot(t, store, project, "owner")
+			root := chatTestRoot(t, store, project)
 			mutation := targetedBudgetMutation(t, store, root.ID, root.ID, "arm")
 			armed, err := store.Arm(t.Context(), mutation)
 			require.NoError(t, err)

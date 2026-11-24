@@ -70,8 +70,8 @@ func commitOutputsTx(ctx context.Context, tx *sql.Tx, c Commit, outputs []Output
 			target = c.SessionID
 		}
 
-		_, err := outputOwner(ctx, tx, target)
-		if errors.Is(err, ErrOutputOwner) || errors.Is(err, ErrOutputNotRoot) {
+		err := requireOutputRoot(ctx, tx, target)
+		if errors.Is(err, ErrOutputNotRoot) {
 			continue
 		}
 

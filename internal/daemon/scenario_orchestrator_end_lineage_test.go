@@ -16,8 +16,8 @@ import (
 func TestOrchestratorEndRefusals(t *testing.T) {
 	h := orchestratorProjectHarness(t)
 	caller, other := modeRoot(t, h), modeRoot(t, h)
-	human := h.createRoot(managerAttrs("owner"))
-	foreign := h.createRoot(managerAttrs("foreign"))
+	human := h.createRoot(nil)
+	foreign := h.createRoot(nil)
 	child := h.createUnlinkedChild(caller)
 	othersTarget := spawnEndTarget(t, h, other, "another orchestrator's work")
 	for _, tc := range []struct {
@@ -64,7 +64,7 @@ func TestOrchestratorEndFollowsLineage(t *testing.T) {
 	assert.Equal(t, replacement, ended.ID)
 	assert.True(t, ended.Changed)
 	assert.Equal(t, sessionstore.SessionStatusStopped, h.session(replacement).Status)
-	human := h.createRoot(managerAttrs("owner"))
+	human := h.createRoot(nil)
 	assertListedSpawned(t, h, caller, map[int64]bool{replacement: true, human: false})
 	child := spawnEndTarget(t, h, caller, "survives caller clear")
 	callerReplacement := clearReadTarget(t, h, caller)

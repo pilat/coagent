@@ -42,7 +42,7 @@ func TestHumanWorktreeIsCreatedByTheDaemonPath(t *testing.T) {
 		controllerapi.WorktreeOriginController,
 		record.Attributes[controllerapi.SessionAttributeWorktreeOrigin],
 	)
-	assert.Equal(t, "telegram", record.Attributes[controllerapi.SessionAttributeManagerID])
+	assert.NotContains(t, record.Attributes, "manager_id")
 	assert.Equal(t, "telegram", record.Attributes["channel"])
 	assert.Nil(t, record.KilledAt)
 	name, err := h.store.GetProjectName(h.ctx, record.ProjectID)
@@ -182,7 +182,7 @@ func TestRootCreationRefusalsStayExact(t *testing.T) {
 	}
 }
 
-func TestManagerRootFirstInputStartsTheEpisodeAsBefore(t *testing.T) {
+func TestRootFirstInputStartsTheEpisodeAsBefore(t *testing.T) {
 	for _, test := range []struct {
 		prompt  string
 		started bool
@@ -204,19 +204,18 @@ func TestManagerRootFirstInputStartsTheEpisodeAsBefore(t *testing.T) {
 			h := newHarness(t, harnessOptions{respond: trivialRespond, configure: func(cfg *config.Config) {
 				cfg.UnifiedConfig = &config.UnifiedConfig{ProjectsRoot: t.TempDir(), WorktreesRoot: worktrees}
 			}})
-			id, err := h.mgr.Send(h.ctx, h.projectID, test.prompt, "fake-model", managerAttrs("owner"))
+			id, err := h.mgr.Send(h.ctx, h.projectID, test.prompt, "fake-model", nil)
 			require.NoError(t, err)
 			var started bool
 			require.NoError(t, h.db.QueryRowContext(h.ctx,
 				"SELECT episode_started_at IS NOT NULL FROM sessions WHERE id = ?", id).Scan(&started))
 			assert.Equal(t, test.started, started)
-			var source, raw, owner string
+			var source, raw string
 			require.NoError(t, h.db.QueryRowContext(h.ctx, `
-				SELECT source, raw_content, json_extract(attributes,'$.manager_id') FROM session_inbox
-				WHERE session_id = ? ORDER BY id LIMIT 1`, id).Scan(&source, &raw, &owner))
+				SELECT source, raw_content FROM session_inbox
+				WHERE session_id = ? ORDER BY id LIMIT 1`, id).Scan(&source, &raw))
 			assert.Equal(t, "user", source)
 			assert.Equal(t, test.prompt, raw)
-			assert.Equal(t, "owner", owner)
 			if test.prompt == "fix login 500" {
 				assert.Equal(t, test.prompt, h.session(id).Attributes[controllerapi.SessionAttributeTitle])
 			} else if !test.started {

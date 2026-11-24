@@ -17,6 +17,7 @@ import (
 	"github.com/pilat/coagent/internal/migrate"
 	"github.com/pilat/coagent/internal/projectpath"
 	"github.com/pilat/coagent/internal/sessionstore"
+	"github.com/pilat/coagent/internal/sessionstore/sessionstoretest"
 )
 
 func newProjectTestManager(t *testing.T) (*sessionstore.Store, *sql.DB) {
@@ -199,14 +200,14 @@ func TestListRecentProjects_Ordering(t *testing.T) {
 	}
 
 	addSession := func(pid int64, updatedAt time.Time, killed bool) {
-		rec, err := store.CreateSession(ctx, pid, "m", "", nil)
-		require.NoError(t, err)
+		rec := sessionstoretest.BareRoot(t, db, pid, "m", "", nil)
 
+		var err error
 		if killed {
 			_, err = db.ExecContext(ctx,
-				`UPDATE sessions SET updated_at = ?, killed_at = ? WHERE id = ?`, updatedAt, updatedAt, rec.ID)
+				`UPDATE sessions SET updated_at = ?, killed_at = ? WHERE id = ?`, updatedAt, updatedAt, rec)
 		} else {
-			_, err = db.ExecContext(ctx, `UPDATE sessions SET updated_at = ? WHERE id = ?`, updatedAt, rec.ID)
+			_, err = db.ExecContext(ctx, `UPDATE sessions SET updated_at = ? WHERE id = ?`, updatedAt, rec)
 		}
 
 		require.NoError(t, err)

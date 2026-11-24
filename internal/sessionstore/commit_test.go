@@ -11,26 +11,23 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/pilat/coagent/internal/llmwire"
+	"github.com/pilat/coagent/internal/sessionstore/sessionstoretest"
 	"github.com/pilat/coagent/internal/transcript"
 )
 
 func TestCommit_Parts(t *testing.T) {
-	for _, name := range []string{"accept and receipt", "resolutions", "linked acceptance", "messages and retry", "tool result replay", "replace", "state", "candidate CAS", "outputs and replay", "unfired", "budget suppression", "budget hidden candidate", "budget rejected attempt", "rollback", "lifecycle fence", "ownerless output", "keyless outputs", "host keyless outputs", "reset context", "final content", "call pending"} {
+	for _, name := range []string{"accept and receipt", "resolutions", "linked acceptance", "messages and retry", "tool result replay", "replace", "state", "candidate CAS", "outputs and replay", "unfired", "budget suppression", "budget hidden candidate", "budget rejected attempt", "rollback", "lifecycle fence", "keyless outputs", "host keyless outputs", "reset context", "final content", "call pending"} {
 		t.Run(name, func(t *testing.T) {
 			ctx := t.Context()
 			store, db, projectID := newTestStore(t)
-			attrs := map[string]any{"manager_id": "mgr"}
-			if name == "ownerless output" {
-				attrs = nil
-			}
-			root, err := store.CreateSession(ctx, projectID, "model", "", attrs)
-			require.NoError(t, err)
-			step := Commit{SessionID: root.ID, At: time.Now().UTC()}
+			attrs := map[string]any{}
+			root := sessionstoretest.BareRoot(t, store.db, projectID, "model", "", attrs)
+			step := Commit{SessionID: root, At: time.Now().UTC()}
 			switch name {
 			case "accept and receipt":
 				input, enqueueErr := store.Enqueue(
 					ctx,
-					Input{SessionID: root.ID, Source: InputSourceUser, Content: "task"},
+					Input{SessionID: root, Source: InputSourceUser, Content: "task"},
 				)
 				require.NoError(t, enqueueErr)
 				step.Accept = []Accept{
@@ -54,17 +51,17 @@ func TestCommit_Parts(t *testing.T) {
 				var messages, outputs int
 				require.NoError(
 					t,
-					db.QueryRowContext(ctx, `SELECT COUNT(*) FROM messages WHERE session_id = ?`, root.ID).
+					db.QueryRowContext(ctx, `SELECT COUNT(*) FROM messages WHERE session_id = ?`, root).
 						Scan(&messages),
 				)
 				require.NoError(
 					t,
-					db.QueryRowContext(ctx, `SELECT COUNT(*) FROM session_outbox WHERE session_id = ?`, root.ID).
+					db.QueryRowContext(ctx, `SELECT COUNT(*) FROM session_outbox WHERE session_id = ?`, root).
 						Scan(&outputs),
 				)
 				assert.Equal(t, 1, messages)
 				assert.Equal(t, 1, outputs)
-				record, readErr := store.GetSession(ctx, root.ID)
+				record, readErr := store.GetSession(ctx, root)
 				require.NoError(t, readErr)
 				assert.Equal(t, int64(1), record.ModelInputGeneration)
 				return
@@ -72,7 +69,7 @@ func TestCommit_Parts(t *testing.T) {
 				for _, state := range []InputState{InputStateHandled, InputStateRejected, InputStateCancelled} {
 					input, enqueueErr := store.Enqueue(
 						ctx,
-						Input{SessionID: root.ID, Source: InputSourceUser, Content: "command"},
+						Input{SessionID: root, Source: InputSourceUser, Content: "command"},
 					)
 					require.NoError(t, enqueueErr)
 					step.Accept = append(
@@ -83,7 +80,7 @@ func TestCommit_Parts(t *testing.T) {
 			case "linked acceptance":
 				input, enqueueErr := store.Enqueue(
 					ctx,
-					Input{SessionID: root.ID, Source: InputSourceSchedule, Content: "scheduled", DeliveryKey: "tick"},
+					Input{SessionID: root, Source: InputSourceSchedule, Content: "scheduled", DeliveryKey: "tick"},
 				)
 				require.NoError(t, enqueueErr)
 				step.Messages = []*transcript.Message{
@@ -111,7 +108,7 @@ func TestCommit_Parts(t *testing.T) {
 				_, writeErr := store.Commit(
 					ctx,
 					Commit{
-						SessionID: root.ID,
+						SessionID: root,
 						Messages: []*transcript.Message{
 							{Role: "assistant", ToolCalls: commitToolCalls(t, "sleep-call", "sleep")},
 						},
@@ -119,16 +116,16 @@ func TestCommit_Parts(t *testing.T) {
 				)
 				require.NoError(t, writeErr)
 				store = testStore(db)
-				pending, pendingErr := store.CallPending(ctx, root.ID, "sleep-call")
+				pending, pendingErr := store.CallPending(ctx, root, "sleep-call")
 				require.NoError(t, pendingErr)
 				assert.True(t, pending)
-				pending, pendingErr = store.CallPending(ctx, root.ID, "wrong-call")
+				pending, pendingErr = store.CallPending(ctx, root, "wrong-call")
 				require.NoError(t, pendingErr)
 				assert.False(t, pending)
 				_, writeErr = store.Commit(
 					ctx,
 					Commit{
-						SessionID: root.ID,
+						SessionID: root,
 						ToolResults: []*transcript.Message{
 							{Role: "tool", ToolCallID: "sleep-call", ToolName: "sleep", Content: "awake"},
 						},
@@ -136,7 +133,7 @@ func TestCommit_Parts(t *testing.T) {
 				)
 				require.NoError(t, writeErr)
 				store = testStore(db)
-				pending, pendingErr = store.CallPending(ctx, root.ID, "sleep-call")
+				pending, pendingErr = store.CallPending(ctx, root, "sleep-call")
 				require.NoError(t, pendingErr)
 				assert.False(t, pending)
 				return
@@ -149,14 +146,14 @@ func TestCommit_Parts(t *testing.T) {
 				replay, replayErr := store.Commit(ctx, step)
 				require.NoError(t, replayErr)
 				assert.Equal(t, first.MessageIDs, replay.MessageIDs)
-				messages, readErr := store.LoadActiveMessages(ctx, root.ID)
+				messages, readErr := store.LoadActiveMessages(ctx, root)
 				require.NoError(t, readErr)
 				require.Len(t, messages, 1)
 				assert.True(t, messages[0].ToolError)
 				return
 			case "replace":
 				ids, insertErr := appendMessages(ctx, store,
-					root.ID,
+					root,
 					[]*transcript.Message{{Role: "user", Content: "task"}, {Role: "assistant", Content: "long work"}},
 				)
 				require.NoError(t, insertErr)
@@ -199,18 +196,19 @@ func TestCommit_Parts(t *testing.T) {
 				return
 			case "keyless outputs", "host keyless outputs":
 				for range 2 {
+					var err error
 					if name == "keyless outputs" {
 						_, err = store.Commit(
 							ctx,
 							Commit{
-								SessionID: root.ID,
+								SessionID: root,
 								Outputs:   []Output{{Type: OutputMessage, Content: "repeatable"}},
 							},
 						)
 					} else {
 						_, err = store.EnqueueOutput(
 							ctx,
-							OutputDraft{SessionID: root.ID, Type: OutputMessage, Content: "repeatable"},
+							OutputDraft{SessionID: root, Type: OutputMessage, Content: "repeatable"},
 						)
 					}
 					require.NoError(t, err)
@@ -218,7 +216,7 @@ func TestCommit_Parts(t *testing.T) {
 				var rows int
 				require.NoError(
 					t,
-					db.QueryRowContext(ctx, `SELECT COUNT(*) FROM session_outbox WHERE session_id=? AND source_key IS NULL`, root.ID).
+					db.QueryRowContext(ctx, `SELECT COUNT(*) FROM session_outbox WHERE session_id=? AND source_key IS NULL`, root).
 						Scan(&rows),
 				)
 				assert.Equal(t, 2, rows)
@@ -227,7 +225,7 @@ func TestCommit_Parts(t *testing.T) {
 				_, writeErr := store.Commit(
 					ctx,
 					Commit{
-						SessionID: root.ID,
+						SessionID: root,
 						Messages:  []*transcript.Message{{Role: "assistant", Content: "old context"}},
 						State: StatePatch{
 							ContextBaseline: &ContextBaseline{Model: "model", PromptTokens: 100, MessageCount: 1},
@@ -288,7 +286,7 @@ func TestCommit_Parts(t *testing.T) {
 					_, insertErr := db.ExecContext(
 						ctx,
 						`INSERT INTO session_budgets(root_session_id,state,generation,armed_at,baseline_cost_usd,cost_limit_usd) VALUES(?,'armed',1,?,0,.5)`,
-						root.ID,
+						root,
 						step.At,
 					)
 					require.NoError(t, insertErr)
@@ -300,13 +298,11 @@ func TestCommit_Parts(t *testing.T) {
 					{Type: OutputMessage, Content: "invalid ref", MessageRef: 99, Phase: "final"},
 				}
 			case "lifecycle fence":
-				require.NoError(t, store.UpdateSessionStatus(ctx, root.ID, SessionStatusStopping))
+				require.NoError(t, store.UpdateSessionStatus(ctx, root, SessionStatusStopping))
 				step.Messages = []*transcript.Message{{Role: "assistant", Content: "late answer"}}
 				_, commitErr := store.Commit(ctx, step)
 				require.ErrorIs(t, commitErr, ErrSessionStopping)
 				step.Mode = CommitLifecycle
-			case "ownerless output":
-				step.Outputs = []Output{{Type: OutputMessage, Content: "no manager"}}
 			}
 			result, commitErr := store.Commit(ctx, step)
 			if name == "rollback" {
@@ -314,18 +310,18 @@ func TestCommit_Parts(t *testing.T) {
 				var rows, iteration int
 				require.NoError(
 					t,
-					db.QueryRowContext(ctx, `SELECT COUNT(*) FROM messages WHERE session_id=?`, root.ID).Scan(&rows),
+					db.QueryRowContext(ctx, `SELECT COUNT(*) FROM messages WHERE session_id=?`, root).Scan(&rows),
 				)
 				require.NoError(
 					t,
-					db.QueryRowContext(ctx, `SELECT iteration FROM sessions WHERE id=?`, root.ID).Scan(&iteration),
+					db.QueryRowContext(ctx, `SELECT iteration FROM sessions WHERE id=?`, root).Scan(&iteration),
 				)
 				assert.Zero(t, rows)
 				assert.Zero(t, iteration)
 				return
 			}
 			require.NoError(t, commitErr)
-			messages, readErr := store.LoadActiveMessages(ctx, root.ID)
+			messages, readErr := store.LoadActiveMessages(ctx, root)
 			require.NoError(t, readErr)
 			switch name {
 			case "resolutions":
@@ -347,11 +343,11 @@ func TestCommit_Parts(t *testing.T) {
 				require.Len(t, result.MessageIDs, 2)
 				assert.Equal(t, result.MessageIDs[0]+1, messages[0].ID)
 				assert.Equal(t, result.MessageIDs[1], messages[0].ID)
-				assert.Equal(t, root.ID, messages[0].SessionID)
-				outstanding, recoveryErr := store.HasOutstandingResponseRecovery(ctx, root.ID)
+				assert.Equal(t, root, messages[0].SessionID)
+				outstanding, recoveryErr := store.HasOutstandingResponseRecovery(ctx, root)
 				require.NoError(t, recoveryErr)
 				assert.True(t, outstanding)
-				_, completion, cost, usageErr := store.GetSessionTreeUsage(ctx, root.ID)
+				_, completion, cost, usageErr := store.GetSessionTreeUsage(ctx, root)
 				require.NoError(t, usageErr)
 				assert.Equal(t, 4, completion)
 				assert.InDelta(t, .25, cost, .000001)
@@ -359,23 +355,23 @@ func TestCommit_Parts(t *testing.T) {
 				require.Len(t, messages, 1)
 				assert.Equal(t, "summary", messages[0].Content)
 			case "state":
-				record, getErr := store.GetSession(ctx, root.ID)
+				record, getErr := store.GetSession(ctx, root)
 				require.NoError(t, getErr)
 				assert.Equal(t, 3, record.Iteration)
 				assert.Equal(t, SessionStatusCompleted, record.Status)
 				assert.Equal(t, step.State.ContextBaseline, record.ContextBaseline())
-				_, getErr = store.Commit(ctx, Commit{SessionID: root.ID, State: StatePatch{ClearContextBaseline: true}})
+				_, getErr = store.Commit(ctx, Commit{SessionID: root, State: StatePatch{ClearContextBaseline: true}})
 				require.NoError(t, getErr)
-				record, getErr = store.GetSession(ctx, root.ID)
+				record, getErr = store.GetSession(ctx, root)
 				require.NoError(t, getErr)
 				assert.Nil(t, record.ContextBaseline())
 			case "reset context":
 				require.Len(t, messages, 1)
 				assert.Equal(t, "fresh opening", messages[0].Content)
-				record, getErr := store.GetSession(ctx, root.ID)
+				record, getErr := store.GetSession(ctx, root)
 				require.NoError(t, getErr)
 				assert.Nil(t, record.ContextBaseline())
-				check, checkErr := store.LoadCompletionCheckState(ctx, root.ID)
+				check, checkErr := store.LoadCompletionCheckState(ctx, root)
 				require.NoError(t, checkErr)
 				assert.Zero(t, check.EmptyStopStreak)
 			case "final content":
@@ -383,9 +379,9 @@ func TestCommit_Parts(t *testing.T) {
 				assert.Equal(t, "answer", result.Outputs[0].Content)
 			case "budget suppression", "unfired", "budget hidden candidate", "budget rejected attempt":
 				assert.Equal(t, name != "unfired", result.BudgetFired)
-				record, getErr := store.GetSession(ctx, root.ID)
+				record, getErr := store.GetSession(ctx, root)
 				require.NoError(t, getErr)
-				check, checkErr := store.LoadCompletionCheckState(ctx, root.ID)
+				check, checkErr := store.LoadCompletionCheckState(ctx, root)
 				require.NoError(t, checkErr)
 				assert.Equal(t, 3, check.EmptyStopStreak)
 				if name == "budget hidden candidate" || name == "budget rejected attempt" {
@@ -396,7 +392,7 @@ func TestCommit_Parts(t *testing.T) {
 					var cost float64
 					require.NoError(
 						t,
-						db.QueryRowContext(ctx, `SELECT COUNT(*) FILTER(WHERE cost_usd=.75),COUNT(*) FILTER(WHERE role='tool'),COUNT(*) FILTER(WHERE role='user' AND content=?),SUM(cost_usd) FROM messages WHERE session_id=?`, OutputLengthRecoveryPrompt, root.ID).
+						db.QueryRowContext(ctx, `SELECT COUNT(*) FILTER(WHERE cost_usd=.75),COUNT(*) FILTER(WHERE role='tool'),COUNT(*) FILTER(WHERE role='user' AND content=?),SUM(cost_usd) FROM messages WHERE session_id=?`, OutputLengthRecoveryPrompt, root).
 							Scan(&paidRows, &toolRows, &retryRows, &cost),
 					)
 					assert.Equal(t, 1, paidRows)
@@ -404,7 +400,7 @@ func TestCommit_Parts(t *testing.T) {
 					assert.Zero(t, retryRows)
 					assert.InDelta(t, .75, cost, .000001)
 					assert.Nil(t, check.CandidateID)
-					pending, pendingErr := store.CallPending(ctx, root.ID, "danger")
+					pending, pendingErr := store.CallPending(ctx, root, "danger")
 					require.NoError(t, pendingErr)
 					assert.False(t, pending)
 					return
@@ -413,7 +409,7 @@ func TestCommit_Parts(t *testing.T) {
 					assert.Zero(t, record.Iteration)
 					require.Len(t, messages, 2)
 					assert.Equal(t, budgetToolNotExecuted, messages[1].Content)
-					pending, pendingErr := store.CallPending(ctx, root.ID, "danger")
+					pending, pendingErr := store.CallPending(ctx, root, "danger")
 					require.NoError(t, pendingErr)
 					assert.False(t, pending)
 					require.Len(t, result.Outputs, 1)
@@ -426,12 +422,10 @@ func TestCommit_Parts(t *testing.T) {
 					assert.Contains(t, content, "checkpoint summary\n\nBudget checkpoint reached")
 				} else {
 					assert.Equal(t, 8, record.Iteration)
-					pending, pendingErr := store.CallPending(ctx, root.ID, "danger")
+					pending, pendingErr := store.CallPending(ctx, root, "danger")
 					require.NoError(t, pendingErr)
 					assert.True(t, pending)
 				}
-			case "ownerless output":
-				assert.Empty(t, result.Outputs)
 			}
 		})
 	}
@@ -442,13 +436,8 @@ func TestEnqueue_SourcesDedupAndWaking(t *testing.T) {
 		for _, status := range []SessionStatus{SessionStatusActive, SessionStatusStopping, SessionStatusTerminating, SessionStatusKilled} {
 			t.Run(fmt.Sprintf("%s/%s", source, status), func(t *testing.T) {
 				store, _, projectID := newTestStore(t)
-				root, err := store.CreateSession(
-					t.Context(),
-					projectID,
-					"model",
-					"",
-					map[string]any{"manager_id": "mgr"},
-				)
+				rootID := sessionstoretest.BareRoot(t, store.db, projectID, "model", "", map[string]any{})
+				root, err := store.GetSession(t.Context(), rootID)
 				require.NoError(t, err)
 				require.NoError(t, store.UpdateSessionStatus(t.Context(), root.ID, status))
 				input := Input{
@@ -485,7 +474,7 @@ func TestEnqueue_SourcesDedupAndWaking(t *testing.T) {
 				require.NoError(t, pendingErr)
 				require.Len(t, pending, 1)
 				if source == InputSourceUser {
-					assert.Equal(t, "mgr", pending[0].Attributes["manager_id"])
+					assert.NotContains(t, pending[0].Attributes, "manager_id")
 				}
 			})
 		}
@@ -493,12 +482,11 @@ func TestEnqueue_SourcesDedupAndWaking(t *testing.T) {
 	for _, name := range []string{"transaction commit", "transaction rollback", "unregistered transaction", "stopped schedule", "call result attributes", "invalid source", "stop preserves producers", "call result recovery"} {
 		t.Run(name, func(t *testing.T) {
 			store, db, projectID := newTestStore(t)
-			root, err := store.CreateSession(t.Context(), projectID, "model", "", nil)
-			require.NoError(t, err)
-			input := Input{SessionID: root.ID, Source: InputSourceSchedule, Content: "tick", DeliveryKey: "tick"}
+			root := sessionstoretest.BareRoot(t, store.db, projectID, "model", "", nil)
+			input := Input{SessionID: root, Source: InputSourceSchedule, Content: "tick", DeliveryKey: "tick"}
 			switch name {
 			case "transaction commit", "transaction rollback":
-				err = store.WithTx(t.Context(), func(tx *sql.Tx) error {
+				err := store.WithTx(t.Context(), func(tx *sql.Tx) error {
 					_, enqueueErr := EnqueueTx(t.Context(), tx, input)
 					require.NoError(t, enqueueErr)
 					assert.Empty(t, store.TakeWoken())
@@ -517,9 +505,9 @@ func TestEnqueue_SourcesDedupAndWaking(t *testing.T) {
 					assert.Empty(t, store.TakeWoken())
 				} else {
 					require.NoError(t, err)
-					assert.Equal(t, []int64{root.ID}, store.TakeWoken())
+					assert.Equal(t, []int64{root}, store.TakeWoken())
 				}
-				pending, readErr := store.ListPending(t.Context(), root.ID)
+				pending, readErr := store.ListPending(t.Context(), root)
 				require.NoError(t, readErr)
 				assert.Equal(t, name == "transaction commit", len(pending) == 1)
 				return
@@ -528,7 +516,7 @@ func TestEnqueue_SourcesDedupAndWaking(t *testing.T) {
 					_, enqueueErr := store.Enqueue(
 						t.Context(),
 						Input{
-							SessionID:  root.ID,
+							SessionID:  root,
 							Source:     source,
 							Content:    "input",
 							Attributes: map[string]any{"call_id": "sleep", "tool_id": "sleep"},
@@ -536,10 +524,10 @@ func TestEnqueue_SourcesDedupAndWaking(t *testing.T) {
 					)
 					require.NoError(t, enqueueErr)
 				}
-				cancelled, cancelErr := store.CancelPendingInputsForStop(t.Context(), []int64{root.ID}, "stopped")
+				cancelled, cancelErr := store.CancelPendingInputsForStop(t.Context(), []int64{root}, "stopped")
 				require.NoError(t, cancelErr)
 				assert.Equal(t, int64(3), cancelled)
-				pending, pendingErr := store.ListPending(t.Context(), root.ID)
+				pending, pendingErr := store.ListPending(t.Context(), root)
 				require.NoError(t, pendingErr)
 				require.Len(t, pending, 3)
 				assert.Equal(
@@ -550,7 +538,8 @@ func TestEnqueue_SourcesDedupAndWaking(t *testing.T) {
 				return
 			case "call result recovery":
 				for _, status := range []SessionStatus{SessionStatusActive, SessionStatusSuspended, SessionStatusError, SessionStatusStopped} {
-					record, createErr := store.CreateSession(t.Context(), projectID, "model", "", nil)
+					recordID := sessionstoretest.BareRoot(t, store.db, projectID, "model", "", nil)
+					record, createErr := store.GetSession(t.Context(), recordID)
 					require.NoError(t, createErr)
 					_, enqueueErr := store.Enqueue(
 						t.Context(),
@@ -577,11 +566,11 @@ func TestEnqueue_SourcesDedupAndWaking(t *testing.T) {
 				tx, beginErr := db.BeginTx(t.Context(), nil)
 				require.NoError(t, beginErr)
 				defer func() { _ = tx.Rollback() }()
-				_, err = EnqueueTx(t.Context(), tx, input)
+				_, err := EnqueueTx(t.Context(), tx, input)
 				require.ErrorContains(t, err, "requires WithTx")
 				return
 			case "stopped schedule":
-				require.NoError(t, store.UpdateSessionStatus(t.Context(), root.ID, SessionStatusStopped))
+				require.NoError(t, store.UpdateSessionStatus(t.Context(), root, SessionStatusStopped))
 			case "call result attributes":
 				input.Source = InputSourceCallResult
 			case "invalid source":
@@ -596,7 +585,7 @@ func TestEnqueue_SourcesDedupAndWaking(t *testing.T) {
 			require.NoError(t, enqueueErr)
 			assert.True(t, result.Applied)
 			if name == "stopped schedule" {
-				record, getErr := store.GetSession(t.Context(), root.ID)
+				record, getErr := store.GetSession(t.Context(), root)
 				require.NoError(t, getErr)
 				assert.Equal(t, SessionStatusActive, record.Status)
 			}

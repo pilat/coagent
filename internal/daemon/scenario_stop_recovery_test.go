@@ -22,7 +22,7 @@ func TestScenario_BootFinishedStopIsNotAppliedToLaterWork(t *testing.T) {
 		return textReply("must not run")
 	}
 	h1 := newHarness(t, harnessOptions{dbPath: filepath.Join(t.TempDir(), "boot-finished-stop.db"), respond: respond})
-	root := h1.createRoot(managerAttrs(scenarioManagerID))
+	root := h1.createRoot(nil)
 	stop, err := h1.store.Enqueue(h1.ctx, sessionstore.Input{
 		SessionID: root, Source: sessionstore.InputSourceUser, Content: "/stop",
 	})
@@ -63,7 +63,7 @@ func TestScenario_PendingStopIsDispatchedOnceAtBoot(t *testing.T) {
 		return textReply("must not run")
 	}
 	h1 := newHarness(t, harnessOptions{dbPath: filepath.Join(t.TempDir(), "pending-stop.db"), respond: respond})
-	root := h1.createRoot(managerAttrs(scenarioManagerID))
+	root := h1.createRoot(nil)
 	var inputIDs []int64
 	for _, content := range []string{"/stop", "queued after stop"} {
 		input, err := h1.store.Enqueue(h1.ctx, sessionstore.Input{

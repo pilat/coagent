@@ -214,30 +214,27 @@ func TestBoundaryActivationRequiresHumanInput(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
 		source sessionstore.InputSource
-		owner  string
+		root   bool
 		human  bool
 	}{
-		{"user", sessionstore.InputSourceUser, "owner", true},
-		{"agent", sessionstore.InputSourceAgent, "owner", false},
-		{"schedule", sessionstore.InputSourceSchedule, "owner", false},
-		{"process", sessionstore.InputSourceProcess, "owner", false},
-		{"subagent", sessionstore.InputSourceSubagent, "owner", false},
-		{"ownerless user", sessionstore.InputSourceUser, "", false},
+		{"user", sessionstore.InputSourceUser, true, true},
+		{"agent", sessionstore.InputSourceAgent, true, false},
+		{"schedule", sessionstore.InputSourceSchedule, true, false},
+		{"process", sessionstore.InputSourceProcess, true, false},
+		{"subagent", sessionstore.InputSourceSubagent, true, false},
+		{"non-root user", sessionstore.InputSourceUser, false, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			db, store, s := newBoundaryFixture(t, nil)
-			if tc.owner == "" {
-				_, err := db.ExecContext(t.Context(), "UPDATE sessions SET attributes = '{}' WHERE id = ?", s.id)
-				require.NoError(t, err)
-			}
+			_, store, s := newBoundaryFixture(t, nil)
+			s.outputEnabled = tc.root
 			s.registry.Register(configapply.NewConfigEdit(s.id, nil))
 			require.NoError(t, s.prepareRun(t.Context()))
 			input, err := store.Enqueue(t.Context(), sessionstore.Input{
 				SessionID:  s.id,
 				Source:     tc.source,
 				Content:    "/config x",
-				Attributes: map[string]any{"manager_id": tc.owner},
+				Attributes: map[string]any{},
 			})
 			require.NoError(t, err)
 			batch := s.newBoundaryBatch()

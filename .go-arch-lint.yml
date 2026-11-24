@@ -52,6 +52,7 @@ components:
   memory:       { in: internal/memory }
   mcpstore:     { in: internal/mcpstore }
   sessionstore: { in: internal/sessionstore }
+  sessionstoretest: { in: internal/sessionstore/sessionstoretest }
   subagent:     { in: internal/subagent }
   orchestrator: { in: internal/orchestrator }
   transcript:   { in: internal/transcript }

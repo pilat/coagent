@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/pilat/coagent/internal/llmwire"
+	"github.com/pilat/coagent/internal/sessionstore/sessionstoretest"
 	"github.com/pilat/coagent/internal/transcript"
 )
 
@@ -67,10 +68,9 @@ func (m *integrityProtocolModel) apply(command integrityProtocolCommand) {
 
 func newIntegrityProtocolProduction(t *testing.T) *integrityProtocolProduction {
 	store, db, projectID := newTestStore(t)
-	root, err := store.CreateSession(t.Context(), projectID, "model", "", map[string]any{"manager_id": "mgr"})
-	require.NoError(t, err)
+	root := sessionstoretest.BareRoot(t, store.db, projectID, "model", "", map[string]any{})
 
-	return &integrityProtocolProduction{t: t, ctx: t.Context(), db: db, store: store, rootID: root.ID}
+	return &integrityProtocolProduction{t: t, ctx: t.Context(), db: db, store: store, rootID: root}
 }
 
 func (p *integrityProtocolProduction) apply(command integrityProtocolCommand) {

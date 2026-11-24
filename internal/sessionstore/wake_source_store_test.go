@@ -7,6 +7,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/pilat/coagent/internal/sessionstore/sessionstoretest"
 )
 
 func TestWakeSource_AdvertisedProcessIsAWakeSource(t *testing.T) {
@@ -115,7 +117,8 @@ func TestWakeSource_UndeliveredBackgroundLinkStates(t *testing.T) {
 	store, db, projectID := newTestStore(t)
 
 	for _, state := range []string{"spawned", "running", "completed", "error"} {
-		parent, err := store.CreateSession(ctx, projectID, "m", "", nil)
+		parentID := sessionstoretest.BareRoot(t, store.db, projectID, "m", "", nil)
+		parent, err := store.GetSession(ctx, parentID)
 		require.NoError(t, err)
 		childID, err := createChild(ctx, store, projectID, parent.ID, parent.ID, "general", "m", "")
 		require.NoError(t, err)
@@ -131,17 +134,16 @@ func TestWakeSource_UndeliveredBackgroundLinkStates(t *testing.T) {
 	}
 
 	for _, state := range []string{"stopped", "killed"} {
-		parent, err := store.CreateSession(ctx, projectID, "m", "", nil)
-		require.NoError(t, err)
-		childID, err := createChild(ctx, store, projectID, parent.ID, parent.ID, "general", "m", "")
+		parent := sessionstoretest.BareRoot(t, store.db, projectID, "m", "", nil)
+		childID, err := createChild(ctx, store, projectID, parent, parent, "general", "m", "")
 		require.NoError(t, err)
 
 		_, err = db.ExecContext(ctx, `INSERT INTO subagent_links
 			(parent_id, child_id, task_call_id, blocking, depth, state, created_at)
-			VALUES (?, ?, ?, 0, 0, ?, ?)`, parent.ID, childID, "task-1", state, time.Now().UTC().Unix())
+			VALUES (?, ?, ?, 0, 0, ?, ?)`, parent, childID, "task-1", state, time.Now().UTC().Unix())
 		require.NoError(t, err)
 
-		has, err := store.HasBackgroundWakeSource(ctx, parent.ID)
+		has, err := store.HasBackgroundWakeSource(ctx, parent)
 		require.NoError(t, err)
 		assert.False(t, has, "state %s must not be a wake source", state)
 	}

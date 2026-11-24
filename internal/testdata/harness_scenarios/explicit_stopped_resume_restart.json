@@ -6,7 +6,6 @@
       "name": "<name>",
       "work_dir": "<workdir>",
       "attributes": {
-        "manager_id": "telegram:main",
         "title": "explicit resume after stop"
       }
     },
@@ -31,8 +30,5 @@
       "content": "stopped root resumed after restart",
       "source_key": "message:5:final"
     }
-  ],
-  "owners": {
-    "1": "telegram:main"
-  }
+  ]
 }

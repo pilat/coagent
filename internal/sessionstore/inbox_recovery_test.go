@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/pilat/coagent/internal/sessionstore/sessionstoretest"
 	"github.com/pilat/coagent/internal/transcript"
 )
 
@@ -17,29 +18,28 @@ func TestInboxStore_PromoteReactivatesOnlyFirstAcceptance(t *testing.T) {
 
 	ctx := context.Background()
 	store, _, projectID := newTestStore(t)
-	rec, err := store.CreateSession(ctx, projectID, "model", "", nil)
-	require.NoError(t, err)
-	require.NoError(t, store.UpdateSessionStatus(ctx, rec.ID, SessionStatusCompleted))
-	input, err := enqueueInput(ctx, store, rec.ID, InputSourceUser, "durable input")
+	rec := sessionstoretest.BareRoot(t, store.db, projectID, "model", "", nil)
+	require.NoError(t, store.UpdateSessionStatus(ctx, rec, SessionStatusCompleted))
+	input, err := enqueueInput(ctx, store, rec, InputSourceUser, "durable input")
 	require.NoError(t, err)
 
 	first, err := acceptInput(ctx, store, input.ID, "[stamp] durable input")
 	require.NoError(t, err)
-	reloaded, err := store.GetSession(ctx, rec.ID)
+	reloaded, err := store.GetSession(ctx, rec)
 	require.NoError(t, err)
 	require.Equal(t, SessionStatusActive, reloaded.Status)
 
-	require.NoError(t, store.UpdateSessionStatus(ctx, rec.ID, SessionStatusCompleted))
+	require.NoError(t, store.UpdateSessionStatus(ctx, rec, SessionStatusCompleted))
 	second, err := acceptInput(ctx, store, input.ID, "ignored retry content")
 	require.ErrorIs(t, err, ErrInputResolved)
 	assert.Nil(t, second)
-	messages, err := store.LoadActiveMessages(ctx, rec.ID)
+	messages, err := store.LoadActiveMessages(ctx, rec)
 	require.NoError(t, err)
 	require.Len(t, messages, 1)
 	assert.Equal(t, first.ID, messages[0].ID)
 	assert.Equal(t, "[stamp] durable input", messages[0].Content)
 
-	reloaded, err = store.GetSession(ctx, rec.ID)
+	reloaded, err = store.GetSession(ctx, rec)
 	require.NoError(t, err)
 	assert.Equal(t, SessionStatusCompleted, reloaded.Status, "accepted retry must not reopen the session")
 }
@@ -89,18 +89,17 @@ func TestInboxStore_PromoteRollsBackWhenLifecycleGuardLoses(t *testing.T) {
 
 			ctx := context.Background()
 			store, db, projectID := newTestStore(t)
-			rec, err := store.CreateSession(ctx, projectID, "model", "", nil)
+			rec := sessionstoretest.BareRoot(t, store.db, projectID, "model", "", nil)
+			input, err := enqueueInput(ctx, store, rec, InputSourceUser, "durable input")
 			require.NoError(t, err)
-			input, err := enqueueInput(ctx, store, rec.ID, InputSourceUser, "durable input")
-			require.NoError(t, err)
-			tt.block(t, ctx, store, db, rec.ID)
+			tt.block(t, ctx, store, db, rec)
 
 			_, err = acceptInput(ctx, store, input.ID, "[stamp] durable input")
 			require.ErrorIs(t, err, ErrSessionStopping)
 
 			var messageCount int
 			require.NoError(t, db.QueryRowContext(ctx,
-				`SELECT COUNT(*) FROM messages WHERE session_id = ?`, rec.ID,
+				`SELECT COUNT(*) FROM messages WHERE session_id = ?`, rec,
 			).Scan(&messageCount))
 			assert.Zero(t, messageCount, "failed activation must roll back the inserted user row")
 
@@ -135,16 +134,16 @@ func TestInboxStore_StoppedSessionPromotionRequiresExplicitInput(t *testing.T) {
 
 			ctx := context.Background()
 			store, db, projectID := newTestStore(t)
-			record, err := store.CreateSession(ctx, projectID, "model", "", nil)
-			require.NoError(t, err)
+			record := sessionstoretest.BareRoot(t, store.db, projectID, "model", "", nil)
 			var input *InboxInput
+			var err error
 			if tt.source == InputSourceProcess || tt.source == InputSourceSubagent {
-				input, err = enqueueFact(ctx, store, record.ID, tt.source, "durable input", nil)
+				input, err = enqueueFact(ctx, store, record, tt.source, "durable input", nil)
 			} else {
-				input, err = enqueueInput(ctx, store, record.ID, tt.source, "durable input")
+				input, err = enqueueInput(ctx, store, record, tt.source, "durable input")
 			}
 			require.NoError(t, err)
-			require.NoError(t, store.UpdateSessionStatus(ctx, record.ID, SessionStatusStopped))
+			require.NoError(t, store.UpdateSessionStatus(ctx, record, SessionStatusStopped))
 
 			_, err = acceptInput(ctx, store, input.ID, "[stamp] durable input")
 			if tt.wantErr {
@@ -153,17 +152,17 @@ func TestInboxStore_StoppedSessionPromotionRequiresExplicitInput(t *testing.T) {
 				require.NoError(t, err)
 			}
 
-			reloaded, err := store.GetSession(ctx, record.ID)
+			reloaded, err := store.GetSession(ctx, record)
 			require.NoError(t, err)
 			if tt.wantErr {
 				assert.Equal(t, SessionStatusStopped, reloaded.Status)
-				pending, peekErr := store.PeekPending(ctx, record.ID)
+				pending, peekErr := store.PeekPending(ctx, record)
 				require.NoError(t, peekErr)
 				assert.Equal(t, input.ID, pending.ID)
 
 				var messages int
 				require.NoError(t, db.QueryRowContext(ctx,
-					`SELECT COUNT(*) FROM messages WHERE session_id = ?`, record.ID,
+					`SELECT COUNT(*) FROM messages WHERE session_id = ?`, record,
 				).Scan(&messages))
 				assert.Zero(t, messages)
 			} else {
@@ -192,31 +191,29 @@ func TestInboxStore_AsyncOnlyErrorAndStoppedSessionsStayParked(t *testing.T) {
 
 	ctx := context.Background()
 	store, _, projectID := newTestStore(t)
-	errorSession, err := store.CreateSession(ctx, projectID, "model", "", nil)
+	errorSession := sessionstoretest.BareRoot(t, store.db, projectID, "model", "", nil)
+	_, err := enqueueFact(ctx, store, errorSession, InputSourceProcess, "process", nil)
 	require.NoError(t, err)
-	_, err = enqueueFact(ctx, store, errorSession.ID, InputSourceProcess, "process", nil)
-	require.NoError(t, err)
-	require.NoError(t, store.UpdateSessionStatus(ctx, errorSession.ID, SessionStatusError))
+	require.NoError(t, store.UpdateSessionStatus(ctx, errorSession, SessionStatusError))
 
-	stopped, err := store.CreateSession(ctx, projectID, "model", "", nil)
+	stopped := sessionstoretest.BareRoot(t, store.db, projectID, "model", "", nil)
+	_, err = enqueueFact(ctx, store, stopped, InputSourceSubagent, "subagent", nil)
 	require.NoError(t, err)
-	_, err = enqueueFact(ctx, store, stopped.ID, InputSourceSubagent, "subagent", nil)
-	require.NoError(t, err)
-	require.NoError(t, store.UpdateSessionStatus(ctx, stopped.ID, SessionStatusStopped))
+	require.NoError(t, store.UpdateSessionStatus(ctx, stopped, SessionStatusStopped))
 
 	recoverable, err := store.ListSessionsWithRecoverableInput(ctx)
 	require.NoError(t, err)
-	assert.NotContains(t, recoverable, errorSession.ID)
-	assert.NotContains(t, recoverable, stopped.ID)
+	assert.NotContains(t, recoverable, errorSession)
+	assert.NotContains(t, recoverable, stopped)
 
-	_, err = enqueueInput(ctx, store, errorSession.ID, InputSourceUser, "retry")
+	_, err = enqueueInput(ctx, store, errorSession, InputSourceUser, "retry")
 	require.NoError(t, err)
-	_, err = enqueueInput(ctx, store, stopped.ID, InputSourceAgent, "resume")
+	_, err = enqueueInput(ctx, store, stopped, InputSourceAgent, "resume")
 	require.NoError(t, err)
 	recoverable, err = store.ListSessionsWithRecoverableInput(ctx)
 	require.NoError(t, err)
-	assert.Contains(t, recoverable, errorSession.ID)
-	assert.Contains(t, recoverable, stopped.ID)
+	assert.Contains(t, recoverable, errorSession)
+	assert.Contains(t, recoverable, stopped)
 }
 
 func TestInboxStore_ReadOnlyCommandBehindAsyncInputDoesNotResumeStoppedSession(t *testing.T) {
@@ -224,18 +221,17 @@ func TestInboxStore_ReadOnlyCommandBehindAsyncInputDoesNotResumeStoppedSession(t
 
 	ctx := context.Background()
 	store, _, projectID := newTestStore(t)
-	record, err := store.CreateSession(ctx, projectID, "model", "", nil)
+	record := sessionstoretest.BareRoot(t, store.db, projectID, "model", "", nil)
+	_, err := enqueueFact(ctx, store, record, InputSourceProcess, "process", nil)
 	require.NoError(t, err)
-	_, err = enqueueFact(ctx, store, record.ID, InputSourceProcess, "process", nil)
+	_, err = enqueueInput(ctx, store, record, InputSourceUser, "\t/help\n")
 	require.NoError(t, err)
-	_, err = enqueueInput(ctx, store, record.ID, InputSourceUser, "\t/help\n")
-	require.NoError(t, err)
-	require.NoError(t, store.UpdateSessionStatus(ctx, record.ID, SessionStatusStopped))
+	require.NoError(t, store.UpdateSessionStatus(ctx, record, SessionStatusStopped))
 
 	recoverable, err := store.ListSessionsWithRecoverableInput(ctx)
 
 	require.NoError(t, err)
-	assert.NotContains(t, recoverable, record.ID)
+	assert.NotContains(t, recoverable, record)
 }
 
 func TestInboxStore_ReadOnlyCommandAtFIFOHeadRunsWithoutReleasingAsyncInput(t *testing.T) {
@@ -243,18 +239,17 @@ func TestInboxStore_ReadOnlyCommandAtFIFOHeadRunsWithoutReleasingAsyncInput(t *t
 
 	ctx := context.Background()
 	store, _, projectID := newTestStore(t)
-	record, err := store.CreateSession(ctx, projectID, "model", "", nil)
+	record := sessionstoretest.BareRoot(t, store.db, projectID, "model", "", nil)
+	_, err := enqueueInput(ctx, store, record, InputSourceUser, "\t/help\n")
 	require.NoError(t, err)
-	_, err = enqueueInput(ctx, store, record.ID, InputSourceUser, "\t/help\n")
+	_, err = enqueueFact(ctx, store, record, InputSourceProcess, "process", nil)
 	require.NoError(t, err)
-	_, err = enqueueFact(ctx, store, record.ID, InputSourceProcess, "process", nil)
-	require.NoError(t, err)
-	require.NoError(t, store.UpdateSessionStatus(ctx, record.ID, SessionStatusStopped))
+	require.NoError(t, store.UpdateSessionStatus(ctx, record, SessionStatusStopped))
 
 	recoverable, err := store.ListSessionsWithRecoverableInput(ctx)
 
 	require.NoError(t, err)
-	assert.Contains(t, recoverable, record.ID)
+	assert.Contains(t, recoverable, record)
 }
 
 func createPendingRecoveryFixtures(ctx context.Context, t *testing.T, store *Store, projectID int64) []int64 {
@@ -262,21 +257,21 @@ func createPendingRecoveryFixtures(ctx context.Context, t *testing.T, store *Sto
 
 	var ids []int64
 	for _, content := range []string{"first pending", "second pending"} {
-		rec, err := store.CreateSession(ctx, projectID, "model", "", nil)
+		rec := sessionstoretest.BareRoot(t, store.db, projectID, "model", "", nil)
+		_, err := enqueueInput(ctx, store, rec, InputSourceUser, content)
 		require.NoError(t, err)
-		_, err = enqueueInput(ctx, store, rec.ID, InputSourceUser, content)
-		require.NoError(t, err)
-		ids = append(ids, rec.ID)
+		ids = append(ids, rec)
 	}
 
-	stopped, err := store.CreateSession(ctx, projectID, "model", "", nil)
+	stopped := sessionstoretest.BareRoot(t, store.db, projectID, "model", "", nil)
+	_, err := enqueueInput(ctx, store, stopped, InputSourceUser, "parked pending")
 	require.NoError(t, err)
-	_, err = enqueueInput(ctx, store, stopped.ID, InputSourceUser, "parked pending")
-	require.NoError(t, err)
-	require.NoError(t, store.UpdateSessionStatus(ctx, stopped.ID, SessionStatusStopped))
-	ids = append(ids, stopped.ID)
+	require.NoError(t, store.UpdateSessionStatus(ctx, stopped, SessionStatusStopped))
+	ids = append(ids, stopped)
 
-	killed, err := store.CreateSession(ctx, projectID, "model", "", nil)
+	killedID := sessionstoretest.BareRoot(t, store.db, projectID, "model", "", nil)
+
+	killed, err := store.GetSession(ctx, killedID)
 	require.NoError(t, err)
 	_, err = enqueueInput(ctx, store, killed.ID, InputSourceUser, "killed pending")
 	require.NoError(t, err)
@@ -295,19 +290,18 @@ func createAcceptedRecoveryFixtures(
 
 	var ids []int64
 	for i, suffix := range []string{"user last", "tool progress", "final assistant persisted"} {
-		rec, err := store.CreateSession(ctx, projectID, "model", "", nil)
-		require.NoError(t, err)
-		input, err := enqueueInput(ctx, store, rec.ID, InputSourceUser, suffix)
+		rec := sessionstoretest.BareRoot(t, store.db, projectID, "model", "", nil)
+		input, err := enqueueInput(ctx, store, rec, InputSourceUser, suffix)
 		require.NoError(t, err)
 		promoted, err := acceptInput(ctx, store, input.ID, suffix)
 		require.NoError(t, err)
 
 		switch i {
 		case 1:
-			_, err = appendMessage(ctx, store, rec.ID, &transcript.Message{Role: "tool", Content: "durable result"})
+			_, err = appendMessage(ctx, store, rec, &transcript.Message{Role: "tool", Content: "durable result"})
 			require.NoError(t, err)
 		case 2:
-			_, err = appendMessage(ctx, store, rec.ID, &transcript.Message{Role: "assistant", Content: "durable final"})
+			_, err = appendMessage(ctx, store, rec, &transcript.Message{Role: "assistant", Content: "durable final"})
 			require.NoError(t, err)
 		}
 
@@ -315,10 +309,10 @@ func createAcceptedRecoveryFixtures(
 			require.NoError(t, compactHead(ctx, store, []int64{promoted.ID}))
 		}
 
-		accepted, err := store.HasAcceptedInput(ctx, rec.ID)
+		accepted, err := store.HasAcceptedInput(ctx, rec)
 		require.NoError(t, err)
 		assert.True(t, accepted)
-		ids = append(ids, rec.ID)
+		ids = append(ids, rec)
 	}
 
 	return ids
@@ -339,33 +333,30 @@ func createExcludedRecoveryFixtures(ctx context.Context, t *testing.T, store *St
 		{status: SessionStatusActive, kill: true},
 	}
 	for _, fixture := range tests {
-		rec, err := store.CreateSession(ctx, projectID, "model", "", nil)
-		require.NoError(t, err)
-		input, err := enqueueInput(ctx, store, rec.ID, InputSourceUser, "excluded")
+		rec := sessionstoretest.BareRoot(t, store.db, projectID, "model", "", nil)
+		input, err := enqueueInput(ctx, store, rec, InputSourceUser, "excluded")
 		require.NoError(t, err)
 		_, err = acceptInput(ctx, store, input.ID, "excluded")
 		require.NoError(t, err)
 		if fixture.kill {
 			require.NoError(
 				t,
-				store.WithTx(ctx, func(tx *sql.Tx) error { return MarkSessionKilledTx(ctx, tx, rec.ID) }),
+				store.WithTx(ctx, func(tx *sql.Tx) error { return MarkSessionKilledTx(ctx, tx, rec) }),
 			)
 		} else {
-			require.NoError(t, store.UpdateSessionStatus(ctx, rec.ID, fixture.status))
+			require.NoError(t, store.UpdateSessionStatus(ctx, rec, fixture.status))
 		}
 	}
 
-	headerOnly, err := store.CreateSession(ctx, projectID, "model", "", nil)
+	headerOnly := sessionstoretest.BareRoot(t, store.db, projectID, "model", "", nil)
+	_, err := appendMessage(ctx, store, headerOnly, &transcript.Message{Role: "user", Content: "AGENTS.md header"})
 	require.NoError(t, err)
-	_, err = appendMessage(ctx, store, headerOnly.ID, &transcript.Message{Role: "user", Content: "AGENTS.md header"})
-	require.NoError(t, err)
-	accepted, err := store.HasAcceptedInput(ctx, headerOnly.ID)
+	accepted, err := store.HasAcceptedInput(ctx, headerOnly)
 	require.NoError(t, err)
 	assert.False(t, accepted, "a plain user-role header is not accepted controller input")
 
-	handled, err := store.CreateSession(ctx, projectID, "model", "", nil)
-	require.NoError(t, err)
-	input, err := enqueueInput(ctx, store, handled.ID, InputSourceUser, "/status")
+	handled := sessionstoretest.BareRoot(t, store.db, projectID, "model", "", nil)
+	input, err := enqueueInput(ctx, store, handled, InputSourceUser, "/status")
 	require.NoError(t, err)
 	require.NoError(t, resolveHandled(ctx, store, input.ID, "status command"))
 }

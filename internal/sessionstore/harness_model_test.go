@@ -18,6 +18,7 @@ import (
 	"github.com/pilat/coagent/internal/llmwire"
 	"github.com/pilat/coagent/internal/migrate"
 	"github.com/pilat/coagent/internal/sessionstore"
+	"github.com/pilat/coagent/internal/sessionstore/sessionstoretest"
 	"github.com/pilat/coagent/internal/subagent"
 	"github.com/pilat/coagent/internal/transcript"
 )
@@ -187,7 +188,9 @@ func newHarnessProduction(t *testing.T, migratedDB []byte) *harnessProduction {
 		require.NoError(t, err)
 	}
 
-	parent, err := store.CreateSession(ctx, projectID, "model", "", nil)
+	parentID := sessionstoretest.BareRoot(t, sDB(store), projectID, "model", "", nil)
+
+	parent, err := store.GetSession(ctx, parentID)
 	require.NoError(t, err)
 	child, err := createChild(ctx, store, projectID, parent.ID, parent.ID, "general", "model", "")
 	require.NoError(t, err)
