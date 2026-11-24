@@ -8,12 +8,12 @@ The shared vocabulary of coagent — the words that name its concepts, so code, 
 
 ## Actors & entities
 
-- **orchestrator mode**: A durable capability on one manager-owned root, granted and revoked only by the human with
+- **orchestrator mode**: A durable capability on one manager root, granted and revoked only by the human with
   `/orchestrate on|off` in a chat or `SetOrchestratorMode` from an operator client. It gives that root `list_sessions`, `send_to_session`, `spawn_session`, `read_session`, `subscribe` and `unsubscribe` over roots
-  of its manager, plus `stop_session` and `kill_session` only over sessions it spawned; its subagents never get them. It is not a session kind, agent type or role
+  of every surface, plus `stop_session` and `kill_session` only over sessions it spawned; its subagents never get them. It is not a session kind, agent type or role
   ([ADR-0097](adr/0097-orchestrator-mode-is-a-human-granted-capability-on-an-ordinary-root.md)).
   _Avoid_: assistant, desk, coordinator, supervisor; "orchestrator" for the daemon.
-- **orchestrator**: A root session with orchestrator mode on. _Avoid_: manager (that is the Telegram-side owner),
+- **orchestrator**: A root session with orchestrator mode on. _Avoid_: manager (that is the Telegram front end),
   parent (that is the subagent relation).
 - **sent message**: Text one orchestrator writes into another root with `send_to_session` or as a `spawn_session`
   prompt: `source=agent` input with sender provenance and no human authority. The target sees a host-authored line
@@ -21,7 +21,7 @@ The shared vocabulary of coagent — the words that name its concepts, so code, 
 - **sender provenance**: The sending session's id and names carried as inbox attributes of a sent message or
   host-written lifecycle command. They name the author in the target's chat and, for a sent message, its model input.
   Never part of the message text.
-- **spawned session**: A root created by `spawn_session`: ordinary and manager-owned, with its own budget, outside the
+- **spawned session**: A root created by `spawn_session`: ordinary and a manager root, with its own budget, outside the
   orchestrator's stop tree; its first input is a sent message. It runs on the default model unless the orchestrator
   named a tagged one, at that model's default effort unless the orchestrator named a level the model accepts.
   Its durable `spawned_by` attribute names the spawner, which can stop or kill it, as can the
@@ -98,9 +98,9 @@ _Avoid_: job, request (for the work-unit); unqualified "task" in code.
 **Controller** (`controllerapi.Controller`):
 The private manager-bound in-process capability `managercontrol` implements over
 the daemon backend for the local API server — create sessions, durably send
-messages, stop/kill them, and subscribe to their owned session events. The
+messages, stop/kill them, and subscribe to manager-root session events. The
 composition root binds one capability to each manager and **API client** ID;
-session-addressed operations reject every other owner. It is
+every bound controller reaches every manager root. It is
 an internal package boundary; built-in managers reach it only through the
 **local API**.
 _Avoid_: using "controller" for a front-end integration — that is a manager.
@@ -113,15 +113,11 @@ reuse a bot token. Adding a manager is a source-level contribution, not a
 third-party plugin.
 _Avoid_: controller, bot, adapter, integration; manager for an **API client**.
 
-**manager ownership**:
-The durable routing identity of a root session: the unique manager or
-**API client** ID stored as `manager_id`. The local API server subscribes with
-that same ID and sends only its owner's wake hints. The server's bound Controller
-also stamps new sessions and rejects reads or mutations of any other owner; a
-driver or channel name is not ownership because several managers may share it.
-In code an API client's root is still a manager-owned root (`manager_id`, `ForManager`): the
-identifiers name the ownership slot, not the kind of owner.
-_Avoid_: channel ownership, transport ownership.
+**manager root**:
+A root carrying `manager_id`: created through a manager or API client, or spawned by an orchestrator.
+It has an output log and the chat, config and orchestrator surfaces; every manager and API client reaches it.
+The value names the creating surface and is never compared.
+_Avoid_: owned root, owner.
 
 **subagent**:
 An independent session with clean context and a restricted tool set, spawned by a parent session's `task` tool. A subagent *is* a session (its own `SessionRecord` row) whose `ParentID` identifies another session — that is what separates it from a root session. Subagents may suspend with `sleep`, but standalone scheduled work belongs only to roots.
@@ -174,8 +170,8 @@ _Avoid_: control socket (that is the status protocol).
 
 **API client**:
 One `api.clients` entry (`id`, `role`, `token_sha256`) and the program holding its
-token, which `coagent token <id>` prints once. Its id is a durable owner id beside
-manager ids: it owns and sees only the roots it created. The token authenticates
+token, which `coagent token <id>` prints once. Its id keys its chat rows and is stamped
+on the roots it creates; it reaches every root. The token authenticates
 an author and grants nothing itself: authority follows the source the host
 stamps on its input. The role `operator` names who holds the token: the person
 who owns the machine, `config.yaml` and the sandbox rules. Its input is
@@ -345,7 +341,7 @@ The runtime status a controller sees — `running` / `idle` / `error` (`controll
 _Avoid_: treating "running" (runtime) and "active" (persisted) as the same word.
 
 **notification** (session event):
-A session→controller event — a message chunk, a state change, a heartbeat (`sessionevent.Notification`, delivered as `controllerapi.SessionNotification`). Only *root* sessions have them: the daemon drops every event whose session is a subagent. Manager subscriptions additionally receive only events whose durable manager owner matches their ID. The bare type name "Notification" is overloaded elsewhere (LSP JSON-RPC, tool notifications), so qualify it as a *session event*.
+A session→controller event — a message chunk, a state change, a heartbeat (`sessionevent.Notification`, delivered as `controllerapi.SessionNotification`). Only *root* sessions have them: the daemon drops every event whose session is a subagent. Manager subscriptions receive the events of every manager root. The bare type name "Notification" is overloaded elsewhere (LSP JSON-RPC, tool notifications), so qualify it as a *session event*.
 _Avoid_: bare "Notification".
 
 **model-input generation**:
@@ -357,13 +353,13 @@ it. Completion nudges use it to enforce one nudge per accepted input generation.
 _Avoid_: iteration (loop counter), activation sequence (subagent delivery CAS).
 
 **output log**:
-The append-only `session_outbox` rows for owned root messages and lifecycle
+The append-only `session_outbox` rows for root messages and lifecycle
 facts, with stable source identities. It is neither the model transcript nor a
 delivery queue; a per-chat **chat cursor** records the selected position.
 _Avoid_: output queue, delivery backlog.
 
 **chat focus**:
-The durable root selected by one manager and chat, stored in
+The durable root selected by one manager or API client and chat, stored in
 `chat_focus.session_id`. NULL means no session. Focus does not change which
 sessions keep running. The manager binds its row at startup without overwriting
 an existing selection; every selection write resets its **chat cursor**.
@@ -371,7 +367,7 @@ _Avoid_: active session (several sessions may run at once).
 
 **chat cursor**:
 `chat_focus.last_sent_id`, the selected session's highest output-log ID sent
-or skipped past by one manager/chat. NULL means **entry** is owed. Numeric
+or skipped past by one manager or API client and chat. NULL means **entry** is owed. Numeric
 positions advance only while the same focus remains entered. Selection writes,
 including re-switch and clear, reset it to NULL; restart preserves it.
 _Avoid_: per-session read tracking, transport receipt, read position (that is an orchestrator's).
@@ -418,7 +414,7 @@ acknowledges the newest ID of any type from the same read before live delivery.
 _Avoid_: entry context.
 
 **session title**:
-A live owned root's one-line name, `sessions.attributes.title`, 1–80 characters.
+A live root's one-line name, `sessions.attributes.title`, 1–80 characters.
 The first inserted non-command user input names an untitled root once; the user
 renames it with `/title`. A `/clear` replacement starts untitled. A chat shows
 `<project> · <title>`. It is not `agent_type` and does not follow the work as it changes.
@@ -431,7 +427,7 @@ with asterisks removed and is never stored in the output log.
 _Avoid_: entry header (the `→ #N <Name>` line that precedes entry rows).
 
 **tool trail**:
-The per-call lines of one manager-owned root's step message: `→ <tool>` or a
+The per-call lines of one manager root's step message: `→ <tool>` or a
 tool name with its main argument in inline code, redacted and clipped to 80
 runes. Batch calls expand one level. The model's text precedes the trail when
 present; a step with no text still publishes its trail. Subagents publish no
@@ -451,12 +447,12 @@ The output-log message that confirms one explicit skill
 activation — `🔧 Activated skill: <canonical-name>`, nothing else. An explicit
 `/skill` command commits it inside its promotion transaction (releasing, keyed
 idempotently by the accepted input); the skill tool returns it as an ordinary
-direct tool output. Only manager-owned roots publish it; system-injected
+direct tool output. Only manager roots publish it; system-injected
 skills and auto-activation produce none.
 _Avoid_: activation notice, skill notification.
 
 **autonomous episode**:
-The interval of manager-owned root work starting with initial or reactivating
+The interval of manager root work starting with initial or reactivating
 model-bound input, or an applied scheduled turn. Queued input keeps the current
 episode; empty roots and read-only commands create none. Its durable start
 anchors the wall time shown by `/status`.
@@ -481,8 +477,8 @@ with sender attributes naming it — authority the human delegated through orche
 _Avoid_: real user message (authority follows the source field).
 
 **tool activation grant**:
-One-turn authority held by the running session, created only by a manager-owned
-**human input** whose leading command matches a tool's declared activation
+One-turn authority held by the running session, created only by a **human input** that reaches a
+manager root and whose leading command matches a tool's declared activation
 command. It is bound to that input, session, tool and command; spent once the first
 matching mutation executes; gone when the run ends or the daemon restarts.
 Prompt text is never authority.

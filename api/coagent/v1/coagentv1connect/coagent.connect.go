@@ -164,26 +164,27 @@ var (
 
 // SessionServiceClient is a client for the coagent.v1.SessionService service.
 type SessionServiceClient interface {
-	// CreateSession creates an empty root owned by the calling client.
+	// CreateSession creates an empty root.
 	CreateSession(context.Context, *v1.CreateSessionRequest) (*v1.CreateSessionResponse, error)
 	// SendInput appends text to a root's durable input as human input. A repeated idempotency_key
-	// for the same root appends nothing, so a retry never doubles an input; a retried /clear that
-	// already replaced the root clears its successor. A replaced root resolves to its successor;
-	// address the newest session_id received.
+	// for the same root appends nothing, whichever client sends it, so a retry never doubles an input;
+	// choose keys unique across clients.
+	// A retried /clear that already replaced the root clears its successor. A replaced root resolves
+	// to its successor; address the newest session_id received.
 	SendInput(context.Context, *v1.SendInputRequest) (*v1.SendInputResponse, error)
-	// ListSessions lists the caller's live roots, newest activity first.
+	// ListSessions lists the live roots, newest activity first.
 	ListSessions(context.Context, *v1.ListSessionsRequest) (*v1.ListSessionsResponse, error)
-	// ListSessionDetails lists every root the caller owns, killed ones included.
+	// ListSessionDetails lists every root, killed ones included.
 	ListSessionDetails(context.Context, *v1.ListSessionDetailsRequest) (*v1.ListSessionDetailsResponse, error)
-	// GetSessionKilled reports whether an owned root has been killed.
+	// GetSessionKilled reports whether a root has been killed.
 	GetSessionKilled(context.Context, *v1.GetSessionKilledRequest) (*v1.GetSessionKilledResponse, error)
-	// SetSessionModel switches an owned root's model and reasoning effort.
+	// SetSessionModel switches a root's model and reasoning effort.
 	SetSessionModel(context.Context, *v1.SetSessionModelRequest) (*v1.SetSessionModelResponse, error)
-	// SetSessionTitle renames a live owned root.
+	// SetSessionTitle renames a live root.
 	SetSessionTitle(context.Context, *v1.SetSessionTitleRequest) (*v1.SetSessionTitleResponse, error)
-	// GetOrchestratorMode reports whether a live owned root has orchestrator mode.
+	// GetOrchestratorMode reports whether a live root has orchestrator mode.
 	GetOrchestratorMode(context.Context, *v1.GetOrchestratorModeRequest) (*v1.GetOrchestratorModeResponse, error)
-	// SetOrchestratorMode turns orchestrator mode on or off for a live owned root.
+	// SetOrchestratorMode turns orchestrator mode on or off for a live root.
 	SetOrchestratorMode(context.Context, *v1.SetOrchestratorModeRequest) (*v1.SetOrchestratorModeResponse, error)
 }
 
@@ -195,26 +196,27 @@ func NewSessionServiceClient(client *connect.Client) SessionServiceClient {
 
 // SessionServiceHandler is an implementation of the coagent.v1.SessionService service.
 type SessionServiceHandler interface {
-	// CreateSession creates an empty root owned by the calling client.
+	// CreateSession creates an empty root.
 	CreateSession(context.Context, *v1.CreateSessionRequest) (*v1.CreateSessionResponse, error)
 	// SendInput appends text to a root's durable input as human input. A repeated idempotency_key
-	// for the same root appends nothing, so a retry never doubles an input; a retried /clear that
-	// already replaced the root clears its successor. A replaced root resolves to its successor;
-	// address the newest session_id received.
+	// for the same root appends nothing, whichever client sends it, so a retry never doubles an input;
+	// choose keys unique across clients.
+	// A retried /clear that already replaced the root clears its successor. A replaced root resolves
+	// to its successor; address the newest session_id received.
 	SendInput(context.Context, *v1.SendInputRequest) (*v1.SendInputResponse, error)
-	// ListSessions lists the caller's live roots, newest activity first.
+	// ListSessions lists the live roots, newest activity first.
 	ListSessions(context.Context, *v1.ListSessionsRequest) (*v1.ListSessionsResponse, error)
-	// ListSessionDetails lists every root the caller owns, killed ones included.
+	// ListSessionDetails lists every root, killed ones included.
 	ListSessionDetails(context.Context, *v1.ListSessionDetailsRequest) (*v1.ListSessionDetailsResponse, error)
-	// GetSessionKilled reports whether an owned root has been killed.
+	// GetSessionKilled reports whether a root has been killed.
 	GetSessionKilled(context.Context, *v1.GetSessionKilledRequest) (*v1.GetSessionKilledResponse, error)
-	// SetSessionModel switches an owned root's model and reasoning effort.
+	// SetSessionModel switches a root's model and reasoning effort.
 	SetSessionModel(context.Context, *v1.SetSessionModelRequest) (*v1.SetSessionModelResponse, error)
-	// SetSessionTitle renames a live owned root.
+	// SetSessionTitle renames a live root.
 	SetSessionTitle(context.Context, *v1.SetSessionTitleRequest) (*v1.SetSessionTitleResponse, error)
-	// GetOrchestratorMode reports whether a live owned root has orchestrator mode.
+	// GetOrchestratorMode reports whether a live root has orchestrator mode.
 	GetOrchestratorMode(context.Context, *v1.GetOrchestratorModeRequest) (*v1.GetOrchestratorModeResponse, error)
-	// SetOrchestratorMode turns orchestrator mode on or off for a live owned root.
+	// SetOrchestratorMode turns orchestrator mode on or off for a live root.
 	SetOrchestratorMode(context.Context, *v1.SetOrchestratorModeRequest) (*v1.SetOrchestratorModeResponse, error)
 }
 
@@ -501,7 +503,7 @@ type OutputServiceClient interface {
 	ListOutput(context.Context, *v1.ListOutputRequest) (*v1.ListOutputResponse, error)
 	// ReadEntry returns a root's newest renderable rows and its newest output id from one read.
 	ReadEntry(context.Context, *v1.ReadEntryRequest) (*v1.ReadEntryResponse, error)
-	// StreamSessionEvents streams wake hints for the caller's roots. The first event, with session_id 0, means the
+	// StreamSessionEvents streams wake hints for every root. The first event, with session_id 0, means the
 	// subscription is live: state read after it misses no later change. Events carry no content and may be
 	// dropped under load; re-read state on any event and periodically.
 	StreamSessionEvents(context.Context, *v1.StreamSessionEventsRequest) (OutputServiceStreamSessionEventsClientStream, error)
@@ -564,7 +566,7 @@ type OutputServiceHandler interface {
 	ListOutput(context.Context, *v1.ListOutputRequest) (*v1.ListOutputResponse, error)
 	// ReadEntry returns a root's newest renderable rows and its newest output id from one read.
 	ReadEntry(context.Context, *v1.ReadEntryRequest) (*v1.ReadEntryResponse, error)
-	// StreamSessionEvents streams wake hints for the caller's roots. The first event, with session_id 0, means the
+	// StreamSessionEvents streams wake hints for every root. The first event, with session_id 0, means the
 	// subscription is live: state read after it misses no later change. Events carry no content and may be
 	// dropped under load; re-read state on any event and periodically.
 	StreamSessionEvents(context.Context, *v1.StreamSessionEventsRequest, OutputServiceStreamSessionEventsServerStream) error
@@ -774,7 +776,7 @@ type ChatServiceClient interface {
 	EnterChat(context.Context, *v1.EnterChatRequest) (*v1.EnterChatResponse, error)
 	// AdvanceChat moves the cursor to output_id while session_id is the entered focus and the cursor is below it.
 	AdvanceChat(context.Context, *v1.AdvanceChatRequest) (*v1.AdvanceChatResponse, error)
-	// SetChatFocus focuses a live owned root and resets the cursor, so entry is owed.
+	// SetChatFocus focuses a live root and resets the cursor, so entry is owed.
 	SetChatFocus(context.Context, *v1.SetChatFocusRequest) (*v1.SetChatFocusResponse, error)
 	// ResetChatFocus clears the focus and cursor while the focus is still from_session_id.
 	ResetChatFocus(context.Context, *v1.ResetChatFocusRequest) (*v1.ResetChatFocusResponse, error)
@@ -798,7 +800,7 @@ type ChatServiceHandler interface {
 	EnterChat(context.Context, *v1.EnterChatRequest) (*v1.EnterChatResponse, error)
 	// AdvanceChat moves the cursor to output_id while session_id is the entered focus and the cursor is below it.
 	AdvanceChat(context.Context, *v1.AdvanceChatRequest) (*v1.AdvanceChatResponse, error)
-	// SetChatFocus focuses a live owned root and resets the cursor, so entry is owed.
+	// SetChatFocus focuses a live root and resets the cursor, so entry is owed.
 	SetChatFocus(context.Context, *v1.SetChatFocusRequest) (*v1.SetChatFocusResponse, error)
 	// ResetChatFocus clears the focus and cursor while the focus is still from_session_id.
 	ResetChatFocus(context.Context, *v1.ResetChatFocusRequest) (*v1.ResetChatFocusResponse, error)
@@ -1037,7 +1039,7 @@ var (
 type DiscoveryServiceClient interface {
 	// ListModels lists the configured models.
 	ListModels(context.Context, *v1.ListModelsRequest) (*v1.ListModelsResponse, error)
-	// ListSkills lists the skills available to an owned root.
+	// ListSkills lists the skills available to a root.
 	ListSkills(context.Context, *v1.ListSkillsRequest) (*v1.ListSkillsResponse, error)
 	// ListProjects lists the daemon-managed projects, most recently active first.
 	ListProjects(context.Context, *v1.ListProjectsRequest) (*v1.ListProjectsResponse, error)
@@ -1057,7 +1059,7 @@ func NewDiscoveryServiceClient(client *connect.Client) DiscoveryServiceClient {
 type DiscoveryServiceHandler interface {
 	// ListModels lists the configured models.
 	ListModels(context.Context, *v1.ListModelsRequest) (*v1.ListModelsResponse, error)
-	// ListSkills lists the skills available to an owned root.
+	// ListSkills lists the skills available to a root.
 	ListSkills(context.Context, *v1.ListSkillsRequest) (*v1.ListSkillsResponse, error)
 	// ListProjects lists the daemon-managed projects, most recently active first.
 	ListProjects(context.Context, *v1.ListProjectsRequest) (*v1.ListProjectsResponse, error)

@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/pilat/coagent/internal/controllerapi"
 )
 
 // lifecycleKill mirrors the daemon's canonical /kill command name.
@@ -41,8 +43,7 @@ func (s *Store) BeginLifecycleInput(
 		return nil, fmt.Errorf("%w: input %d is %s", ErrInputResolved, inputID, input.State)
 	}
 
-	owner, err := outputOwner(ctx, tx, input.SessionID)
-	if err != nil {
+	if _, err := outputOwner(ctx, tx, input.SessionID); err != nil {
 		return nil, err
 	}
 
@@ -87,7 +88,7 @@ func (s *Store) BeginLifecycleInput(
 		return nil, fmt.Errorf("commit lifecycle input: %w", err)
 	}
 
-	return &OutputCommit{OutputID: outputID, OwnerID: owner}, nil
+	return &OutputCommit{OutputID: outputID}, nil
 }
 
 // MarkSessionKilledWithOutput omits a close row for a terminating old root;
@@ -141,17 +142,15 @@ func (s *Store) MarkSessionKilledWithOutput(
 		return nil, err
 	}
 
-	owner, _ := record.Attributes[managerIDAttribute].(string)
-
 	replaced := false
-	if owner != "" {
-		replaced, err = hasReplacementRow(ctx, tx, sessionID, owner)
+	if controllerapi.ManagerRoot(record.Attributes) {
+		replaced, err = hasReplacementRow(ctx, tx, sessionID)
 		if err != nil {
 			return nil, err
 		}
 	}
 
-	if record.ParentID != 0 || owner == "" || replaced {
+	if record.ParentID != 0 || !controllerapi.ManagerRoot(record.Attributes) || replaced {
 		if err := tx.Commit(); err != nil {
 			return nil, fmt.Errorf("commit killed session: %w", err)
 		}
@@ -168,7 +167,7 @@ func (s *Store) MarkSessionKilledWithOutput(
 		return nil, fmt.Errorf("commit killed output: %w", err)
 	}
 
-	return &OutputCommit{OutputID: outputID, OwnerID: owner}, nil
+	return &OutputCommit{OutputID: outputID}, nil
 }
 
 // /stop keeps input blocked until its separate completion row commits.
@@ -209,7 +208,6 @@ func hasReplacementRow(
 		QueryRowContext(context.Context, string, ...any) *sql.Row
 	},
 	sessionID int64,
-	owner string,
 ) (bool, error) {
 	var replaced int64
 
@@ -217,8 +215,7 @@ func hasReplacementRow(
 		SELECT 1 FROM session_outbox
 		WHERE type = 'session_replaced'
 			AND json_extract(attributes, '$.old_session_id') = ?
-			AND json_extract(attributes, '$.manager_id') = ?
-		LIMIT 1`, sessionID, owner).Scan(&replaced)
+		LIMIT 1`, sessionID).Scan(&replaced)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}

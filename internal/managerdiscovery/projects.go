@@ -12,7 +12,6 @@ import (
 
 func (s *Service) CreateProject(
 	ctx context.Context,
-	_ string,
 	data controllerapi.ProjectCreateData,
 ) (*controllerapi.ProjectCreateResultData, error) {
 	name, err := projectpath.SanitizeName(data.Name)

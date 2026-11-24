@@ -6,10 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+
+	"github.com/pilat/coagent/internal/controllerapi"
 )
 
-func (s *Store) ResolveReplacement(ctx context.Context, sessionID int64, managerID string) (int64, error) {
-	_, record, err := s.forwardReplacements(ctx, sessionID, managerID)
+func (s *Store) ResolveReplacement(ctx context.Context, sessionID int64) (int64, error) {
+	_, record, err := s.forwardReplacements(ctx, sessionID)
 	if err != nil {
 		return 0, err
 	}
@@ -22,8 +24,8 @@ func (s *Store) ResolveReplacement(ctx context.Context, sessionID int64, manager
 }
 
 // ReplacementChain includes valid predecessors and permits a killed final root.
-func (s *Store) ReplacementChain(ctx context.Context, sessionID int64, managerID string) ([]int64, error) {
-	chain, _, err := s.forwardReplacements(ctx, sessionID, managerID)
+func (s *Store) ReplacementChain(ctx context.Context, sessionID int64) ([]int64, error) {
+	chain, _, err := s.forwardReplacements(ctx, sessionID)
 	if err != nil {
 		return nil, err
 	}
@@ -68,7 +70,7 @@ func (s *Store) ReplacementChain(ctx context.Context, sessionID int64, managerID
 		}
 
 		if prior.ParentID != 0 || prior.ProjectID != record.ProjectID ||
-			prior.Attributes[managerIDAttribute] != managerID {
+			!controllerapi.ManagerRoot(prior.Attributes) {
 			break
 		}
 
@@ -84,7 +86,6 @@ func (s *Store) ReplacementChain(ctx context.Context, sessionID int64, managerID
 func (s *Store) forwardReplacements(
 	ctx context.Context,
 	sessionID int64,
-	managerID string,
 ) ([]int64, *SessionRecord, error) {
 	seen := make(map[int64]struct{})
 	var chain []int64
@@ -101,8 +102,7 @@ func (s *Store) forwardReplacements(
 			return nil, nil, err
 		}
 
-		owner, _ := record.Attributes[managerIDAttribute].(string)
-		if owner != managerID {
+		if !controllerapi.ManagerRoot(record.Attributes) {
 			return nil, nil, ErrOutputOwner
 		}
 
@@ -117,8 +117,7 @@ func (s *Store) forwardReplacements(
 			SELECT session_id FROM session_outbox
 			WHERE type = 'session_replaced'
 				AND json_extract(attributes, '$.old_session_id') = ?
-				AND json_extract(attributes, '$.manager_id') = ?
-			ORDER BY id DESC LIMIT 1`, sessionID, managerID).Scan(&replacementID)
+			ORDER BY id DESC LIMIT 1`, sessionID).Scan(&replacementID)
 		if errors.Is(err, sql.ErrNoRows) {
 			return chain, record, nil
 		}
@@ -132,8 +131,7 @@ func (s *Store) forwardReplacements(
 			return nil, nil, err
 		}
 
-		nextOwner, _ := next.Attributes[managerIDAttribute].(string)
-		if next.ParentID != 0 || next.ProjectID != record.ProjectID || nextOwner != managerID {
+		if next.ParentID != 0 || next.ProjectID != record.ProjectID || !controllerapi.ManagerRoot(next.Attributes) {
 			return nil, nil, errors.New("invalid replacement session")
 		}
 

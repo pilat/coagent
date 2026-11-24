@@ -26,9 +26,9 @@ func TestChatSessions_ActivityOrderAndRename(t *testing.T) {
 	want := []int64{roots[3].ID, roots[2].ID, roots[1].ID, roots[0].ID}
 	for _, rename := range []bool{false, true} {
 		if rename {
-			require.NoError(t, store.SetSessionTitle(ctx, "owner", roots[0].ID, "renamed"))
+			require.NoError(t, store.SetSessionTitle(ctx, roots[0].ID, "renamed"))
 		}
-		sessions, err := store.ChatSessions(ctx, "owner")
+		sessions, err := store.ChatSessions(ctx)
 		require.NoError(t, err)
 		var ids []int64
 		for _, session := range sessions {
@@ -95,7 +95,7 @@ func TestChatSessions_LastActivitySources(t *testing.T) {
 					base.Add(2*time.Hour), root.ID)
 			}
 			require.NoError(t, err)
-			sessions, err := store.ChatSessions(ctx, "owner")
+			sessions, err := store.ChatSessions(ctx)
 			require.NoError(t, err)
 			require.Len(t, sessions, 2)
 			want := other.ID
@@ -114,7 +114,7 @@ func TestChatSessions_ActivityTiesUseDescendingID(t *testing.T) {
 	second := chatTestRoot(t, store, project, "owner")
 	_, err := db.ExecContext(t.Context(), `UPDATE sessions SET created_at = '2026-10-30 10:00:00'`)
 	require.NoError(t, err)
-	sessions, err := store.ChatSessions(t.Context(), "owner")
+	sessions, err := store.ChatSessions(t.Context())
 	require.NoError(t, err)
 	require.Len(t, sessions, 2)
 	assert.Equal(t, second.ID, sessions[0].ID)

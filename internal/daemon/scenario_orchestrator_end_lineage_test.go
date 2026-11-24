@@ -12,7 +12,7 @@ import (
 	"github.com/pilat/coagent/internal/sessionstore"
 )
 
-// Every lifecycle call revalidates capability, manager ownership and spawning authority before writing.
+// Every lifecycle call revalidates mode, root target and spawning authority before writing.
 func TestOrchestratorEndRefusals(t *testing.T) {
 	h := orchestratorProjectHarness(t)
 	caller, other := modeRoot(t, h), modeRoot(t, h)
@@ -28,7 +28,7 @@ func TestOrchestratorEndRefusals(t *testing.T) {
 		{name: "human root", target: human, want: endOwnershipRefusal(human)},
 		{name: "other spawner", target: othersTarget, want: endOwnershipRefusal(othersTarget)},
 		{name: "subagent", target: child, want: fmt.Sprintf("session #%d is a subagent, not a root session", child)},
-		{name: "other manager", target: foreign, want: fmt.Sprintf("session #%d not found", foreign)},
+		{name: "another manager's root", target: foreign, want: endOwnershipRefusal(foreign)},
 		{name: "self", target: caller, want: endOwnershipRefusal(caller)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -36,7 +36,7 @@ func TestOrchestratorEndRefusals(t *testing.T) {
 		})
 	}
 	owned := spawnEndTarget(t, h, caller, "owned work")
-	_, err := h.store.SetOrchestrator(h.ctx, "owner", caller, false)
+	_, err := h.store.SetOrchestrator(h.ctx, caller, false)
 	require.NoError(t, err)
 	assertEndRefusals(t, h, caller, owned, "orchestrator mode is off for this session")
 }
@@ -126,7 +126,7 @@ func assertOrphanedSpawnRefused(t *testing.T, h *harness) {
 func TestOrchestratorEndCommandSurvivesRestart(t *testing.T) {
 	h := orchestratorProjectHarness(t)
 	caller, watcher := modeRoot(t, h), modeRoot(t, h)
-	require.NoError(t, h.store.SetSessionTitle(h.ctx, "owner", caller, "stop the queued target"))
+	require.NoError(t, h.store.SetSessionTitle(h.ctx, caller, "stop the queued target"))
 	target := spawnEndTarget(t, h, caller, "queued target")
 	host := orchestratorHost{s: h.mgr}
 	_, _, err := host.Subscribe(h.ctx, watcher, target)

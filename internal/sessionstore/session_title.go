@@ -20,8 +20,8 @@ func TitleFromInput(content string) string {
 	return controllerapi.SessionTitleFromInput(content)
 }
 
-// SetSessionTitle renames only live roots owned by the manager, preserving list order.
-func (s *Store) SetSessionTitle(ctx context.Context, managerID string, sessionID int64, raw string) error {
+// SetSessionTitle renames only live manager roots, preserving list order.
+func (s *Store) SetSessionTitle(ctx context.Context, sessionID int64, raw string) error {
 	title, ok := NormalizeTitle(raw)
 	if !ok {
 		return errors.New("title must be one line of 1-80 characters")
@@ -29,7 +29,7 @@ func (s *Store) SetSessionTitle(ctx context.Context, managerID string, sessionID
 
 	result, err := s.db.ExecContext(ctx, `UPDATE sessions AS s
 		SET attributes = json_set(COALESCE(attributes, '{}'), '$.title', ?)
-		WHERE s.id = ? AND `+liveChatRootSQL, title, sessionID, managerID)
+		WHERE s.id = ? AND `+liveChatRootSQL, title, sessionID)
 	if err != nil {
 		return fmt.Errorf("set session title: %w", err)
 	}

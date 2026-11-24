@@ -25,7 +25,7 @@ func TestOrchestratorSpawnEffort(t *testing.T) {
 			h := orchestratorEffortHarness(t, provider.url)
 			caller, err := h.store.CreateSession(h.ctx, h.projectID, "caller-model", "", managerAttrs("owner"))
 			require.NoError(t, err)
-			_, err = h.store.SetOrchestrator(h.ctx, "owner", caller.ID, true)
+			_, err = h.store.SetOrchestrator(h.ctx, caller.ID, true)
 			require.NoError(t, err)
 			id, _, err := (orchestratorHost{h.mgr}).SpawnSession(h.ctx, caller.ID, orchestrator.SpawnRequest{
 				Project: h.workDir(),

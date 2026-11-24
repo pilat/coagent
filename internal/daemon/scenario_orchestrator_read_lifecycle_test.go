@@ -78,7 +78,7 @@ func clearReadTarget(t *testing.T, h *harness, target int64) int64 {
 	var replacement int64
 	h.waitUntil("read target replacement", func() bool {
 		var err error
-		replacement, err = h.store.ResolveReplacement(h.ctx, target, "owner")
+		replacement, err = h.store.ResolveReplacement(h.ctx, target)
 		return err == nil && replacement != target
 	})
 	h.waitUntil("replacement clear notice", func() bool {

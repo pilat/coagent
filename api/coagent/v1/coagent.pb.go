@@ -879,10 +879,8 @@ type SessionDetails struct {
 	Model   string `protobuf:"bytes,3,opt,name=model,proto3" json:"model,omitempty"`
 	Effort  string `protobuf:"bytes,4,opt,name=effort,proto3" json:"effort,omitempty"`
 	// The persisted session status, such as "active", "terminating" or "completed".
-	Status string `protobuf:"bytes,5,opt,name=status,proto3" json:"status,omitempty"`
-	Killed bool   `protobuf:"varint,6,opt,name=killed,proto3" json:"killed,omitempty"`
-	// The author that owns the root, which is always the caller.
-	OwnerId       string `protobuf:"bytes,7,opt,name=owner_id,json=ownerId,proto3" json:"owner_id,omitempty"`
+	Status        string `protobuf:"bytes,5,opt,name=status,proto3" json:"status,omitempty"`
+	Killed        bool   `protobuf:"varint,6,opt,name=killed,proto3" json:"killed,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -957,13 +955,6 @@ func (x *SessionDetails) GetKilled() bool {
 		return x.Killed
 	}
 	return false
-}
-
-func (x *SessionDetails) GetOwnerId() string {
-	if x != nil {
-		return x.OwnerId
-	}
-	return ""
 }
 
 type GetSessionKilledRequest struct {
@@ -3071,15 +3062,14 @@ const file_coagent_v1_coagent_proto_rawDesc = "" +
 	"\tscheduled\x18\x03 \x01(\bR\tscheduled\"\x1b\n" +
 	"\x19ListSessionDetailsRequest\"T\n" +
 	"\x1aListSessionDetailsResponse\x126\n" +
-	"\bsessions\x18\x01 \x03(\v2\x1a.coagent.v1.SessionDetailsR\bsessions\"\xb4\x01\n" +
+	"\bsessions\x18\x01 \x03(\v2\x1a.coagent.v1.SessionDetailsR\bsessions\"\xa9\x01\n" +
 	"\x0eSessionDetails\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\x03R\x02id\x12\x19\n" +
 	"\bwork_dir\x18\x02 \x01(\tR\aworkDir\x12\x14\n" +
 	"\x05model\x18\x03 \x01(\tR\x05model\x12\x16\n" +
 	"\x06effort\x18\x04 \x01(\tR\x06effort\x12\x16\n" +
 	"\x06status\x18\x05 \x01(\tR\x06status\x12\x16\n" +
-	"\x06killed\x18\x06 \x01(\bR\x06killed\x12\x19\n" +
-	"\bowner_id\x18\a \x01(\tR\aownerId\"8\n" +
+	"\x06killed\x18\x06 \x01(\bR\x06killedJ\x04\b\a\x10\bR\bowner_id\"8\n" +
 	"\x17GetSessionKilledRequest\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\x03R\tsessionId\"2\n" +

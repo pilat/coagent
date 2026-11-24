@@ -3,7 +3,6 @@ package sessionstore
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -114,7 +113,7 @@ func positiveNumber(value any) bool {
 	}
 }
 
-func validateLifecycleTarget(ctx context.Context, tx *sql.Tx, draft OutputDraft, owner string) error {
+func validateLifecycleTarget(ctx context.Context, tx *sql.Tx, draft OutputDraft) error {
 	if draft.Type != OutputSessionReplaced {
 		return nil
 	}
@@ -131,9 +130,8 @@ func validateLifecycleTarget(ctx context.Context, tx *sql.Tx, draft OutputDraft,
 
 	var oldProject, newProject, oldParent int64
 
-	var oldAttributes string
-	if err := tx.QueryRowContext(ctx, `SELECT project_id, parent_id, attributes FROM sessions WHERE id = ?`, oldID).
-		Scan(&oldProject, &oldParent, &oldAttributes); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT project_id, parent_id FROM sessions WHERE id = ?`, oldID).
+		Scan(&oldProject, &oldParent); err != nil {
 		return fmt.Errorf("load replaced root: %w", err)
 	}
 
@@ -144,15 +142,6 @@ func validateLifecycleTarget(ctx context.Context, tx *sql.Tx, draft OutputDraft,
 
 	if oldParent != 0 || oldProject != newProject {
 		return errors.New("session replacement roots must share a project")
-	}
-
-	var attributes map[string]any
-	if err := json.Unmarshal([]byte(oldAttributes), &attributes); err != nil {
-		return fmt.Errorf("decode replaced root attributes: %w", err)
-	}
-
-	if oldOwner, _ := attributes[managerIDAttribute].(string); oldOwner != owner {
-		return errors.New("session replacement roots must share a manager owner")
 	}
 
 	return nil

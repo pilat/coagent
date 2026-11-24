@@ -76,16 +76,16 @@ func (h orchestratorHost) KillSession(ctx context.Context, callerID, targetID in
 func (h orchestratorHost) endTarget(
 	ctx context.Context, callerID, targetID int64,
 ) (*sessionstore.SessionRecord, *sessionstore.SessionRecord, error) {
-	caller, owner, err := h.caller(ctx, callerID)
+	caller, err := h.caller(ctx, callerID)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	if err := h.rootTarget(ctx, owner, targetID); err != nil {
+	if err := h.rootTarget(ctx, targetID); err != nil {
 		return nil, nil, err
 	}
 
-	chain, err := h.s.store.ReplacementChain(ctx, targetID, owner)
+	chain, err := h.s.store.ReplacementChain(ctx, targetID)
 	if err != nil {
 		return nil, nil, fmt.Errorf("resolve end target: %w", err)
 	}
@@ -95,7 +95,7 @@ func (h orchestratorHost) endTarget(
 		return nil, nil, fmt.Errorf("load end target: %w", err)
 	}
 
-	lineage, err := h.s.store.ReplacementChain(ctx, callerID, owner)
+	lineage, err := h.s.store.ReplacementChain(ctx, callerID)
 	if err != nil {
 		return nil, nil, fmt.Errorf("resolve ending session: %w", err)
 	}

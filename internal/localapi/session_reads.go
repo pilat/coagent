@@ -90,10 +90,8 @@ func sessionSummary(session controllerapi.ChatSessionInfo) *coagentv1.SessionSum
 }
 
 func sessionDetails(session controllerapi.SessionInfo) *coagentv1.SessionDetails {
-	owner, _ := session.Attributes[controllerapi.SessionAttributeManagerID].(string)
-
 	return &coagentv1.SessionDetails{
 		Id: session.ID, WorkDir: session.WorkDir, Model: session.Model, Effort: session.ReasoningLevel,
-		Status: session.Status, Killed: session.KilledAt != nil, OwnerId: owner,
+		Status: session.Status, Killed: session.KilledAt != nil,
 	}
 }

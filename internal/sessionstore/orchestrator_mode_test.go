@@ -15,7 +15,7 @@ func TestSetOrchestrator(t *testing.T) {
 	store, db, project := newTestStore(t)
 	root := chatTestRoot(t, store, project, "owner")
 	for i, on := range []bool{true, true, false, false} {
-		changed, err := store.SetOrchestrator(t.Context(), "owner", root.ID, on)
+		changed, err := store.SetOrchestrator(t.Context(), root.ID, on)
 		require.NoError(t, err)
 		assert.Equal(t, i%2 == 0, changed)
 		assertOrchestratorMode(t, store, root.ID, on)
@@ -26,12 +26,11 @@ func TestSetOrchestrator(t *testing.T) {
 		_, err = db.ExecContext(t.Context(), "UPDATE sessions SET attributes = ? WHERE id = ?", string(raw), root.ID)
 		require.NoError(t, err)
 		assertOrchestratorMode(t, store, root.ID, false)
-		changed, err := store.SetOrchestrator(t.Context(), "owner", root.ID, true)
+		changed, err := store.SetOrchestrator(t.Context(), root.ID, true)
 		require.NoError(t, err)
 		assert.True(t, changed)
 		assertOrchestratorMode(t, store, root.ID, true)
 	}
-	foreign := chatTestRoot(t, store, project, "foreign")
 	killed := chatTestRoot(t, store, project, "owner")
 	_, err := store.MarkSessionKilledWithOutput(t.Context(), killed.ID, 0)
 	require.NoError(t, err)
@@ -43,12 +42,12 @@ func TestSetOrchestrator(t *testing.T) {
 		child,
 	)
 	require.NoError(t, err)
-	for _, id := range []int64{foreign.ID, killed.ID, child, 999} {
+	for _, id := range []int64{killed.ID, child, 999} {
 		for _, on := range []bool{true, false} {
-			_, err := store.SetOrchestrator(t.Context(), "owner", id, on)
+			_, err := store.SetOrchestrator(t.Context(), id, on)
 			require.EqualError(t, err, fmt.Sprintf("#%d is not a live session", id))
 		}
-		_, err := store.OrchestratorMode(t.Context(), "owner", id)
+		_, err := store.OrchestratorMode(t.Context(), id)
 		require.EqualError(t, err, fmt.Sprintf("#%d is not a live session", id))
 	}
 }
@@ -56,8 +55,8 @@ func TestSetOrchestrator(t *testing.T) {
 func TestReplaceManagerRootKeepsOrchestratorMode(t *testing.T) {
 	store, _, project := newTestStore(t)
 	root := chatTestRoot(t, store, project, "owner")
-	require.NoError(t, store.SetSessionTitle(t.Context(), "owner", root.ID, "old title"))
-	_, err := store.SetOrchestrator(t.Context(), "owner", root.ID, true)
+	require.NoError(t, store.SetSessionTitle(t.Context(), root.ID, "old title"))
+	_, err := store.SetOrchestrator(t.Context(), root.ID, true)
 	require.NoError(t, err)
 	replacement, _, err := store.ReplaceManagerRoot(t.Context(), root.ID, "test", "/project")
 	require.NoError(t, err)
@@ -67,7 +66,7 @@ func TestReplaceManagerRootKeepsOrchestratorMode(t *testing.T) {
 
 func assertOrchestratorMode(t *testing.T, store *Store, id int64, want bool) {
 	t.Helper()
-	mode, err := store.OrchestratorMode(t.Context(), "owner", id)
+	mode, err := store.OrchestratorMode(t.Context(), id)
 	require.NoError(t, err)
 	record, err := store.GetSession(t.Context(), id)
 	require.NoError(t, err)

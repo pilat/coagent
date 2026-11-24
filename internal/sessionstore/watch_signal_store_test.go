@@ -118,7 +118,7 @@ func TestWatchSignals_FireArmRead(t *testing.T) {
 				_, err := store.MarkSessionKilledWithOutput(t.Context(), watcher, 0)
 				require.NoError(t, err)
 			} else {
-				_, err := store.SetOrchestrator(t.Context(), "owner", watcher, false)
+				_, err := store.SetOrchestrator(t.Context(), watcher, false)
 				require.NoError(t, err)
 			}
 			signalTestFire(t, store, target, 0)
@@ -169,7 +169,7 @@ func TestWatchSignals_ActorIsNotSignalled(t *testing.T) {
 	record, err := store.GetSession(t.Context(), target)
 	require.NoError(t, err)
 	other := chatTestRoot(t, store, record.ProjectID, "owner")
-	_, err = store.SetOrchestrator(t.Context(), "owner", other.ID, true)
+	_, err = store.SetOrchestrator(t.Context(), other.ID, true)
 	require.NoError(t, err)
 	signalTestArm(t, store, actor, target, false)
 	signalTestArm(t, store, actor, target, true)
@@ -196,7 +196,7 @@ func signalTestPair(t *testing.T) (*Store, *sql.DB, int64, int64) {
 	store, db, project := newTestStore(t)
 	watcher := chatTestRoot(t, store, project, "owner")
 	target := chatTestRoot(t, store, project, "owner")
-	_, err := store.SetOrchestrator(t.Context(), "owner", watcher.ID, true)
+	_, err := store.SetOrchestrator(t.Context(), watcher.ID, true)
 	require.NoError(t, err)
 	return store, db, watcher.ID, target.ID
 }

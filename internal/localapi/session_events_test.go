@@ -51,7 +51,7 @@ func TestStreamSessionEvents_FirstEventMarksTheSubscriptionLive(t *testing.T) {
 	assert.Equal(t, coagentv1.SessionEventType_SESSION_EVENT_TYPE_HEARTBEAT, next.GetType())
 }
 
-func TestStreamSessionEvents_CarriesOnlyOwnedHeartbeatsAndActivity(t *testing.T) {
+func TestStreamSessionEvents_CarriesEveryRootsHintsAndNoneOfANonRoot(t *testing.T) {
 	t.Parallel()
 	f := newAPIFixture(t)
 	owned := inProcessRoot(t, f, "alpha")
@@ -64,17 +64,24 @@ func TestStreamSessionEvents_CarriesOnlyOwnedHeartbeatsAndActivity(t *testing.T)
 	defer func() { _ = stream.Close() }()
 	_, err = stream.Receive()
 	require.NoError(t, err)
-	f.bus.Publish(owned, "alpha", sessionevent.Notification{Type: sessionevent.NotifyHeartbeat})
-	f.bus.Publish(foreign, "beta", sessionevent.Notification{Type: sessionevent.NotifyMessage, Message: "private"})
-	f.bus.Publish(owned, "alpha", sessionevent.Notification{Type: sessionevent.NotifyMessage, Message: "owned"})
-	for _, kind := range []coagentv1.SessionEventType{
-		coagentv1.SessionEventType_SESSION_EVENT_TYPE_HEARTBEAT,
-		coagentv1.SessionEventType_SESSION_EVENT_TYPE_ACTIVITY,
+	f.bus.Publish(owned, true, sessionevent.Notification{Type: sessionevent.NotifyHeartbeat})
+	f.bus.Publish(foreign, true, sessionevent.Notification{Type: sessionevent.NotifyHeartbeat})
+	f.bus.Publish(999, false, sessionevent.Notification{Type: sessionevent.NotifyMessage, Message: "internal"})
+	f.bus.Publish(owned, true, sessionevent.Notification{Type: sessionevent.NotifyMessage, Message: "owned"})
+	f.bus.Publish(foreign, true, sessionevent.Notification{Type: sessionevent.NotifyMessage, Message: "foreign"})
+	for _, expected := range []struct {
+		id   int64
+		kind coagentv1.SessionEventType
+	}{
+		{id: owned, kind: coagentv1.SessionEventType_SESSION_EVENT_TYPE_HEARTBEAT},
+		{id: foreign, kind: coagentv1.SessionEventType_SESSION_EVENT_TYPE_HEARTBEAT},
+		{id: owned, kind: coagentv1.SessionEventType_SESSION_EVENT_TYPE_ACTIVITY},
+		{id: foreign, kind: coagentv1.SessionEventType_SESSION_EVENT_TYPE_ACTIVITY},
 	} {
 		event, err := stream.Receive()
 		require.NoError(t, err)
-		assert.Equal(t, owned, event.GetSessionId())
-		assert.Equal(t, kind, event.GetType())
+		assert.Equal(t, expected.id, event.GetSessionId())
+		assert.Equal(t, expected.kind, event.GetType())
 	}
 }
 

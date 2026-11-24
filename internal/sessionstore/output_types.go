@@ -51,7 +51,6 @@ type OutputDraft struct {
 type OutputCommit struct {
 	PersistOnly bool
 	OutputID    int64
-	OwnerID     string
 	Existing    bool
 	Content     string
 	LiveContent string

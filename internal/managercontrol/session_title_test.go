@@ -20,7 +20,7 @@ func TestChatCapability_SetSessionTitle(t *testing.T) {
 	reloaded, err := store.GetSession(t.Context(), root.ID)
 	require.NoError(t, err)
 	assert.Equal(t, "fix login 500", reloaded.Attributes[controllerapi.SessionAttributeTitle])
-	require.Error(t, chatCapability(t, factory, "other").SetSessionTitle(t.Context(), "chat", root.ID, "foreign"))
+	require.NoError(t, chatCapability(t, factory, "other").SetSessionTitle(t.Context(), "chat", root.ID, "foreign"))
 	require.Error(t, chat.SetSessionTitle(t.Context(), "chat", 0, "invalid"))
 	require.EqualError(
 		t,

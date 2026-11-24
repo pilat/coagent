@@ -51,7 +51,10 @@ func (outputService) TailOutput(ctx context.Context, req *coagentv1.TailOutputRe
 	events := author.control.Subscribe()
 	defer author.control.Unsubscribe(events)
 
-	drain := &tailEvents{wake: make(chan struct{}, 1)}
+	drain := &tailEvents{
+		wake:   make(chan struct{}, 1),
+		states: make(map[int64]sessionevent.State),
+	}
 	go drain.run(ctx, events)
 
 	t := &tail{author: author, stream: stream, events: drain, current: req.GetSessionId(), cursor: req.GetAfterId()}

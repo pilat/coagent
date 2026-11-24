@@ -85,7 +85,7 @@ func (m *Manager) listModels(ctx context.Context, sessionID int64, models []*coa
 
 	current, effort := "", ""
 
-	for _, session := range m.filterOwnedActiveSessions(sessions.GetSessions()) {
+	for _, session := range filterActiveSessions(sessions.GetSessions()) {
 		if session.GetId() == sessionID {
 			current, effort = session.GetModel(), session.GetEffort()
 			break

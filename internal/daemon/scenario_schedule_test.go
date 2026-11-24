@@ -651,7 +651,7 @@ type orderedScheduleSender struct {
 func newScheduleRunningObserver(t *testing.T, source *sessionbus.Bus) *scheduleRunningObserver {
 	t.Helper()
 	o := &scheduleRunningObserver{
-		source: source, subscription: source.SubscribeManager("telegram-main"),
+		source: source, subscription: source.SubscribeManagerRoots(),
 		running: make(chan struct{}), done: make(chan struct{}), stopped: make(chan struct{}),
 	}
 	go o.watch()
@@ -677,7 +677,7 @@ func (o *scheduleRunningObserver) watch() {
 func (o *scheduleRunningObserver) close() {
 	o.closeOnce.Do(func() { close(o.running) })
 	close(o.done)
-	o.source.UnsubscribeManager(o.subscription)
+	o.source.UnsubscribeManagerRoots(o.subscription)
 	<-o.stopped
 }
 
@@ -707,7 +707,7 @@ func runStoppedRootScheduleScenario(t *testing.T, tc stoppedRootScheduleCase) {
 	require.NoError(t, err)
 	h.waitAnswer(rootID, "")
 	require.NoError(t, h.mgr.sendToSession(t.Context(), rootID, "/stop"))
-	collector := collectEvents(t, h.mgr.bus.SubscribeManager("telegram-main"))
+	collector := collectEvents(t, h.mgr.bus.SubscribeManagerRoots())
 	t.Cleanup(collector.stop)
 	oldEpisode := time.Now().UTC().Add(-time.Hour)
 	_, err = h.db.ExecContext(t.Context(),

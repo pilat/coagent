@@ -32,7 +32,7 @@ func TestChatSessions_ScheduledRoots(t *testing.T) {
 		)
 		require.NoError(t, err)
 	}
-	entries, err := store.ChatSessions(t.Context(), "owner")
+	entries, err := store.ChatSessions(t.Context())
 	require.NoError(t, err)
 	require.Len(t, entries, 3)
 	for _, entry := range entries {
@@ -56,8 +56,6 @@ func TestChatSessions_LiveOwnedRootsInActivityOrder(t *testing.T) {
 	chatTestOutput(t, store, root.ID, "latest answer\nsecond line")
 	stopped := chatTestRoot(t, store, project, "owner")
 	require.NoError(t, store.UpdateSessionStatus(ctx, stopped.ID, SessionStatusStopped))
-	foreign := chatTestRoot(t, store, project, "foreign")
-	chatTestOutput(t, store, foreign.ID, "foreign answer")
 	killed := chatTestRoot(t, store, project, "owner")
 	chatTestOutput(t, store, killed.ID, "killed answer")
 	_, err = store.MarkSessionKilledWithOutput(ctx, killed.ID, 0)
@@ -67,7 +65,7 @@ func TestChatSessions_LiveOwnedRootsInActivityOrder(t *testing.T) {
 	_, err = db.ExecContext(ctx, `UPDATE sessions SET attributes = '{"manager_id":"owner"}' WHERE id = ?`, child)
 	require.NoError(t, err)
 
-	sessions, err := store.ChatSessions(ctx, "owner")
+	sessions, err := store.ChatSessions(ctx)
 	require.NoError(t, err)
 	require.Len(t, sessions, 2)
 	byID := make(map[int64]ChatSession)
@@ -86,8 +84,8 @@ func TestChatSessions_SessionTitle(t *testing.T) {
 	t.Parallel()
 	store, _, project := newTestStore(t)
 	root := chatTestRoot(t, store, project, "owner")
-	require.NoError(t, store.SetSessionTitle(t.Context(), "owner", root.ID, "fix login 500"))
-	sessions, err := store.ChatSessions(t.Context(), "owner")
+	require.NoError(t, store.SetSessionTitle(t.Context(), root.ID, "fix login 500"))
+	sessions, err := store.ChatSessions(t.Context())
 	require.NoError(t, err)
 	require.Len(t, sessions, 1)
 	assert.Equal(t, "test · fix login 500", sessions[0].Name)

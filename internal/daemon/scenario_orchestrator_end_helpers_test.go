@@ -60,7 +60,7 @@ func runningEndTarget(t *testing.T) (*harness, int64, int64, int64) {
 	t.Cleanup(func() { closeOnce(release) })
 	h.startInboxWake()
 	caller := modeRoot(t, h)
-	require.NoError(t, h.store.SetSessionTitle(h.ctx, "owner", caller, "orchestrator"))
+	require.NoError(t, h.store.SetSessionTitle(h.ctx, caller, "orchestrator"))
 	target := spawnEndTarget(t, h, caller, "BLOCK_TARGET")
 	waitForScenarioSignal(t, entered, "spawned target provider entered")
 	watcher := modeRoot(t, h)

@@ -45,8 +45,8 @@ func TestSessionsWordFilter(t *testing.T) {
 func TestHarnessScenario_SessionsFilterKeepsMarkers(t *testing.T) {
 	h := newDelayedTelegramHarness(t)
 	one, two := createChatWork(t, h), createChatWork(t, h)
-	require.NoError(t, h.sessions.SetSessionTitle(t.Context(), delayedTelegramManagerID, one, "Daily Check"))
-	require.NoError(t, h.sessions.SetSessionTitle(t.Context(), delayedTelegramManagerID, two, "other work"))
+	require.NoError(t, h.sessions.SetSessionTitle(t.Context(), one, "Daily Check"))
+	require.NoError(t, h.sessions.SetSessionTitle(t.Context(), two, "other work"))
 	require.NoError(t, h.sessions.WithTx(t.Context(), func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(t.Context(),
 			`INSERT INTO schedules(session_id,cron_expr,input_message) VALUES (?, '0 9 * * *','')`, one)

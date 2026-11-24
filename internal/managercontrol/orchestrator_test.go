@@ -1,7 +1,6 @@
 package managercontrol
 
 import (
-	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -39,7 +38,8 @@ func TestOrchestratorCapability(t *testing.T) {
 	for _, owner := range []string{"owner", "other", ""} {
 		capability, ok := factory.ForManager(owner).(controllerapi.ChatFocusController)
 		require.True(t, ok)
-		if owner == "owner" {
+		switch owner {
+		case "owner":
 			changed, err := capability.SetOrchestrator(t.Context(), "chat", root.ID, true)
 			require.NoError(t, err)
 			assert.True(t, changed)
@@ -48,13 +48,16 @@ func TestOrchestratorCapability(t *testing.T) {
 			assert.True(t, on)
 			_, err = capability.SetOrchestrator(t.Context(), "chat", 0, true)
 			require.EqualError(t, err, "#0 is not a live session")
-		} else {
+		case "other":
+			changed, err := capability.SetOrchestrator(t.Context(), "chat", root.ID, true)
+			require.NoError(t, err)
+			assert.False(t, changed)
+			on, err := capability.Orchestrator(t.Context(), "chat", root.ID)
+			require.NoError(t, err)
+			assert.True(t, on)
+		default:
 			_, err := capability.SetOrchestrator(t.Context(), "chat", root.ID, true)
-			if owner == "" {
-				require.ErrorContains(t, err, "no manager identity")
-			} else {
-				require.EqualError(t, err, fmt.Sprintf("#%d is not a live session", root.ID))
-			}
+			require.ErrorContains(t, err, "no manager identity")
 			_, err = capability.Orchestrator(t.Context(), "chat", root.ID)
 			require.Error(t, err)
 		}

@@ -37,7 +37,6 @@ func (s *Service) ListModels(context.Context) (*controllerapi.ConfigModelsResult
 
 func (s *Service) ListSkills(
 	ctx context.Context,
-	managerID string,
 	data controllerapi.ConfigSkillsData,
 ) (*controllerapi.ConfigSkillsResultData, error) {
 	record, err := s.backend.GetSession(ctx, data.SessionID)
@@ -45,9 +44,8 @@ func (s *Service) ListSkills(
 		return nil, fmt.Errorf("session %d not found", data.SessionID)
 	}
 
-	owner, _ := record.Attributes[controllerapi.SessionAttributeManagerID].(string)
-	if managerID == "" || owner != managerID {
-		return nil, fmt.Errorf("session %d belongs to another manager", data.SessionID)
+	if record.ParentID != 0 || !controllerapi.ManagerRoot(record.Attributes) {
+		return nil, fmt.Errorf("session %d is not a root session", data.SessionID)
 	}
 
 	workDir, err := s.backend.GetProjectWorkDir(ctx, record.ProjectID)

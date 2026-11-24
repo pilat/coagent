@@ -10,7 +10,7 @@ import (
 	"github.com/pilat/coagent/internal/sessionstore"
 )
 
-func TestLineage_SuccessorFollowsOnlyAnOwnedReplacement(t *testing.T) {
+func TestLineage_EveryControllerFollowsAReplacement(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
 	factory, store, project := newChatControl(t)
@@ -31,8 +31,9 @@ func TestLineage_SuccessorFollowsOnlyAnOwnedReplacement(t *testing.T) {
 	next, err = alpha.Successor(ctx, replacement.ID)
 	require.NoError(t, err)
 	assert.Zero(t, next)
-	_, err = factory.ForManager("beta").(controllerapi.LineageController).Successor(ctx, root.ID)
-	require.Error(t, err)
+	next, err = factory.ForManager("beta").(controllerapi.LineageController).Successor(ctx, root.ID)
+	require.NoError(t, err)
+	assert.Equal(t, replacement.ID, next)
 	_, err = store.MarkSessionKilledWithOutput(ctx, replacement.ID, 0)
 	require.NoError(t, err)
 	next, err = alpha.Successor(ctx, replacement.ID)

@@ -81,7 +81,7 @@ func TestServer_RefusesGeneralOptionsWithoutToken(t *testing.T) {
 	assert.Equal(t, http.StatusUnauthorized, response.StatusCode)
 }
 
-func TestServer_ClientCannotReachAnotherClientsRoot(t *testing.T) {
+func TestServer_EveryClientReachesEveryRoot(t *testing.T) {
 	t.Parallel()
 	f := newAPIFixture(t)
 	h := f.start(t)
@@ -92,21 +92,16 @@ func TestServer_ClientCannotReachAnotherClientsRoot(t *testing.T) {
 	_, err := coagentv1connect.NewSessionServiceClient(client).SendInput(ctx, &coagentv1.SendInputRequest{
 		SessionId: id, Text: "private", IdempotencyKey: "foreign",
 	})
-	require.Error(t, err)
-	assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
+	require.NoError(t, err)
 	stream, err := coagentv1connect.NewOutputServiceClient(client).
 		TailOutput(ctx, &coagentv1.TailOutputRequest{SessionId: id})
-	if err == nil {
-		defer func() { _ = stream.Close() }()
-		var event *coagentv1.TailOutputResponse
-		event, err = stream.Receive()
-		assert.Nil(t, event)
-	}
-	require.Error(t, err)
-	assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
+	require.NoError(t, err)
+	defer func() { _ = stream.Close() }()
+	row := nextOutput(t, stream)
+	assert.Equal(t, id, row.GetSessionId())
 	f.backend.mu.Lock()
 	defer f.backend.mu.Unlock()
-	assert.Empty(t, f.backend.sends)
+	assert.Equal(t, []apiSend{{sessionID: id, text: "private", key: "foreign"}}, f.backend.sends)
 }
 
 func TestCreateSession_RootBelongsToTheCallingClient(t *testing.T) {

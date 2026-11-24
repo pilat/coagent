@@ -34,7 +34,7 @@ func TestHarnessScenario_OutputRightAfterStartIsDeliveredByItsWake(t *testing.T)
 	require.NoError(t, err)
 	h.bus.Publish(
 		id,
-		delayedTelegramManagerID,
+		true,
 		sessionevent.Notification{Type: sessionevent.NotifyMessage, Message: "x"},
 	)
 	require.Eventually(t, func() bool {

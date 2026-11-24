@@ -80,14 +80,7 @@ func (s *Service) sendToSessionLocked(ctx context.Context, sessionID int64, prom
 }
 
 func (s *Service) SendToSessionResolved(ctx context.Context, sessionID int64, prompt, key string) (int64, error) {
-	record, err := s.store.GetSession(ctx, sessionID)
-	if err != nil {
-		return 0, fmt.Errorf("load session for replacement resolution: %w", err)
-	}
-
-	owner, _ := record.Attributes[controllerapi.SessionAttributeManagerID].(string)
-
-	resolved, err := s.store.ResolveReplacement(ctx, sessionID, owner)
+	resolved, err := s.store.ResolveReplacement(ctx, sessionID)
 	if err != nil {
 		return 0, fmt.Errorf("resolve replacement session: %w", err)
 	}
@@ -252,7 +245,7 @@ func (s *Service) handleStoppedStop(ctx context.Context, input *sessionstore.Inb
 func (s *Service) handleLifecycleInput(ctx context.Context, input *sessionstore.InboxInput, content string) error {
 	command := strings.TrimPrefix(strings.TrimSpace(input.RawContent), "/")
 
-	if _, owned := input.Attributes[controllerapi.SessionAttributeManagerID].(string); !owned {
+	if !controllerapi.ManagerRoot(input.Attributes) {
 		if _, err := s.store.Commit(
 			ctx,
 			sessionstore.Commit{

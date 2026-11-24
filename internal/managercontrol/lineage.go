@@ -20,7 +20,7 @@ func (c *controller) Successor(ctx context.Context, sessionID int64) (int64, err
 		return 0, nil
 	}
 
-	chain, err := c.app.store.ReplacementChain(ctx, record.ID, c.managerID)
+	chain, err := c.app.store.ReplacementChain(ctx, record.ID)
 	if err != nil {
 		return 0, fmt.Errorf("read root replacement chain: %w", err)
 	}

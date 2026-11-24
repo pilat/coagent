@@ -78,7 +78,7 @@ func (c *controller) SetSessionTitle(ctx context.Context, _ string, sessionID in
 	}
 
 	//nolint:wrapcheck // Rejections are the exact user-visible response.
-	return c.app.store.SetSessionTitle(ctx, c.managerID, sessionID, title)
+	return c.app.store.SetSessionTitle(ctx, sessionID, title)
 }
 
 func (c *controller) ChatOutputs(
@@ -110,7 +110,7 @@ func (c *controller) ChatSessions(ctx context.Context, _ string) ([]controllerap
 		return nil, err
 	}
 
-	rows, err := c.app.store.ChatSessions(ctx, c.managerID)
+	rows, err := c.app.store.ChatSessions(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("read chat sessions: %w", err)
 	}
@@ -211,7 +211,7 @@ func (c *controller) Orchestrator(ctx context.Context, _ string, id int64) (bool
 		return false, err
 	}
 
-	on, err := c.app.store.OrchestratorMode(ctx, c.managerID, id)
+	on, err := c.app.store.OrchestratorMode(ctx, id)
 	if err != nil {
 		return false, fmt.Errorf("%w", err)
 	}
@@ -224,7 +224,7 @@ func (c *controller) SetOrchestrator(ctx context.Context, _ string, id int64, on
 		return false, err
 	}
 
-	changed, err := c.app.store.SetOrchestrator(ctx, c.managerID, id, on)
+	changed, err := c.app.store.SetOrchestrator(ctx, id, on)
 	if err != nil {
 		return false, fmt.Errorf("%w", err)
 	}
@@ -241,17 +241,7 @@ func (c *controller) chatSession(ctx context.Context, sessionID int64) (*session
 		return nil, fmt.Errorf("#%d is not a live session", sessionID)
 	}
 
-	record, err := c.app.store.GetSession(ctx, sessionID)
-	if err != nil {
-		return nil, fmt.Errorf("load chat session %d: %w", sessionID, err)
-	}
-
-	owner, _ := record.Attributes[controllerapi.SessionAttributeManagerID].(string)
-	if record.ParentID != 0 || owner != c.managerID {
-		return nil, fmt.Errorf("session %d is not a root owned by this manager", sessionID)
-	}
-
-	return record, nil
+	return c.app.managerRoot(ctx, sessionID)
 }
 
 func chatOutput(record *sessionstore.SessionRecord, row sessionstore.ChatOutput) controllerapi.ChatOutput {

@@ -30,12 +30,12 @@ func (h orchestratorHost) ListSessions(
 	callerID int64,
 	filter string,
 ) ([]orchestrator.Entry, int, error) {
-	_, owner, err := h.caller(ctx, callerID)
+	_, err := h.caller(ctx, callerID)
 	if err != nil {
 		return nil, 0, err
 	}
 
-	rows, err := h.s.store.ChatSessions(ctx, owner)
+	rows, err := h.s.store.ChatSessions(ctx)
 	if err != nil {
 		return nil, 0, fmt.Errorf("list sessions: %w", err)
 	}
@@ -49,7 +49,7 @@ func (h orchestratorHost) ListSessions(
 		return nil, 0, fmt.Errorf("load listed session watches: %w", err)
 	}
 
-	lineage, err := h.s.store.ReplacementChain(ctx, callerID, owner)
+	lineage, err := h.s.store.ReplacementChain(ctx, callerID)
 	if err != nil {
 		return nil, 0, fmt.Errorf("resolve listing session: %w", err)
 	}
@@ -89,12 +89,12 @@ func (h orchestratorHost) SendToSession(
 	callerID, targetID int64,
 	message string,
 ) (int64, bool, error) {
-	caller, owner, err := h.caller(ctx, callerID)
+	caller, err := h.caller(ctx, callerID)
 	if err != nil {
 		return 0, false, err
 	}
 
-	target, err := h.sendTarget(ctx, owner, targetID)
+	target, err := h.sendTarget(ctx, targetID)
 	if err != nil {
 		return 0, false, err
 	}
@@ -148,48 +148,35 @@ func (h orchestratorHost) SendToSession(
 	return target.ID, unread, nil
 }
 
-func (h orchestratorHost) caller(ctx context.Context, id int64) (*sessionstore.SessionRecord, string, error) {
+func (h orchestratorHost) caller(ctx context.Context, id int64) (*sessionstore.SessionRecord, error) {
 	record, err := h.s.store.GetSession(ctx, id)
 	if err != nil || record == nil {
-		return nil, "", errors.New("orchestrator mode is off for this session")
+		return nil, errors.New("orchestrator mode is off for this session")
 	}
 
 	if record.ParentID != 0 {
-		return nil, "", errors.New("orchestrator mode is off for this session")
+		return nil, errors.New("orchestrator mode is off for this session")
 	}
 
 	if record.KilledAt != nil || record.Status == sessionstore.SessionStatusKilled ||
 		record.Status == sessionstore.SessionStatusTerminating {
-		return nil, "", errors.New("orchestrator mode is off for this session")
+		return nil, errors.New("orchestrator mode is off for this session")
 	}
 
-	owner, _ := record.Attributes[controllerapi.SessionAttributeManagerID].(string)
-	if owner == "" {
-		return nil, "", errors.New("orchestrator mode is off for this session")
+	if !controllerapi.ManagerRoot(record.Attributes) {
+		return nil, errors.New("orchestrator mode is off for this session")
 	}
 
 	if !controllerapi.OrchestratorMode(record.Attributes) {
-		return nil, "", errors.New("orchestrator mode is off for this session")
+		return nil, errors.New("orchestrator mode is off for this session")
 	}
 
-	return record, owner, nil
+	return record, nil
 }
 
-func (h orchestratorHost) rootTarget(ctx context.Context, owner string, id int64) error {
+func (h orchestratorHost) rootTarget(ctx context.Context, id int64) error {
 	record, err := h.s.store.GetSession(ctx, id)
 	if err != nil || record == nil {
-		return fmt.Errorf("session #%d not found", id)
-	}
-
-	root := record
-	if record.ParentID != 0 {
-		root, err = h.s.store.GetSession(ctx, record.RootID)
-		if err != nil || root == nil {
-			return fmt.Errorf("session #%d not found", id)
-		}
-	}
-
-	if root.Attributes[controllerapi.SessionAttributeManagerID] != owner {
 		return fmt.Errorf("session #%d not found", id)
 	}
 
@@ -197,15 +184,19 @@ func (h orchestratorHost) rootTarget(ctx context.Context, owner string, id int64
 		return fmt.Errorf("session #%d is a subagent, not a root session", id)
 	}
 
+	if !controllerapi.ManagerRoot(record.Attributes) {
+		return fmt.Errorf("session #%d not found", id)
+	}
+
 	return nil
 }
 
-func (h orchestratorHost) sendTarget(ctx context.Context, owner string, id int64) (*sessionstore.SessionRecord, error) {
-	if err := h.rootTarget(ctx, owner, id); err != nil {
+func (h orchestratorHost) sendTarget(ctx context.Context, id int64) (*sessionstore.SessionRecord, error) {
+	if err := h.rootTarget(ctx, id); err != nil {
 		return nil, err
 	}
 
-	resolved, err := h.s.store.ResolveReplacement(ctx, id, owner)
+	resolved, err := h.s.store.ResolveReplacement(ctx, id)
 	if errors.Is(err, sessionstore.ErrSessionNotAcceptingInput) {
 		return nil, fmt.Errorf("session #%d is killed", id)
 	}

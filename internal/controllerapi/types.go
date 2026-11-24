@@ -22,9 +22,7 @@ const (
 )
 
 const (
-	// SessionAttributeManagerID is the durable owner of a root session. Manager
-	// subscriptions are routed by this value, so one manager never receives
-	// another manager's conversation.
+	// SessionAttributeManagerID marks a manager root and names the surface that created it; nothing compares the value.
 	SessionAttributeManagerID    = "manager_id"
 	SessionAttributeOrchestrator = "orchestrator"
 	SessionAttributeSpawnedBy    = "spawned_by"
@@ -180,6 +178,13 @@ type ScheduleInfo struct {
 	LastFiredAt *time.Time `json:"last_fired_at,omitempty"`
 	Fresh       bool       `json:"fresh"`
 	Prompt      string     `json:"prompt,omitempty"`
+}
+
+// ManagerRoot reports the marker every root created through a manager, an API client or a spawn carries.
+func ManagerRoot(attrs map[string]any) bool {
+	id, _ := attrs[SessionAttributeManagerID].(string)
+
+	return id != ""
 }
 
 // OrchestratorMode accepts only the durable JSON boolean, never a string or number.

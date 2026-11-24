@@ -201,7 +201,7 @@ func TestHarnessScenario_CompletionCheckStoppedLinkIsNotAWakeSource(t *testing.T
 	}
 }
 
-func TestControllerManagerSubscriptionIsExactAcrossRestart(t *testing.T) {
+func TestControllerSubscriptionsReceiveEveryRootAcrossRestart(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	dbPath := filepath.Join(t.TempDir(), "routing.db")
@@ -220,13 +220,9 @@ func TestControllerManagerSubscriptionIsExactAcrossRestart(t *testing.T) {
 		subscriptions[managerID] = controllers.ForManager(managerID).Subscribe()
 	}
 	mgr.NotifySession(record.ID, sessionevent.Notification{Type: sessionevent.NotifyMessage, Message: "after restart"})
-	for managerID, subscription := range subscriptions {
-		if managerID == "manager-7" {
-			notification := requireNotification(t, subscription)
-			assert.Equal(t, "after restart", notification.Notification.Message)
-			continue
-		}
-		requireNoManagerNotification(t, subscription)
+	for _, subscription := range subscriptions {
+		notification := requireNotification(t, subscription)
+		assert.Equal(t, "after restart", notification.Notification.Message)
 	}
 }
 
@@ -712,15 +708,15 @@ func TestProcessCompletionRetainsInputWithoutWakingStoppedOrErroredSession(t *te
 	}
 }
 
-// Durable routing sends root events only to their owner across cache warming, a cold cache and clear/recreation.
-func TestPublishRoutingModel_ManagerOwnershipSurvivesTransitions(t *testing.T) {
+// Routing remains stable across cache warming, a cold cache and clear/recreation.
+func TestPublishRoutingModel_ManagerRootRoutingSurvivesTransitions(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t, harnessOptions{configure: withTestModels, clientFor: (&mockFactory{}).client})
 	mgr, store := h.mgr, h.store
 	ctx := context.Background()
 	subscribers := map[string]<-chan controllerapi.SessionNotification{
-		"alpha": mgr.bus.SubscribeManager("alpha"),
-		"beta":  mgr.bus.SubscribeManager("beta"),
+		"alpha": mgr.bus.SubscribeManagerRoots(),
+		"beta":  mgr.bus.SubscribeManagerRoots(),
 	}
 	model := make(map[int64]string)
 	pid := testProject(t, store, "/tmp/publish-routing-model")
@@ -748,10 +744,10 @@ func TestPublishRoutingModel_ManagerOwnershipSurvivesTransitions(t *testing.T) {
 	publish(ownerlessID, "nobody owns this")
 
 	// A restarted daemon begins with empty route caches and must recover the
-	// exact owner from the durable session record.
+	// marker from the durable session record.
 	mgr.routes.mu.Lock()
 	mgr.routes.child = make(map[int64]bool)
-	mgr.routes.owner = make(map[int64]string)
+	mgr.routes.managerRoot = make(map[int64]bool)
 	mgr.routes.mu.Unlock()
 	publish(alphaID, "alpha survives a cold route cache")
 	newAlphaID, err := mgr.clear(ctx, lifecycleInput(ctx, t, mgr, alphaID, "/clear"))
@@ -763,7 +759,7 @@ func TestPublishRoutingModel_ManagerOwnershipSurvivesTransitions(t *testing.T) {
 	assert.Equal(t, sessionevent.NotifyStateChanged, killed.Notification.Type)
 	assert.Equal(t, controllerapi.StateIdle, killed.Notification.Status)
 	assert.Equal(t, "killed", killed.Notification.Reason)
-	requireNoManagerNotification(t, subscribers["beta"])
+	assert.Equal(t, killed, requireNotification(t, subscribers["beta"]))
 	publish(newAlphaID, "clear preserved alpha")
 }
 
@@ -1190,7 +1186,7 @@ func assertModelDeliveries(
 	slices.Sort(gotOwners)
 	wantOwners := []string(nil)
 	if wantOwner != "" {
-		wantOwners = []string{wantOwner}
+		wantOwners = []string{"alpha", "beta"}
 	}
 	assert.Equal(t, wantOwners, gotOwners)
 }

@@ -101,7 +101,7 @@ func TestOrchestratorSignalStopsWhenModeOff(t *testing.T) {
 			}
 			_, _, err := host.SendToSession(h.ctx, watcher, target, "BLOCK_TARGET")
 			require.NoError(t, err)
-			_, err = h.store.SetOrchestrator(h.ctx, "owner", watcher, false)
+			_, err = h.store.SetOrchestrator(h.ctx, watcher, false)
 			require.NoError(t, err)
 			close(release)
 			waitSignalTurn(t, h, target, "done")
@@ -109,7 +109,7 @@ func TestOrchestratorSignalStopsWhenModeOff(t *testing.T) {
 			state, err := h.store.WatchStates(h.ctx, watcher)
 			require.NoError(t, err)
 			assert.False(t, state[target].Armed)
-			_, err = h.store.SetOrchestrator(h.ctx, "owner", watcher, true)
+			_, err = h.store.SetOrchestrator(h.ctx, watcher, true)
 			require.NoError(t, err)
 			signalReply(t, h, target, "next", "done")
 			if standing {

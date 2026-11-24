@@ -14,12 +14,12 @@ import (
 )
 
 func (h orchestratorHost) Subscribe(ctx context.Context, callerID, targetID int64) (int64, bool, error) {
-	_, owner, err := h.caller(ctx, callerID)
+	_, err := h.caller(ctx, callerID)
 	if err != nil {
 		return 0, false, err
 	}
 
-	target, err := h.sendTarget(ctx, owner, targetID)
+	target, err := h.sendTarget(ctx, targetID)
 	if err != nil {
 		return 0, false, err
 	}
@@ -49,16 +49,16 @@ func (h orchestratorHost) Subscribe(ctx context.Context, callerID, targetID int6
 }
 
 func (h orchestratorHost) Unsubscribe(ctx context.Context, callerID, targetID int64) (int64, bool, error) {
-	_, owner, err := h.caller(ctx, callerID)
+	_, err := h.caller(ctx, callerID)
 	if err != nil {
 		return 0, false, err
 	}
 
-	if err := h.rootTarget(ctx, owner, targetID); err != nil {
+	if err := h.rootTarget(ctx, targetID); err != nil {
 		return 0, false, err
 	}
 
-	chain, err := h.s.store.ReplacementChain(ctx, targetID, owner)
+	chain, err := h.s.store.ReplacementChain(ctx, targetID)
 	if err != nil {
 		return 0, false, fmt.Errorf("resolve unsubscribe target: %w", err)
 	}
@@ -100,8 +100,7 @@ func (s *Service) fireOutcome(
 		return fmt.Errorf("load outcome session: %w", err)
 	}
 
-	owner, _ := record.Attributes[controllerapi.SessionAttributeManagerID].(string)
-	if record.ParentID != 0 || owner == "" {
+	if record.ParentID != 0 || !controllerapi.ManagerRoot(record.Attributes) {
 		return nil
 	}
 

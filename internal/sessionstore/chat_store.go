@@ -10,7 +10,8 @@ import (
 
 const liveChatRootSQL = `s.parent_id = 0 AND s.killed_at IS NULL
 	AND s.status NOT IN ('terminating', 'killed')
-	AND json_extract(s.attributes, '$.manager_id') = ?`
+	AND json_type(s.attributes, '$.manager_id') = 'text'
+	AND json_extract(s.attributes, '$.manager_id') <> ''`
 
 // ChatOutput includes non-rendering lifecycle rows that still advance the chat cursor.
 type ChatOutput struct {
@@ -21,7 +22,7 @@ type ChatOutput struct {
 	Content   string
 }
 
-// ChatSession describes a live manager-owned root.
+// ChatSession describes a live manager root.
 type ChatSession struct {
 	ID        int64
 	Name      string
@@ -62,7 +63,7 @@ func (s *Store) SetChatFocus(ctx context.Context, managerID, chatID string, sess
 	result, err := s.db.ExecContext(ctx, `INSERT INTO chat_focus (manager_id, chat_id, session_id, last_sent_id)
 		SELECT ?, ?, s.id, NULL FROM sessions s WHERE s.id = ? AND `+liveChatRootSQL+`
 		ON CONFLICT(manager_id, chat_id) DO UPDATE SET session_id = excluded.session_id, last_sent_id = NULL`,
-		managerID, chatID, sessionID, managerID)
+		managerID, chatID, sessionID)
 	if err != nil {
 		return fmt.Errorf("set chat focus: %w", err)
 	}

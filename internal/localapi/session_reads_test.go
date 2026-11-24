@@ -15,12 +15,12 @@ import (
 	"github.com/pilat/coagent/internal/controllerapi"
 )
 
-func TestSessionService_ListsAndReadsOwnedRoots(t *testing.T) {
+func TestSessionService_ListsAndReadsEveryRoot(t *testing.T) {
 	t.Parallel()
 	f := newAPIFixture(t)
+	_ = inProcessRoot(t, f, "beta")
 	id := inProcessRoot(t, f, "alpha")
 	killed := inProcessRoot(t, f, "alpha")
-	_ = inProcessRoot(t, f, "beta")
 	require.NoError(t, f.store.UpdateSessionModel(t.Context(), id, "live-model", "high"))
 	require.NoError(t, f.store.UpdateSessionModel(t.Context(), killed, "old-model", "low"))
 	require.NoError(t, f.store.WithTx(t.Context(), func(tx *sql.Tx) error {
@@ -30,14 +30,14 @@ func TestSessionService_ListsAndReadsOwnedRoots(t *testing.T) {
 	}))
 	_, err := f.store.MarkSessionKilledWithOutput(t.Context(), killed, 0)
 	require.NoError(t, err)
-	require.NoError(t, f.store.SetSessionTitle(t.Context(), "alpha", id, "live title"))
+	require.NoError(t, f.store.SetSessionTitle(t.Context(), id, "live title"))
 	client := coagentv1connect.NewSessionServiceClient(inProcessClient(t, f, "alpha"))
 	response, err := client.ListSessions(t.Context(), &coagentv1.ListSessionsRequest{})
 	require.NoError(t, err)
 	direct, err := f.factory.ForManager("alpha").(controllerapi.ChatFocusController).ChatSessions(t.Context(), "")
 	require.NoError(t, err)
-	require.Len(t, response.GetSessions(), 1)
-	require.Len(t, direct, 1)
+	require.Len(t, response.GetSessions(), 2)
+	require.Len(t, direct, 2)
 	assert.Equal(t, direct[0].ID, response.GetSessions()[0].GetId())
 	assert.Equal(t, direct[0].Name, response.GetSessions()[0].GetName())
 	assert.Equal(t, direct[0].Scheduled, response.GetSessions()[0].GetScheduled())
@@ -46,8 +46,8 @@ func TestSessionService_ListsAndReadsOwnedRoots(t *testing.T) {
 	require.NoError(t, err)
 	owned, err := f.factory.ForManager("alpha").ListSessions(t.Context())
 	require.NoError(t, err)
-	require.Len(t, details.GetSessions(), 2)
-	require.Len(t, owned, 2)
+	require.Len(t, details.GetSessions(), 3)
+	require.Len(t, owned, 3)
 	byID := make(map[int64]*coagentv1.SessionDetails)
 	for _, session := range details.GetSessions() {
 		byID[session.GetId()] = session
@@ -60,7 +60,6 @@ func TestSessionService_ListsAndReadsOwnedRoots(t *testing.T) {
 		assert.Equal(t, session.ReasoningLevel, got.GetEffort())
 		assert.Equal(t, session.Status, got.GetStatus())
 		assert.Equal(t, session.KilledAt != nil, got.GetKilled())
-		assert.Equal(t, "alpha", got.GetOwnerId())
 	}
 	state, err := client.GetSessionKilled(t.Context(), &coagentv1.GetSessionKilledRequest{SessionId: id})
 	require.NoError(t, err)

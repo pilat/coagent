@@ -55,7 +55,7 @@ func (m *Manager) workDirBySessionID(ctx context.Context, sessionID int64) (stri
 		return "", false
 	}
 
-	for _, s := range m.filterOwnedActiveSessions(sessions.GetSessions()) {
+	for _, s := range filterActiveSessions(sessions.GetSessions()) {
 		if s.GetId() == sessionID && s.GetWorkDir() != "" {
 			m.setWorkDir(sessionID, s.GetWorkDir())
 

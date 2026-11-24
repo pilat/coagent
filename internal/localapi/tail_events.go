@@ -9,10 +9,9 @@ import (
 )
 
 type tailEvents struct {
-	wake         chan struct{}
-	mu           sync.Mutex
-	stateSession int64
-	state        sessionevent.State
+	wake   chan struct{}
+	mu     sync.Mutex
+	states map[int64]sessionevent.State
 }
 
 func (d *tailEvents) run(ctx context.Context, events <-chan controllerapi.SessionNotification) {
@@ -27,8 +26,7 @@ func (d *tailEvents) run(ctx context.Context, events <-chan controllerapi.Sessio
 
 			if event.Notification.Type == sessionevent.NotifyStateChanged {
 				d.mu.Lock()
-				d.stateSession = event.SessionID
-				d.state = event.Notification.Status
+				d.states[event.SessionID] = event.Notification.Status
 				d.mu.Unlock()
 			}
 
@@ -44,12 +42,8 @@ func (d *tailEvents) takeState(sessionID int64) (sessionevent.State, bool) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	if d.stateSession != sessionID {
-		return "", false
-	}
+	state, ok := d.states[sessionID]
+	delete(d.states, sessionID)
 
-	state := d.state
-	d.stateSession = 0
-
-	return state, true
+	return state, ok
 }

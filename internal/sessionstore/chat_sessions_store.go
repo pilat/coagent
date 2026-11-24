@@ -13,8 +13,8 @@ type chatSessionActivity struct {
 	ChatSession
 }
 
-// ChatSessions lists live owned roots by their last output or conversational input.
-func (s *Store) ChatSessions(ctx context.Context, managerID string) ([]ChatSession, error) {
+// ChatSessions lists live manager roots by their last output or conversational input.
+func (s *Store) ChatSessions(ctx context.Context) ([]ChatSession, error) {
 	rows, err := s.db.QueryContext(ctx, `WITH roots AS (
 		SELECT s.id, p.name,
 			COALESCE(json_extract(s.attributes, '$.title'), '') AS title FROM sessions s
@@ -28,8 +28,7 @@ func (s *Store) ChatSessions(ctx context.Context, managerID string) ([]ChatSessi
 	LEFT JOIN session_outbox output ON output.id =
 		(SELECT MAX(id) FROM session_outbox WHERE session_id = roots.id)
 	LEFT JOIN session_inbox input ON input.id =
-		(SELECT MAX(id) FROM session_inbox WHERE session_id = roots.id AND source IN ('user', 'agent'))`,
-		managerID)
+		(SELECT MAX(id) FROM session_inbox WHERE session_id = roots.id AND source IN ('user', 'agent'))`)
 	if err != nil {
 		return nil, fmt.Errorf("load chat session summaries: %w", err)
 	}

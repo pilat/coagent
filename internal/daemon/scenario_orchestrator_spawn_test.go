@@ -33,7 +33,7 @@ func TestOrchestratorListSessions(t *testing.T) {
 	h.startInboxWake()
 	caller := modeRoot(t, h)
 	idle := h.createRoot(managerAttrs("owner"))
-	require.NoError(t, h.store.SetSessionTitle(h.ctx, "owner", idle, "needle"))
+	require.NoError(t, h.store.SetSessionTitle(h.ctx, idle, "needle"))
 	stopped := h.createRoot(managerAttrs("owner"))
 	require.NoError(t, h.store.UpdateSessionStatus(h.ctx, stopped, sessionstore.SessionStatusStopped))
 	parked := h.createRoot(managerAttrs("owner"))
@@ -44,7 +44,7 @@ func TestOrchestratorListSessions(t *testing.T) {
 	waitForScenarioSignal(t, entered, "running root")
 	entries, total, err := (orchestratorHost{h.mgr}).ListSessions(h.ctx, caller, "")
 	require.NoError(t, err)
-	assert.Equal(t, 5, total)
+	assert.Equal(t, 6, total)
 	states := make(map[int64]string)
 	for _, entry := range entries {
 		states[entry.ID] = entry.State
@@ -54,10 +54,16 @@ func TestOrchestratorListSessions(t *testing.T) {
 	}
 	assert.Equal(
 		t,
-		map[int64]string{caller: "idle", idle: "idle", stopped: "stopped", parked: "parked", running: "running"},
+		map[int64]string{
+			caller:  "idle",
+			idle:    "idle",
+			stopped: "stopped",
+			parked:  "parked",
+			running: "running",
+			foreign: "idle",
+		},
 		states,
 	)
-	assert.NotContains(t, states, foreign)
 	assert.NotContains(t, states, child)
 	filtered, matched, err := (orchestratorHost{h.mgr}).ListSessions(h.ctx, caller, "NEEDLE")
 	require.NoError(t, err)
@@ -70,7 +76,7 @@ func TestOrchestratorListSessions(t *testing.T) {
 	entries, total, err = (orchestratorHost{h.mgr}).ListSessions(h.ctx, caller, "")
 	require.NoError(t, err)
 	assert.Len(t, entries, 20)
-	assert.Equal(t, 21, total)
+	assert.Equal(t, 22, total)
 }
 
 func TestOrchestratorSpawn(t *testing.T) {

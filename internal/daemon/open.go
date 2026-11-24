@@ -84,8 +84,7 @@ func (s *Service) openSession(
 
 	in.Status = status
 
-	owner, _ := rec.Attributes[controllerapi.SessionAttributeManagerID].(string)
-	in.OutputEnabled = rec.ParentID == 0 && owner != ""
+	in.OutputEnabled = rec.ParentID == 0 && controllerapi.ManagerRoot(rec.Attributes)
 	in.ToolTrail = in.OutputEnabled
 	in.ActiveSubagents = s.activeSubagentInfos(ctx, sessionID)
 	in.ActiveProcesses = s.activeProcessInfos(ctx, sessionID)
@@ -100,7 +99,7 @@ func (s *Service) openSession(
 	return sess, cleanup, nil
 }
 
-// Children do not copy manager-owned attributes, so confinement follows the durable root.
+// Subagents do not copy manager root attributes, so confinement follows the durable root.
 func (s *Service) sessionRepoRoot(ctx context.Context, rec *sessionstore.SessionRecord) (string, error) {
 	if rec.RootID == 0 {
 		repoRoot, _ := rec.Attributes["repo_root"].(string)
@@ -237,7 +236,7 @@ func (s *Service) ownerTools(rec *sessionstore.SessionRecord, ldr *loader.Servic
 
 	if rec.ParentID == 0 {
 		tools = append(tools, s.administrationTools(rec, rec.ProjectID)...)
-		if owner, _ := rec.Attributes[controllerapi.SessionAttributeManagerID].(string); owner != "" {
+		if controllerapi.ManagerRoot(rec.Attributes) {
 			if controllerapi.OrchestratorMode(rec.Attributes) {
 				tools = append(tools, orchestrator.NewTools(orchestrator.Host(orchestratorHost{s}), rec.ID)...)
 			}

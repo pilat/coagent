@@ -73,7 +73,7 @@ func TestNumberedControlsDoNotChangeSelection(t *testing.T) {
 	ctrl := &fakeController{focus: 42, listSessions: []controllerapi.SessionInfo{
 		{ID: 42, Name: "selected", Attributes: map[string]any{"manager_id": "telegram-main"}},
 		{ID: 9, Name: "other", Attributes: map[string]any{"manager_id": "telegram-main"}},
-		{ID: 8, Name: "foreign", Attributes: map[string]any{"manager_id": "other"}},
+		{ID: 8, Name: "foreign", Status: "killed", Attributes: map[string]any{"manager_id": "other"}},
 	}}
 	m := newCmdTestManager(t, ctrl, &messages)
 	m.handleChatText(t.Context(), "/kill 9")

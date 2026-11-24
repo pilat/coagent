@@ -15,7 +15,7 @@ func TestHarnessScenario_ChatHeadersStripStarsOnlyFromDisplay(t *testing.T) {
 	h := newDelayedTelegramHarness(t)
 	id := createChatWork(t, h)
 	title := "*daily* **check** <next>"
-	require.NoError(t, h.sessions.SetSessionTitle(t.Context(), delayedTelegramManagerID, id, title))
+	require.NoError(t, h.sessions.SetSessionTitle(t.Context(), id, title))
 	enqueueChatMessage(t, h, id, "**entry body**")
 	manager := newChatTelegramManager(t, h)
 	require.NoError(t, manager.Start(t.Context()))

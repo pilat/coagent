@@ -91,7 +91,7 @@ func TestHarnessScenario_ForeignConversationIsNotRenderedInTelegram(t *testing.T
 		SessionId: harnessSessionID, Type: coagentv1.SessionEventType_SESSION_EVENT_TYPE_ACTIVITY,
 	})
 
-	assert.Empty(t, calls, "a Telegram manager must ignore another manager's conversation")
+	assert.Empty(t, calls, "a hint for an unfocused root renders nothing")
 }
 
 func daemonTraceNames(t *testing.T) []string {
