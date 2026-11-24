@@ -66,7 +66,7 @@ func (s *Service) kill(ctx context.Context, input *sessionstore.InboxInput) erro
 		return err
 	}
 
-	s.signalOutcome(ctx, input.SessionID, orchestrator.SignalKilled, 0, commandSender(input))
+	s.signalOutcome(ctx, input.SessionID, orchestrator.SignalKilled, 0, commandActor(input))
 
 	return nil
 }
@@ -100,7 +100,7 @@ func (s *Service) stop(ctx context.Context, input *sessionstore.InboxInput) erro
 		return err
 	}
 
-	s.signalOutcome(ctx, input.SessionID, orchestrator.SignalStopped, 0, commandSender(input))
+	s.signalOutcome(ctx, input.SessionID, orchestrator.SignalStopped, 0, commandActor(input))
 
 	return nil
 }
@@ -342,7 +342,7 @@ func (s *Service) clear(ctx context.Context, input *sessionstore.InboxInput) (in
 		return 0, err
 	}
 
-	s.signalOutcome(ctx, replacement, orchestrator.SignalCleared, input.SessionID, 0)
+	s.signalOutcome(ctx, replacement, orchestrator.SignalCleared, input.SessionID, orchestrator.Actor{})
 
 	return replacement, nil
 }

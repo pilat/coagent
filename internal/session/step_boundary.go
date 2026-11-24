@@ -503,7 +503,7 @@ func (s *Session) acceptBoundarySchedule(batch *boundaryBatch, input *sessionsto
 			Content:     "⏰ scheduled\n\n" + input.RawContent,
 			PersistOnly: true,
 			Key:         "schedule:" + deliveryKey + ":announcement",
-			Attributes:  map[string]any{"source": "scheduler"},
+			Attributes:  map[string]any{sourceAttribute: "scheduler"},
 			MessageRef:  -1,
 		},
 	)

@@ -73,7 +73,13 @@ func (h orchestratorHost) Unsubscribe(ctx context.Context, callerID, targetID in
 	return newest, was, nil
 }
 
-func (s *Service) signalOutcome(ctx context.Context, targetID int64, kind orchestrator.SignalKind, oldID, actor int64) {
+func (s *Service) signalOutcome(
+	ctx context.Context,
+	targetID int64,
+	kind orchestrator.SignalKind,
+	oldID int64,
+	actor orchestrator.Actor,
+) {
 	if ctx.Err() != nil {
 		return
 	}
@@ -88,7 +94,8 @@ func (s *Service) fireOutcome(
 	ctx context.Context,
 	targetID int64,
 	kind orchestrator.SignalKind,
-	oldID, actor int64,
+	oldID int64,
+	actor orchestrator.Actor,
 ) error {
 	recordID := targetID
 	if oldID != 0 {
@@ -130,7 +137,7 @@ func (s *Service) fireOutcome(
 	line, notice := orchestrator.SignalText(kind, recordID, project, name, targetID, actor)
 
 	_, err = s.store.FireWatches(ctx, sessionstore.WatchFire{
-		TargetID: targetID, ActorID: actor, Line: line, Notice: notice,
+		TargetID: targetID, ActorID: actor.Session, Line: line, Notice: notice,
 	})
 	if err != nil {
 		return fmt.Errorf("fire outcome watches: %w", err)

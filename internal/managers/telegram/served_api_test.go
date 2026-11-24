@@ -40,6 +40,10 @@ func (f servedControllers) ForManager(string) controllerapi.Controller {
 	return f.control
 }
 
+func (f servedControllers) ForApp(string, []string) controllerapi.Controller {
+	return f.control
+}
+
 func servedTransport(
 	t *testing.T,
 	control controllerapi.Controller,

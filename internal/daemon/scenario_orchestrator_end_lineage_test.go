@@ -131,7 +131,7 @@ func TestOrchestratorEndCommandSurvivesRestart(t *testing.T) {
 	host := orchestratorHost{s: h.mgr}
 	_, _, err := host.Subscribe(h.ctx, watcher, target)
 	require.NoError(t, err)
-	sender, err := host.provenance(h.ctx, h.session(caller))
+	sender, err := host.provenance(h.ctx, delegate{root: h.session(caller)})
 	require.NoError(t, err)
 	queued, err := h.store.Enqueue(h.ctx, sessionstore.Input{
 		SessionID:  target,

@@ -17,7 +17,6 @@ import (
 
 	"github.com/pilat/coagent/api/coagent/v1"
 	"github.com/pilat/coagent/api/coagent/v1/coagentv1connect"
-	"github.com/pilat/coagent/internal/config"
 	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/managercontrol"
 	"github.com/pilat/coagent/internal/migrate"
@@ -51,7 +50,7 @@ type apiFixture struct {
 	bus     *sessionbus.Bus
 	backend *apiBackend
 	factory controllerapi.ManagerControllerFactory
-	entries []config.APIClientEntry
+	entries []Client
 	tokens  map[string]string
 }
 
@@ -146,8 +145,8 @@ func newAPIFixture(t *testing.T) *apiFixture {
 		token, err := NewToken()
 		require.NoError(t, err)
 		f.tokens[id] = token
-		f.entries = append(f.entries, config.APIClientEntry{
-			ID: id, Role: config.APIRoleOperator, TokenSHA256: TokenHash(token),
+		f.entries = append(f.entries, Client{
+			ID: id, TokenSHA256: TokenHash(token),
 		})
 	}
 	return f
@@ -168,12 +167,22 @@ func apiListener(t *testing.T) (net.Listener, string) {
 
 func (f *apiFixture) serve(t *testing.T, listener net.Listener, socket string) *apiServer {
 	t.Helper()
-	srv, err := New(t.Context(), listener, f.entries, f.factory)
+	srv, err := New(t.Context(), listener, f.clients())
 	require.NoError(t, err)
 	h := &apiServer{srv: srv, socket: socket, done: make(chan error, 1)}
 	go func() { h.done <- srv.Serve() }()
 	t.Cleanup(func() { h.close(t) })
 	return h
+}
+
+func (f *apiFixture) clients() []Client {
+	clients := append([]Client(nil), f.entries...)
+	for i := range clients {
+		if clients[i].Control == nil {
+			clients[i].Control = f.factory.ForManager(clients[i].ID)
+		}
+	}
+	return clients
 }
 
 func (f *apiFixture) start(t *testing.T) *apiServer {

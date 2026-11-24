@@ -29,7 +29,7 @@ func TestManagerInputAttributesRemainSessionOnly(t *testing.T) {
 		Attributes: map[string]any{"injected": "session-only"},
 	})
 	require.NoError(t, err)
-	err = service.sendSessionMessage(t.Context(), "owner",
+	_, err = service.sendSessionMessage(t.Context(), "owner",
 		controllerapi.SessionMessageData{SessionID: id, Message: "follow-up"})
 	require.NoError(t, err)
 	inputs, err := store.ListPending(t.Context(), id)

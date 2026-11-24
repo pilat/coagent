@@ -5,6 +5,7 @@
 - **Amended by:** [ADR-0105](0105-built-in-managers-are-local-api-clients-in-process.md)
 - **Amended by:** [ADR-0106](0106-one-operator-every-surface-reaches-every-root.md) — every client reaches every root
 - **Amended by:** [ADR-0107](0107-every-root-is-a-root.md)
+- **Amended by:** [ADR-0108](0108-an-app-acts-with-delegated-authority.md) — app authors are served and idempotency keys are per author
 
 ## Context
 

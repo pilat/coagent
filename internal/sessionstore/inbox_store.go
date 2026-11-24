@@ -29,6 +29,7 @@ const (
 
 const (
 	InputAttributeSenderSessionID = "sender_session_id"
+	InputAttributeSenderApp       = "sender_app"
 	InputAttributeSenderName      = "sender_name"
 	InputAttributeSenderTitle     = "sender_title"
 	InputAttributeSignalTargetID  = "signal_target_id"

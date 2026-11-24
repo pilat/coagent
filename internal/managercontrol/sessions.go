@@ -19,24 +19,8 @@ func (s *service) createSession(
 		return 0, err
 	}
 
-	if _, supplied := data.Attributes[controllerapi.SessionAttributeOrchestrator]; supplied {
-		return 0, errors.New("orchestrator attribute is reserved")
-	}
-
-	if _, supplied := data.Attributes[controllerapi.SessionAttributeSpawnedBy]; supplied {
-		return 0, errors.New("spawned_by attribute is reserved")
-	}
-
-	if _, supplied := data.Attributes[controllerapi.SessionAttributeTitle]; supplied {
-		return 0, errors.New("title attribute is reserved")
-	}
-
-	if _, supplied := data.Attributes["repo_root"]; supplied {
-		return 0, errors.New("repo_root attribute is reserved for created worktrees")
-	}
-
-	if _, supplied := data.Attributes[controllerapi.SessionAttributeWorktreeOrigin]; supplied {
-		return 0, errors.New("worktree origin is reserved for created worktrees")
+	if err := reservedAttributes(data.Attributes); err != nil {
+		return 0, err
 	}
 
 	projectID, err := s.resolveSessionProject(ctx, data.WorkDir)
@@ -73,22 +57,56 @@ func (s *service) sendSessionMessage(
 	ctx context.Context,
 	managerID string,
 	data controllerapi.SessionMessageData,
-) error {
+) (int64, error) {
 	if err := requireManagerIdentity(managerID); err != nil {
-		return err
+		return 0, err
 	}
 
 	if _, err := s.requireRoot(ctx, data.SessionID); err != nil {
-		return err
+		return 0, err
 	}
 
-	acceptedID, err := s.backend.SendToSessionResolved(ctx, data.SessionID, data.Message, data.IdempotencyKey)
+	acceptedID, err := s.backend.SendToSessionResolved(
+		ctx,
+		data.SessionID,
+		data.Message,
+		authorKey(managerID, data.IdempotencyKey),
+	)
 	if err != nil {
-		return fmt.Errorf("send resolved session message: %w", err)
+		return 0, fmt.Errorf("send resolved session message: %w", err)
 	}
 
 	if data.Message != "" {
 		s.publishInputReceived(acceptedID, data.Message, "user")
+	}
+
+	return acceptedID, nil
+}
+
+func authorKey(author, key string) string {
+	if key == "" {
+		return ""
+	}
+
+	return author + ":" + key
+}
+
+func reservedAttributes(attrs map[string]any) error {
+	for _, key := range []string{
+		controllerapi.SessionAttributeOrchestrator, controllerapi.SessionAttributeSpawnedBy,
+		controllerapi.SessionAttributeSpawnedByApp, controllerapi.SessionAttributeTitle,
+	} {
+		if _, supplied := attrs[key]; supplied {
+			return fmt.Errorf("%s attribute is reserved", key)
+		}
+	}
+
+	if _, supplied := attrs["repo_root"]; supplied {
+		return errors.New("repo_root attribute is reserved for created worktrees")
+	}
+
+	if _, supplied := attrs[controllerapi.SessionAttributeWorktreeOrigin]; supplied {
+		return errors.New("worktree origin is reserved for created worktrees")
 	}
 
 	return nil

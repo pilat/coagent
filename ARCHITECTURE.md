@@ -72,7 +72,7 @@ does not imply a tier except where it expresses an implementation variant.
 - `internal/config` — typed configuration and secrets resolution policy.
 - `internal/configapply` — activation-gated config read/edit tools, serialized commit claim and restart trigger.
 - `internal/configops` — guarded whole-document configuration staging, backups and the boot-rollback marker.
-- `internal/controllerapi` — private manager-bound controller contract behind the local API server and shared DTO vocabulary.
+- `internal/controllerapi` — private author-bound controller contract behind the local API server and shared DTO vocabulary.
 - `internal/ctl` — status-only local control socket, status operation registry and client; owns the same-user Unix socket bind the API socket reuses.
 - `internal/daemon` — runner and tree lifecycle, admission, boot recovery, commands and session-event composition.
 - `internal/git` — Git operations used by repository-facing features.
@@ -83,7 +83,7 @@ does not imply a tier except where it expresses an implementation variant.
 - `internal/llm/llmtest` — test-support oracle for provider transcript validity; imported only by tests, never by a binary.
 - `internal/llmwire` — provider-neutral message, response and tool wire vocabulary.
 - `internal/loader` — project context, skills, subagent definitions and marketplace loading.
-- `internal/localapi` — the full `coagent.v1` surface on the API socket and in process, with author authentication and dispatch through the author's manager-bound controller.
+- `internal/localapi` — the full `coagent.v1` surface on the API socket and in process, with author authentication and dispatch through the bound controller capability.
 - `internal/logger` — structured logging and registered-secret redaction.
 - `internal/lsp` — language-server process client for code-intelligence tools.
 - `internal/managers` — manager lifecycle coordinator, opening each manager's in-process connection.
@@ -94,7 +94,7 @@ does not imply a tier except where it expresses an implementation variant.
 - `internal/mcpstore` — durable MCP server definitions, scope precedence and registry tools.
 - `internal/memory` — curated per-project long-term memory.
 - `internal/managerdelivery` — transport-neutral chat entry, ordered cursor delivery and retry policy.
-- `internal/managercontrol` — manager-bound application use cases and controller adaptation.
+- `internal/managercontrol` — operator and app controller capabilities, project-scoped delegation and manager chat adaptation.
 - `internal/managerdiscovery` — manager-facing project, model, skill and spawn-favorites discovery.
 - `internal/migrate` — SQLite opening and schema migration with production backup policy.
 - `internal/orchestrator` — orchestrator-mode tools (list, send, spawn, read, subscribe, unsubscribe, stop, kill) over a daemon-implemented host; schemas, validation and result text only.
@@ -179,11 +179,12 @@ model answers have no footer. A completion candidate stays hidden until confirme
 Budget observation and response output share the step transaction.
 
 An API client's input carries its idempotency key as the inbox delivery key
-`user:<key>`. A repeated key for the same root enqueues nothing, through the
+`user:<author>:<key>` for an operator or `app:<author>:<key>` for an app.
+A repeated key from the same author for the same root enqueues nothing, through the
 per-session delivery-key uniqueness producers already use. A tailing client holds its
 own output-log position; only `ChatService` calls store one, as a chat's cursor in `chat_focus`.
 
-Each `chat_focus` row holds one manager or API client/chat's selection and
+Each `chat_focus` row holds one manager or operator API client/chat's selection and
 `last_sent_id`. A NULL session means no focus; a NULL cursor means entry is
 owed. Every selection write, including a re-switch to the same root, resets
 the cursor to NULL. Root replacement transfers every focus and resets its cursor
@@ -256,8 +257,9 @@ code with privileged integration rights. New managers and drivers are source
 contributions governed by the internal dependency graph.
 
 Every session with `parent_id = 0` is a root, with an output log, titles,
-episodes and the chat, config and orchestrator surfaces. Every bound controller
-reaches every root, and its id keys only its chat rows. Existing `manager_id`
+episodes and the chat, config and orchestrator surfaces. Every manager and operator controller
+reaches every root; an app's reach follows its project scope and delegated authority.
+Manager and operator client ids key their own chat rows. Existing `manager_id`
 attributes remain unread. Config validation keeps manager and API client ids distinct
 ([ADR-0107](docs/adr/0107-every-root-is-a-root.md)).
 
@@ -754,7 +756,7 @@ From its next run, that root alone gets list, send, spawn, read, subscribe, unsu
 reaching every root, with mode checked on every call; its subagents and targets receive no new tool.
 Sent messages carry host-authored sender provenance at acceptance and appear in
 the target's chat. Their authority is plain text: no commands, grants, skill
-expansion, budget release or title naming. A send wakes a stopped root but refuses
+expansion, budget release or changes to an existing title. A send wakes a stopped root but refuses
 a budget-parked target. Spawn accepts visible registered projects with existing directories,
 excluding coagent worktrees identified by the configured worktrees-root layout; optional
 worktrees use guarded no-execution creation. Spawn may name the new root's model only from the tagged
@@ -764,8 +766,10 @@ against that model's allowlist as `task.effort` is and before anything is create
 model's default ([ADR-0103](docs/adr/0103-a-spawned-session-may-name-an-effort-level.md)). No tool changes an
 existing session's model or effort. A spawned root takes its title from
 the prompt at creation; it is independent and never moves chat focus ([ADR-0097](docs/adr/0097-orchestrator-mode-is-a-human-granted-capability-on-an-ordinary-root.md)).
-Spawned roots carry a write-once `spawned_by` attribute refused from managers and preserved by `/clear`.
-An orchestrator stopping or killing a root it spawned writes a fixed `source=user` `/stop` or `/kill` row through the human's command flow, naming the actor; stop refuses an armed target budget, while kill remains allowed ([ADR-0101](docs/adr/0101-an-orchestrator-ends-only-sessions-it-spawned.md)).
+One delegate is an orchestrator root or an app; the daemon shares send, spawn, stop and kill flows between them.
+Spawned roots carry write-once `spawned_by` or `spawned_by_app` attributes, refused from clients and preserved by `/clear`.
+An app creates an empty root; an inserted message from that app names it while untitled if the text yields a title.
+A delegate stopping or killing a root it started writes a fixed `source=user` `/stop` or `/kill` row through the human's command flow, naming the actor; stop refuses an armed target budget, while kill remains allowed ([ADR-0101](docs/adr/0101-an-orchestrator-ends-only-sessions-it-spawned.md), [ADR-0108](docs/adr/0108-an-app-acts-with-delegated-authority.md)).
 Reading another session writes nothing to it and returns untrusted data; `batch` refuses `read_session`.
 The model-facing signal contains ids, project name and outcome kind, without target-authored text or title.
 Its persist-only chat row carries the target's shared display name, including title; it never enters the watcher's transcript.
@@ -918,11 +922,14 @@ removes the bearer value from the request before any handler runs. A sandboxed
 session can connect through the read-only host bind, so the token, not the
 socket mode, is the boundary. The token authenticates an author and grants
 nothing itself: as everywhere in the core, authority follows the source the
-host stamps on the input. The socket's author kind, `operator`, sends human input,
-`/config` included. A configuration change therefore still runs only through a
+host stamps on the input. An `operator` sends human input, `/config` included;
+an `app` sends plain-text sent messages with host-stamped program provenance.
+The composition root binds the appropriate controller capability; the API server reads no role and interprets
+no session commands.
+A configuration change therefore still runs only through a
 session's `/config` flow; no RPC mutates configuration, carries secrets or
 streams model tokens. With the sandbox off a session already has the user's
-authority. A client's plaintext token file is as readable from the sandbox as
+authority. An operator client's plaintext token file is as readable from the sandbox as
 any operator credential, and with it a session can reach `/config` and every
 other `coagent.v1` call as that client, `SetOrchestratorMode` and `CreateProject` included
 ([ADR-0104](docs/adr/0104-the-local-api-is-the-two-durable-ledgers.md),
@@ -930,6 +937,17 @@ other `coagent.v1` call as that client, `SetOrchestratorMode` and `CreateProject
 Built-in managers use the same services over an in-process connection with no
 socket or token; configuration binds the author, never request fields
 ([ADR-0105](docs/adr/0105-built-in-managers-are-local-api-clients-in-process.md)).
+
+An app's optional project scope lists clean absolute work directories. It covers a root by its project's work
+directory or an attested coagent worktree's listed `repo_root`; an out-of-project-scope root reads as missing.
+An app cannot mutate settings, create projects or keep chat state, and ends only roots it started. A project-scoped
+app cannot send to a root whose newest replacement has orchestrator mode on. Wake hints remain unfiltered root ids.
+The app controller explicitly implements its capabilities without embedding an operator controller, so a new
+interface method needs an explicit authority decision. Keys are per root and author. `GetTurnOutcome` reads durable
+obligations, runner state and the existing admission queue. An errored root with no active runner and no admission
+entry is over even if input from the failed run remains pending; agent or schedule input can wake it, and pending
+input keeps it not over while waiting for admission. It adds no output row or migration
+([ADR-0108](docs/adr/0108-an-app-acts-with-delegated-authority.md)).
 
 ## Configuration and product surfaces
 
@@ -983,14 +1001,15 @@ unknown fields remain errors.
 The daemon, session and session-store boundary divides global coordination,
 per-task execution and SQLite transaction ownership. The daemon supplies owner
 tools to session assembly and routes session events. `managercontrol` implements
-the manager controller over the daemon's command backend and reads persistence
+operator and app controller capabilities over the daemon's command backend and reads persistence
 and subscriptions directly from their owners. The daemon creates every new
 root through one path, whoever asks: the human's `/new`, `/spawn`
-and `/gwt` through the controller, or an orchestrator's `spawn_session`. A
+and `/gwt` through the controller, an orchestrator's `spawn_session`, or an app's `CreateSession`. A
 `/clear` replacement root is written by its own replacement transaction instead.
-An optional fresh worktree comes first (guarded no-execution only for a spawn),
+An optional fresh worktree comes first (guarded no-execution for either delegate's spawn),
 then one session-store transaction writes the root, its `session_opened` row,
-its first input and the spawner's one-shot watch. A human's root starts at once
+its nonempty first input and an orchestrator spawner's one-shot watch. An app creates an empty root with no watch.
+A human's root starts at once
 and is killed, its worktree removed, if it cannot start; a spawned root is woken
 by its first input. The daemon owns capacity decisions and `sessionbus` owns
 fan-out.
@@ -1247,7 +1266,7 @@ The manager coordinator isolates manager failures and opens each manager's
 in-process connection. Telegram calls `coagent.v1`; its chat port adapts
 `ChatService`, `OutputService` and `SessionService` calls to the small local ports
 owned by `managerdelivery`. `managercontrol` owns root validation,
-liveness validation, DTO conversion, focus/cursor operations and project resolution;
+liveness validation, app authority and project scope checks, DTO conversion, focus/cursor operations and project resolution;
 `managerdiscovery` owns project, model, skill and spawn-favorites discovery. The
 composition root supplies the daemon backend, store, discovery and session bus.
 
@@ -1266,8 +1285,8 @@ available; help omits session skills without focus.
 focus; heartbeats type only for the loop's positive focused root. `/config`
 uses the selected root's ordinary activation grant.
 
-Roots carry a one-line session title in their attributes. The first inserted
-non-command user input names an untitled root atomically with its inbox row;
+Roots carry a one-line session title in their attributes. An inserted non-command user input or sent message
+from its creating app names an untitled root atomically with its inbox row when the text yields a title;
 `/title` renames the focused root, and `/clear` starts untitled. Titles do not
 change activity order. Session summaries, entry headers and delivered rows share
 the display name `<project> · <title>`, or `<project>` when untitled.
@@ -1305,15 +1324,15 @@ focus and cursor to NULL. A newer selection survives that reset. Killed roots
 are omitted from session summaries. No-focus delivery calls only its focus port
 and sends nothing.
 
-The local API server binds each authenticated author to its manager-bound
-controller and adds no session creation, inbox enqueue or output read of its
+The local API server binds each authenticated author to the controller capability selected by the composition
+root and adds no session creation, inbox enqueue or output read of its
 own. The composition root binds a configured manager id to an in-process server;
 it registers the same handlers as the API socket without a socket or token.
 `StreamSessionEvents` carries only wake hints; its first event, with session id 0,
 marks the subscription live before the client reads state. Telegram waits for
 that event before delivery starts and resubscribes when a stream ends.
-`CreateSession` creates an empty root. `SendInput` sends human input through
-the controller's send path with the client's idempotency key, resolving a replaced
+`CreateSession` creates an empty root. `SendInput` sends an operator's human input or an app's sent message through
+the bound controller with a per-author idempotency key, resolving a replaced
 root to its successor. Accepted sends outlive client disconnects and deadlines,
 ending only with completion or server shutdown; in-process sends end with the daemon.
 `TailOutput` reads the output log above the client's id in pages and continues

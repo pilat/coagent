@@ -75,6 +75,75 @@ func (s sessionService) SendInput(
 	return &coagentv1.SendInputResponse{}, nil
 }
 
+func (s sessionService) StopSession(
+	ctx context.Context,
+	req *coagentv1.StopSessionRequest,
+) (*coagentv1.StopSessionResponse, error) {
+	author, err := clientFrom(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	if req.GetSessionId() <= 0 {
+		return nil, connect.Errorf(connect.CodeInvalidArgument, "session_id must be positive")
+	}
+
+	ctx, cancel := s.sendContext(ctx)
+	defer cancel()
+
+	id, err := author.control.StopSession(ctx, controllerapi.SessionStopData{SessionID: req.GetSessionId()})
+	if err != nil {
+		return nil, refusal(ctx, err)
+	}
+
+	return &coagentv1.StopSessionResponse{SessionId: id}, nil
+}
+
+func (s sessionService) KillSession(
+	ctx context.Context,
+	req *coagentv1.KillSessionRequest,
+) (*coagentv1.KillSessionResponse, error) {
+	author, err := clientFrom(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	if req.GetSessionId() <= 0 {
+		return nil, connect.Errorf(connect.CodeInvalidArgument, "session_id must be positive")
+	}
+
+	ctx, cancel := s.sendContext(ctx)
+	defer cancel()
+
+	id, err := author.control.KillSession(ctx, controllerapi.SessionKillData{SessionID: req.GetSessionId()})
+	if err != nil {
+		return nil, refusal(ctx, err)
+	}
+
+	return &coagentv1.KillSessionResponse{SessionId: id}, nil
+}
+
+func (sessionService) GetTurnOutcome(
+	ctx context.Context,
+	req *coagentv1.GetTurnOutcomeRequest,
+) (*coagentv1.GetTurnOutcomeResponse, error) {
+	author, err := clientFrom(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	if req.GetSessionId() <= 0 {
+		return nil, connect.Errorf(connect.CodeInvalidArgument, "session_id must be positive")
+	}
+
+	id, over, err := author.control.TurnOver(ctx, req.GetSessionId())
+	if err != nil {
+		return nil, refusal(ctx, err)
+	}
+
+	return &coagentv1.GetTurnOutcomeResponse{SessionId: id, Over: over}, nil
+}
+
 func refusal(ctx context.Context, err error) error {
 	if ctx.Err() != nil {
 		return connect.Errorf(connect.CodeUnavailable, "the local API is closing")

@@ -17,7 +17,10 @@ import (
 	"github.com/pilat/coagent/internal/tool"
 )
 
-const workingAttribute = "working"
+const (
+	workingAttribute = "working"
+	sourceAttribute  = "source"
+)
 
 //nolint:gosec // Loop-detection instructions contain no credentials.
 const (

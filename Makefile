@@ -247,16 +247,11 @@ generate.check:
 			go version -m "$$(command -v "$$plugin")" | awk -v module="$$module" -v version="$$version" '$$1 == "mod" && $$2 == module && $$3 == version { found = 1 } END { exit !found }' || { echo "✋ $$plugin must match go.mod; run make tools"; exit 1; }; \
 		done
 	buf lint
-# Dead once SessionDetails.owner_id has left main; a4 deletes this branch.
 	@set -eu; base="$$(git merge-base HEAD origin/main)" || { \
 		fetch="git fetch origin main:refs/remotes/origin/main"; \
 		[ "$$(git rev-parse --is-shallow-repository)" = false ] || fetch="git fetch --unshallow origin main:refs/remotes/origin/main"; \
 		echo "✋ buf breaking needs the merge base with origin/main; run $$fetch"; exit 1; }; \
-		if git show "$$base:api/coagent/v1/coagent.proto" | grep -qxF '  string owner_id = 7;'; then \
-			buf breaking --against ".git#ref=$$base" --config '{"version":"v2","modules":[{"path":"api"}],"lint":{"use":["STANDARD"]},"breaking":{"use":["FILE"],"ignore_only":{"FIELD_NO_DELETE":["api/coagent/v1/coagent.proto"]}}}'; \
-		else \
-			buf breaking --against ".git#ref=$$base"; \
-		fi
+		buf breaking --against ".git#ref=$$base"
 	@set -eu; out="$$(mktemp -d)"; trap 'rm -rf "$$out"' EXIT HUP INT TERM; \
 		buf generate --output "$$out"; \
 		diff -r -x '*.proto' api "$$out/api" || { echo "✋ generated code is stale; run make generate"; exit 1; }

@@ -25,6 +25,14 @@ func (h orchestratorHost) SpawnSession(
 		return 0, "", err
 	}
 
+	return h.spawn(ctx, delegate{root: caller}, request)
+}
+
+func (h orchestratorHost) spawn(
+	ctx context.Context, from delegate, request orchestrator.SpawnRequest,
+) (int64, string, error) {
+	var err error
+
 	request.Model, request.Effort, err = h.modelChoice(request.Model, request.Effort)
 	if err != nil {
 		return 0, "", err
@@ -36,19 +44,26 @@ func (h orchestratorHost) SpawnSession(
 		return 0, "", fmt.Errorf(full, maxTotal-free, maxTotal)
 	}
 
-	selected, err := h.project(ctx, request.Project)
+	selected, err := h.project(ctx, from, request.Project)
 	if err != nil {
 		return 0, "", err
 	}
 
-	sender, err := h.provenance(ctx, caller)
+	sender, err := h.provenance(ctx, from)
 	if err != nil {
 		return 0, "", err
 	}
 
-	attrs := map[string]any{
-		controllerapi.SessionAttributeSpawnedBy: callerID,
+	attrs := make(map[string]any)
+	var watcher int64
+
+	if from.root != nil {
+		attrs[controllerapi.SessionAttributeSpawnedBy] = from.root.ID
+		watcher = from.root.ID
+	} else {
+		attrs[controllerapi.SessionAttributeSpawnedByApp] = from.app
 	}
+
 	if title := controllerapi.SessionTitleFromInput(request.Prompt); title != "" {
 		attrs[controllerapi.SessionAttributeTitle] = title
 	}
@@ -60,7 +75,7 @@ func (h orchestratorHost) SpawnSession(
 			Input: sessionstore.Input{
 				Source: sessionstore.InputSourceAgent, Content: request.Prompt, Attributes: sender,
 			},
-			Watcher: callerID,
+			Watcher: watcher,
 		},
 		Worktree: request.Worktree, NoExecution: true,
 	})
@@ -109,7 +124,11 @@ func (h orchestratorHost) spawnModel(requested string) (string, error) {
 	)
 }
 
-func (h orchestratorHost) project(ctx context.Context, selection string) (sessionstore.ProjectRow, error) {
+func (h orchestratorHost) project(
+	ctx context.Context,
+	from delegate,
+	selection string,
+) (sessionstore.ProjectRow, error) {
 	projects, err := h.s.store.ListProjects(ctx)
 	if err != nil {
 		return sessionstore.ProjectRow{}, fmt.Errorf("list spawn projects: %w", err)
@@ -126,7 +145,7 @@ func (h orchestratorHost) project(ctx context.Context, selection string) (sessio
 			continue
 		}
 
-		selected := strings.EqualFold(project.Name, selection) || project.WorkDir == selection
+		selected := project.WorkDir == selection || (from.root != nil && strings.EqualFold(project.Name, selection))
 		if err := h.projectRefusal(project, selection); err != nil {
 			if selected {
 				rejected = err
@@ -146,6 +165,10 @@ func (h orchestratorHost) project(ctx context.Context, selection string) (sessio
 	}
 
 	if len(matches) > 1 {
+		if from.root == nil {
+			return sessionstore.ProjectRow{}, fmt.Errorf("no project at %q", selection)
+		}
+
 		directories := make([]string, 0, len(matches))
 		for _, project := range matches {
 			directories = append(directories, project.WorkDir)
@@ -159,6 +182,10 @@ func (h orchestratorHost) project(ctx context.Context, selection string) (sessio
 
 	if rejected != nil {
 		return sessionstore.ProjectRow{}, rejected
+	}
+
+	if from.root == nil {
+		return sessionstore.ProjectRow{}, fmt.Errorf("no project at %q", selection)
 	}
 
 	slices.Sort(known)

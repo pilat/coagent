@@ -55,7 +55,7 @@ func TestServer_RemovesTheBearerFromTheHTTPRequest(t *testing.T) {
 	f := newAPIFixture(t)
 	listener, _ := apiListener(t)
 	t.Cleanup(func() { _ = listener.Close() })
-	server, err := New(t.Context(), listener, f.entries, f.factory)
+	server, err := New(t.Context(), listener, f.clients())
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, server.Close(t.Context())) })
 	body := strings.NewReader(fmt.Sprintf(`{"work_dir":%q}`, t.TempDir()))

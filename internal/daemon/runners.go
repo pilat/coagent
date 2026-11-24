@@ -169,6 +169,13 @@ func (s *runnerSet) canAdmit(child bool, parentID int64) bool {
 		(!child || s.children < maxChildren && s.perParent[parentID] < maxPerParent)
 }
 
+func (s *runnerSet) waitingForAdmission(id int64) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return slices.ContainsFunc(s.waiting, func(w waitingRunner) bool { return w.sessionID == id })
+}
+
 func (s *runnerSet) wait(w waitingRunner) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
