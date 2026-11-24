@@ -14,8 +14,14 @@ const (
 // SignalKind identifies a root's turn outcome without carrying its output.
 type SignalKind string
 
+// Actor names the delegated author of a lifecycle command; zero means the human.
+type Actor struct {
+	Session int64
+	App     string
+}
+
 // SignalText keeps the display name in chat and out of the model line.
-func SignalText(k SignalKind, id int64, project, name string, replacement, actor int64) (string, string) {
+func SignalText(k SignalKind, id int64, project, name string, replacement int64, actor Actor) (string, string) {
 	var fact, notice string
 
 	readID := id
@@ -27,18 +33,24 @@ func SignalText(k SignalKind, id int64, project, name string, replacement, actor
 		fact, notice = "stopped on an error", "stopped on an error"
 	case SignalStopped:
 		fact, notice = "was stopped by the human with /stop", "was stopped"
-		if actor != 0 {
-			fact = fmt.Sprintf("was stopped by session #%d with %s", actor, IDStopSession)
-			notice = fmt.Sprintf("was stopped by #%d", actor)
+		if actor.Session != 0 {
+			fact = fmt.Sprintf("was stopped by session #%d with %s", actor.Session, IDStopSession)
+			notice = fmt.Sprintf("was stopped by #%d", actor.Session)
+		} else if actor.App != "" {
+			notice = "was stopped by app " + actor.App
+			fact = notice + " with StopSession"
 		}
 	case SignalParked:
 		fact = "is parked at its budget checkpoint; only the human can resume it"
 		notice = "is parked at its budget checkpoint"
 	case SignalKilled:
 		fact, notice = "was killed", "was killed"
-		if actor != 0 {
-			fact = fmt.Sprintf("was killed by session #%d with %s", actor, IDKillSession)
-			notice = fmt.Sprintf("was killed by #%d", actor)
+		if actor.Session != 0 {
+			fact = fmt.Sprintf("was killed by session #%d with %s", actor.Session, IDKillSession)
+			notice = fmt.Sprintf("was killed by #%d", actor.Session)
+		} else if actor.App != "" {
+			notice = "was killed by app " + actor.App
+			fact = notice + " with KillSession"
 		}
 	case SignalCleared:
 		fact = fmt.Sprintf("was cleared by the human; its replacement is session #%d", replacement)

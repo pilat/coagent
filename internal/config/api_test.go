@@ -19,6 +19,37 @@ func TestAPIClients_Validation(t *testing.T) {
 		want     string
 	}{
 		{name: "operator", clients: client},
+		{name: "app", clients: strings.ReplaceAll(client, "operator", "app")},
+		{
+			name:    "app empty projects",
+			clients: strings.ReplaceAll(client, "role: operator", "role: app, projects: []"),
+			want:    `api client "alpha": projects must not be empty; omit projects to reach every project`,
+		},
+		{name: "app projects", clients: strings.ReplaceAll(client, "role: operator", "role: app, projects: [/a, /b]")},
+		{
+			name: "relative project", clients: strings.ReplaceAll(client, "role: operator", "role: app, projects: [a]"),
+			want: `api client "alpha" project "a" must be a clean absolute path`,
+		},
+		{
+			name:    "unclean project",
+			clients: strings.ReplaceAll(client, "role: operator", "role: app, projects: [/a/../b]"),
+			want:    `api client "alpha" project "/a/../b" must be a clean absolute path`,
+		},
+		{
+			name:    "duplicate project",
+			clients: strings.ReplaceAll(client, "role: operator", "role: app, projects: [/a, /a]"),
+			want:    `api client "alpha" lists project "/a" twice`,
+		},
+		{
+			name:    "operator projects",
+			clients: strings.ReplaceAll(client, "role: operator", "role: operator, projects: [/a]"),
+			want:    `api client "alpha": projects apply only to role app`,
+		},
+		{
+			name:    "operator empty projects",
+			clients: strings.ReplaceAll(client, "role: operator", "role: operator, projects: []"),
+			want:    `api client "alpha": projects apply only to role app`,
+		},
 		{name: "absent"},
 		{name: "missing id", clients: "{role: operator}", want: "api client at index 0 has no id specified"},
 		{
@@ -35,14 +66,14 @@ func TestAPIClients_Validation(t *testing.T) {
 			want:     `api client id "alpha" is also a manager id`,
 		},
 		{
-			name:    "app rejected",
-			clients: "{id: alpha, role: app}",
-			want:    `api client "alpha" has unsupported role "app", must be: operator`,
+			name:    "unsupported role",
+			clients: "{id: alpha, role: admin}",
+			want:    `api client "alpha" has unsupported role "admin", must be: operator, app`,
 		},
 		{
 			name:    "missing role",
 			clients: "{id: alpha}",
-			want:    `api client "alpha" has unsupported role "", must be: operator`,
+			want:    `api client "alpha" has unsupported role "", must be: operator, app`,
 		},
 		{
 			name:    "missing hash",

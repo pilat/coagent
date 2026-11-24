@@ -35,6 +35,13 @@ const (
 	SessionServiceCreateSessionProcedure = "/coagent.v1.SessionService/CreateSession"
 	// SessionServiceSendInputProcedure is the procedure name of the SessionService's SendInput RPC.
 	SessionServiceSendInputProcedure = "/coagent.v1.SessionService/SendInput"
+	// SessionServiceStopSessionProcedure is the procedure name of the SessionService's StopSession RPC.
+	SessionServiceStopSessionProcedure = "/coagent.v1.SessionService/StopSession"
+	// SessionServiceKillSessionProcedure is the procedure name of the SessionService's KillSession RPC.
+	SessionServiceKillSessionProcedure = "/coagent.v1.SessionService/KillSession"
+	// SessionServiceGetTurnOutcomeProcedure is the procedure name of the SessionService's
+	// GetTurnOutcome RPC.
+	SessionServiceGetTurnOutcomeProcedure = "/coagent.v1.SessionService/GetTurnOutcome"
 	// SessionServiceListSessionsProcedure is the procedure name of the SessionService's ListSessions
 	// RPC.
 	SessionServiceListSessionsProcedure = "/coagent.v1.SessionService/ListSessions"
@@ -111,6 +118,27 @@ var (
 			Procedure:  SessionServiceSendInputProcedure,
 		}
 	})
+	sessionServiceStopSessionSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_coagent_v1_coagent_proto.Services().ByName("SessionService").Methods().ByName("StopSession"),
+			Procedure:  SessionServiceStopSessionProcedure,
+		}
+	})
+	sessionServiceKillSessionSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_coagent_v1_coagent_proto.Services().ByName("SessionService").Methods().ByName("KillSession"),
+			Procedure:  SessionServiceKillSessionProcedure,
+		}
+	})
+	sessionServiceGetTurnOutcomeSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_coagent_v1_coagent_proto.Services().ByName("SessionService").Methods().ByName("GetTurnOutcome"),
+			Procedure:  SessionServiceGetTurnOutcomeProcedure,
+		}
+	})
 	sessionServiceListSessionsSpec = sync.OnceValue(func() connect.Spec {
 		return connect.Spec{
 			StreamType: connect.StreamTypeUnary,
@@ -164,14 +192,22 @@ var (
 
 // SessionServiceClient is a client for the coagent.v1.SessionService service.
 type SessionServiceClient interface {
-	// CreateSession creates an empty root.
+	// CreateSession creates an empty root. An app may create a root only in an existing registered
+	// project within its project scope, on the default or a tagged model.
 	CreateSession(context.Context, *v1.CreateSessionRequest) (*v1.CreateSessionResponse, error)
-	// SendInput appends text to a root's durable input as human input. A repeated idempotency_key
-	// for the same root appends nothing, whichever client sends it, so a retry never doubles an input;
-	// choose keys unique across clients.
+	// SendInput appends text to a root's durable input: human input from an operator, a sent message
+	// with no session commands from an app. A repeated idempotency_key from the same client for the
+	// same root appends nothing, so a retry never doubles an input; keys of different clients never collide.
 	// A retried /clear that already replaced the root clears its successor. A replaced root resolves
 	// to its successor; address the newest session_id received.
 	SendInput(context.Context, *v1.SendInputRequest) (*v1.SendInputResponse, error)
+	// StopSession stops a root as /stop does. An operator stops any root; an app stops only roots it started.
+	StopSession(context.Context, *v1.StopSessionRequest) (*v1.StopSessionResponse, error)
+	// KillSession kills a root as /kill does. An operator kills any root; an app kills only roots it started.
+	KillSession(context.Context, *v1.KillSessionRequest) (*v1.KillSessionResponse, error)
+	// GetTurnOutcome reports whether a root's turn is over, accounting for admission waits and newly accepted input.
+	// Read it after each StreamSessionEvents hint; a root that has had no input yet is over.
+	GetTurnOutcome(context.Context, *v1.GetTurnOutcomeRequest) (*v1.GetTurnOutcomeResponse, error)
 	// ListSessions lists the live roots, newest activity first.
 	ListSessions(context.Context, *v1.ListSessionsRequest) (*v1.ListSessionsResponse, error)
 	// ListSessionDetails lists every root, killed ones included.
@@ -196,14 +232,22 @@ func NewSessionServiceClient(client *connect.Client) SessionServiceClient {
 
 // SessionServiceHandler is an implementation of the coagent.v1.SessionService service.
 type SessionServiceHandler interface {
-	// CreateSession creates an empty root.
+	// CreateSession creates an empty root. An app may create a root only in an existing registered
+	// project within its project scope, on the default or a tagged model.
 	CreateSession(context.Context, *v1.CreateSessionRequest) (*v1.CreateSessionResponse, error)
-	// SendInput appends text to a root's durable input as human input. A repeated idempotency_key
-	// for the same root appends nothing, whichever client sends it, so a retry never doubles an input;
-	// choose keys unique across clients.
+	// SendInput appends text to a root's durable input: human input from an operator, a sent message
+	// with no session commands from an app. A repeated idempotency_key from the same client for the
+	// same root appends nothing, so a retry never doubles an input; keys of different clients never collide.
 	// A retried /clear that already replaced the root clears its successor. A replaced root resolves
 	// to its successor; address the newest session_id received.
 	SendInput(context.Context, *v1.SendInputRequest) (*v1.SendInputResponse, error)
+	// StopSession stops a root as /stop does. An operator stops any root; an app stops only roots it started.
+	StopSession(context.Context, *v1.StopSessionRequest) (*v1.StopSessionResponse, error)
+	// KillSession kills a root as /kill does. An operator kills any root; an app kills only roots it started.
+	KillSession(context.Context, *v1.KillSessionRequest) (*v1.KillSessionResponse, error)
+	// GetTurnOutcome reports whether a root's turn is over, accounting for admission waits and newly accepted input.
+	// Read it after each StreamSessionEvents hint; a root that has had no input yet is over.
+	GetTurnOutcome(context.Context, *v1.GetTurnOutcomeRequest) (*v1.GetTurnOutcomeResponse, error)
 	// ListSessions lists the live roots, newest activity first.
 	ListSessions(context.Context, *v1.ListSessionsRequest) (*v1.ListSessionsResponse, error)
 	// ListSessionDetails lists every root, killed ones included.
@@ -227,6 +271,9 @@ func RegisterSessionServiceHandler(server *connect.Server, svc SessionServiceHan
 	server.Register(
 		connect.Method{Spec: sessionServiceCreateSessionSpec(), Handler: adapter.createSession},
 		connect.Method{Spec: sessionServiceSendInputSpec(), Handler: adapter.sendInput},
+		connect.Method{Spec: sessionServiceStopSessionSpec(), Handler: adapter.stopSession},
+		connect.Method{Spec: sessionServiceKillSessionSpec(), Handler: adapter.killSession},
+		connect.Method{Spec: sessionServiceGetTurnOutcomeSpec(), Handler: adapter.getTurnOutcome},
 		connect.Method{Spec: sessionServiceListSessionsSpec(), Handler: adapter.listSessions},
 		connect.Method{Spec: sessionServiceListSessionDetailsSpec(), Handler: adapter.listSessionDetails},
 		connect.Method{Spec: sessionServiceGetSessionKilledSpec(), Handler: adapter.getSessionKilled},
@@ -246,6 +293,18 @@ func (UnimplementedSessionServiceHandler) CreateSession(context.Context, *v1.Cre
 
 func (UnimplementedSessionServiceHandler) SendInput(context.Context, *v1.SendInputRequest) (*v1.SendInputResponse, error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, "coagent.v1.SessionService.SendInput is not implemented")
+}
+
+func (UnimplementedSessionServiceHandler) StopSession(context.Context, *v1.StopSessionRequest) (*v1.StopSessionResponse, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "coagent.v1.SessionService.StopSession is not implemented")
+}
+
+func (UnimplementedSessionServiceHandler) KillSession(context.Context, *v1.KillSessionRequest) (*v1.KillSessionResponse, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "coagent.v1.SessionService.KillSession is not implemented")
+}
+
+func (UnimplementedSessionServiceHandler) GetTurnOutcome(context.Context, *v1.GetTurnOutcomeRequest) (*v1.GetTurnOutcomeResponse, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "coagent.v1.SessionService.GetTurnOutcome is not implemented")
 }
 
 func (UnimplementedSessionServiceHandler) ListSessions(context.Context, *v1.ListSessionsRequest) (*v1.ListSessionsResponse, error) {
@@ -291,6 +350,30 @@ func (c *sessionServiceClient) CreateSession(ctx context.Context, req *v1.Create
 func (c *sessionServiceClient) SendInput(ctx context.Context, req *v1.SendInputRequest) (*v1.SendInputResponse, error) {
 	var res v1.SendInputResponse
 	if err := c.client.CallUnary(ctx, sessionServiceSendInputSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *sessionServiceClient) StopSession(ctx context.Context, req *v1.StopSessionRequest) (*v1.StopSessionResponse, error) {
+	var res v1.StopSessionResponse
+	if err := c.client.CallUnary(ctx, sessionServiceStopSessionSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *sessionServiceClient) KillSession(ctx context.Context, req *v1.KillSessionRequest) (*v1.KillSessionResponse, error) {
+	var res v1.KillSessionResponse
+	if err := c.client.CallUnary(ctx, sessionServiceKillSessionSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *sessionServiceClient) GetTurnOutcome(ctx context.Context, req *v1.GetTurnOutcomeRequest) (*v1.GetTurnOutcomeResponse, error) {
+	var res v1.GetTurnOutcomeResponse
+	if err := c.client.CallUnary(ctx, sessionServiceGetTurnOutcomeSpec(), req, &res); err != nil {
 		return nil, err
 	}
 	return &res, nil
@@ -372,6 +455,42 @@ func (h sessionServiceHandler) sendInput(ctx context.Context, _ connect.Spec, st
 		return err
 	}
 	res, err := h.svc.SendInput(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
+}
+
+func (h sessionServiceHandler) stopSession(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.StopSessionRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.StopSession(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
+}
+
+func (h sessionServiceHandler) killSession(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.KillSessionRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.KillSession(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
+}
+
+func (h sessionServiceHandler) getTurnOutcome(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.GetTurnOutcomeRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.GetTurnOutcome(ctx, &req)
 	if err != nil {
 		return err
 	}

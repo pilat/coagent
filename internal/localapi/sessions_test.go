@@ -100,7 +100,7 @@ func TestServer_EveryClientReachesEveryRoot(t *testing.T) {
 	assert.Equal(t, id, row.GetSessionId())
 	f.backend.mu.Lock()
 	defer f.backend.mu.Unlock()
-	assert.Equal(t, []apiSend{{sessionID: id, text: "private", key: "foreign"}}, f.backend.sends)
+	assert.Equal(t, []apiSend{{sessionID: id, text: "private", key: "beta:foreign"}}, f.backend.sends)
 }
 
 func TestCreateSession_CreatesARootAndRefusesARelativeWorkDir(t *testing.T) {
@@ -144,7 +144,7 @@ func TestSendInput_PassesTextAndKeyAndRejectsMalformedRequests(t *testing.T) {
 	}
 	f.backend.mu.Lock()
 	defer f.backend.mu.Unlock()
-	assert.Equal(t, []apiSend{{sessionID: id, text: text, key: "k1"}}, f.backend.sends)
+	assert.Equal(t, []apiSend{{sessionID: id, text: text, key: "alpha:k1"}}, f.backend.sends)
 }
 
 func TestTailOutput_RejectsMalformedRequests(t *testing.T) {

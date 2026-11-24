@@ -38,12 +38,16 @@ func TestDrainPendingRunners_DerivesPromotedRecoveryAfterCapacityWait(t *testing
 	factory.nextSess = sess
 	events := collectEvents(t, mgr.bus.SubscribeAll())
 	t.Cleanup(events.stop)
+	assert.False(t, mgr.runners.waitingForAdmission(rec))
 	require.NoError(t, mgr.start(ctx, rec))
 	assert.False(t, mgr.HasActiveLoop(rec))
 	require.Equal(t, 1, runnerWaitingCount(mgr.runners))
+	assert.True(t, mgr.runners.waitingForAdmission(rec))
+	assert.False(t, mgr.runners.waitingForAdmission(rec+1))
 	mgr.runners.release(false, 0)
 	reserved--
 	mgr.drain(ctx)
+	assert.False(t, mgr.runners.waitingForAdmission(rec))
 	events.waitState(rec, controllerapi.StateIdle)
 	sess.mu.Lock()
 	ran := sess.ran

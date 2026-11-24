@@ -361,7 +361,7 @@ func (s *Service) parkBudgetTree(ctx context.Context, rootID int64) {
 	}
 
 	if stopped {
-		s.signalOutcome(ctx, rootID, orchestrator.SignalParked, 0, 0)
+		s.signalOutcome(ctx, rootID, orchestrator.SignalParked, 0, orchestrator.Actor{})
 	}
 
 	s.publishIdle(rootID)

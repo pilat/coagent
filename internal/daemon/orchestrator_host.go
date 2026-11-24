@@ -94,12 +94,18 @@ func (h orchestratorHost) SendToSession(
 		return 0, false, err
 	}
 
+	return h.send(ctx, delegate{root: caller}, targetID, message, "")
+}
+
+func (h orchestratorHost) send(
+	ctx context.Context, from delegate, targetID int64, message, key string,
+) (int64, bool, error) {
 	target, err := h.sendTarget(ctx, targetID)
 	if err != nil {
 		return 0, false, err
 	}
 
-	if target.ID == callerID {
+	if from.root != nil && target.ID == from.root.ID {
 		return 0, false, errors.New("cannot send to this session itself")
 	}
 
@@ -115,7 +121,7 @@ func (h orchestratorHost) SendToSession(
 		)
 	}
 
-	attrs, err := h.provenance(ctx, caller)
+	attrs, err := h.provenance(ctx, from)
 	if err != nil {
 		return 0, false, err
 	}
@@ -123,14 +129,23 @@ func (h orchestratorHost) SendToSession(
 	var unread bool
 
 	err = h.s.store.WithTx(ctx, func(tx *sql.Tx) error {
-		_, err := sessionstore.EnqueueTx(ctx, tx, sessionstore.Input{
+		queued, err := sessionstore.EnqueueTx(ctx, tx, sessionstore.Input{
 			SessionID: target.ID, Source: sessionstore.InputSourceAgent, Content: message, Attributes: attrs,
+			DeliveryKey: key,
 		})
 		if err != nil {
 			return fmt.Errorf("enqueue sent message: %w", err)
 		}
 
-		unread, err = sessionstore.ArmWatchTx(ctx, tx, callerID, target.ID, false)
+		if from.root == nil {
+			if queued.Input != nil && controllerapi.SpawnedByApp(target.Attributes) == from.app {
+				return sessionstore.NameUntitledRootTx(ctx, tx, target.ID, message)
+			}
+
+			return nil
+		}
+
+		unread, err = sessionstore.ArmWatchTx(ctx, tx, from.root.ID, target.ID, false)
 		if err != nil {
 			return fmt.Errorf("arm sent session watch: %w", err)
 		}
@@ -252,19 +267,4 @@ func (h orchestratorHost) sessionState(ctx context.Context, record *sessionstore
 	default:
 		return string(record.Status), nil
 	}
-}
-
-func (h orchestratorHost) provenance(ctx context.Context, from *sessionstore.SessionRecord) (map[string]any, error) {
-	project, err := h.s.store.GetProjectName(ctx, from.ProjectID)
-	if err != nil {
-		return nil, fmt.Errorf("load sender project: %w", err)
-	}
-
-	title, _ := from.Attributes[controllerapi.SessionAttributeTitle].(string)
-
-	return map[string]any{
-		sessionstore.InputAttributeSenderSessionID: from.ID,
-		sessionstore.InputAttributeSenderName:      sessionstore.ChatDisplayName(project, title),
-		sessionstore.InputAttributeSenderTitle:     title,
-	}, nil
 }

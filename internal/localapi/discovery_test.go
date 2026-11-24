@@ -41,6 +41,10 @@ func (f apiStubFactory) ForManager(string) controllerapi.Controller {
 	return f.control
 }
 
+func (f apiStubFactory) ForApp(string, []string) controllerapi.Controller {
+	return f.control
+}
+
 func (s *discoveryStub) Successor(context.Context, int64) (int64, error) {
 	return 0, nil
 }

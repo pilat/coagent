@@ -12,7 +12,6 @@ import (
 	"connectrpc.com/connect/v2"
 	"connectrpc.com/connect/v2/connecthttp"
 
-	"github.com/pilat/coagent/internal/config"
 	"github.com/pilat/coagent/internal/controllerapi"
 )
 
@@ -25,7 +24,7 @@ type client struct {
 
 type clientKey struct{}
 
-func bindClient(entry config.APIClientEntry, controllers controllerapi.ManagerControllerFactory) (*client, error) {
+func bindClient(entry Client) (*client, error) {
 	raw, err := hex.DecodeString(entry.TokenSHA256)
 	if err != nil {
 		return nil, fmt.Errorf("decode token hash for api client %q: %w", entry.ID, err)
@@ -35,7 +34,7 @@ func bindClient(entry config.APIClientEntry, controllers controllerapi.ManagerCo
 		return nil, fmt.Errorf("api client %q has invalid token hash length", entry.ID)
 	}
 
-	author, err := bindAuthor(entry.ID, controllers)
+	author, err := bindControl(entry.ID, entry.Control)
 	if err != nil {
 		return nil, err
 	}
@@ -46,8 +45,10 @@ func bindClient(entry config.APIClientEntry, controllers controllerapi.ManagerCo
 }
 
 func bindAuthor(managerID string, controllers controllerapi.ManagerControllerFactory) (*client, error) {
-	control := controllers.ForManager(managerID)
+	return bindControl(managerID, controllers.ForManager(managerID))
+}
 
+func bindControl(managerID string, control controllerapi.Controller) (*client, error) {
 	chat, ok := control.(controllerapi.ChatFocusController)
 	if !ok {
 		return nil, fmt.Errorf("controller for api client %q lacks ChatFocusController", managerID)

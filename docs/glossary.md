@@ -15,17 +15,19 @@ The shared vocabulary of coagent — the words that name its concepts, so code, 
   _Avoid_: assistant, desk, coordinator, supervisor; "orchestrator" for the daemon.
 - **orchestrator**: A root session with orchestrator mode on. _Avoid_: manager (that is the Telegram front end),
   parent (that is the subagent relation).
-- **sent message**: Text one orchestrator writes into another root with `send_to_session` or as a `spawn_session`
-  prompt: `source=agent` input with sender provenance and no human authority. The target sees a host-authored line
-  naming the sender; its chat shows `↪ from #N name`. _Avoid_: relay, forward, reply.
-- **sender provenance**: The sending session's id and names carried as inbox attributes of a sent message or
-  host-written lifecycle command. They name the author in the target's chat and, for a sent message, its model input.
-  Never part of the message text.
-- **spawned session**: A root created by `spawn_session`: ordinary, with its own budget, outside the
-  orchestrator's stop tree; its first input is a sent message. It runs on the default model unless the orchestrator
-  named a tagged one, at that model's default effort unless the orchestrator named a level the model accepts.
-  Its durable `spawned_by` attribute names the spawner, which can stop or kill it, as can the
-  spawner's `/clear` replacement; the orchestrator's own `/stop` still does not reach it.
+- **sent message**: Text an orchestrator writes into another root with `send_to_session` or as a `spawn_session`
+  prompt, or an app sends with `SendInput`: `source=agent` input with sender provenance and no human authority.
+  The target sees a host-authored line naming the sender; its chat shows `↪ from #N name` or `↪ from app <id>`.
+  _Avoid_: relay, forward, reply.
+- **sender provenance**: The sending session's id and names, or an app's client id, carried as inbox attributes
+  of a sent message or host-written lifecycle command. They name the author in the target's chat and, for a sent
+  message, its model input. Never part of the message text.
+- **spawned session**: A root created by `spawn_session` or an app's `CreateSession`: ordinary, with its own budget,
+  outside the spawner's stop tree. An orchestrator supplies a sent-message prompt; an app creates it empty and
+  sends separately. It runs on the default model unless the spawner named a tagged one, at that model's default
+  effort unless an orchestrator named a level the model accepts. Its durable `spawned_by` session id or
+  `spawned_by_app` client id names who may stop or kill it. An orchestrator's `/clear` replacement keeps that
+  authority; the orchestrator's own `/stop` still does not reach the spawned root.
   _Avoid_: child, subagent (those are `task`).
 
 **daemon**:
@@ -96,11 +98,11 @@ A unit of work a manager submits to the daemon. It has no Go type of its own —
 _Avoid_: job, request (for the work-unit); unqualified "task" in code.
 
 **Controller** (`controllerapi.Controller`):
-The private manager-bound in-process capability `managercontrol` implements over
+The private author-bound in-process capability `managercontrol` implements over
 the daemon backend for the local API server — create sessions, durably send
 messages, stop/kill them, and subscribe to root session events. The
 composition root binds one capability to each manager and **API client** ID;
-every bound controller reaches every root. It is
+an operator reaches every root, while an **app** holds delegated authority within its **project scope**. It is
 an internal package boundary; built-in managers reach it only through the
 **local API**.
 _Avoid_: using "controller" for a front-end integration — that is a manager.
@@ -114,8 +116,9 @@ third-party plugin.
 _Avoid_: controller, bot, adapter, integration; manager for an **API client**.
 
 **root**:
-A session with no parent (`parent_id = 0`). Every manager and API client lists, reads and writes
-it; it has an output log, titles, episodes and the chat, config and orchestrator surfaces. The identifiers
+A session with no parent (`parent_id = 0`). Every manager and operator API client lists, reads and writes
+it; an app's reach follows its project scope. It has an output log, titles, episodes and the chat, config and
+orchestrator surfaces. The identifiers
 `CreateManagerRoot`, `ManagerRootCreate`, `ReplaceManagerRoot`, `ReplaceManagerRootForInput`, `createManagerRoot`,
 `createManagerRootTx`, `insertManagerRoot`, `replaceManagerRoot`, `startManagerEpisode`, `prepareManagerModelInputTx`
 and `activateManagerInputTx` are historical names for a root, to be renamed. The "manager root" wording in this
@@ -135,6 +138,12 @@ The identity a session runs in: one `projects` row keyed by absolute `work_dir`,
 plus the folder's instructions, skills and curated memory. Any folder can be a
 project, with or without code or Git; many independent sessions can share it.
 _Avoid_: workspace, space; dialog (a dialog is a session in a project).
+
+**project scope**:
+The optional list of project work directories that limits an **app**'s delegation. A root is covered by its
+project's work directory or by the listed `repo_root` of a coagent-created worktree, attested by
+`coagent_worktree_origin = controller-created-v1`. Omitting `projects` reaches every project; an explicit empty list is refused.
+_Avoid_: bare "scope" (that is the MCP registry's), tenant, owner.
 
 **agent type**:
 A named agent configuration — tool allowlist, prompt template, model override, mode and optional project-context omission — that session assembly selects. Built-ins: `build`, `general`, `explore`, `browser`, `compaction`. The `task` tool offers only spawnable types; `build` and `compaction` are not subagent types. The built-in `explore` type is deliberately lean: it has read-only code-search tools and starts without project instructions, skills, curated memory, Git state or model catalog; its assignment must supply relevant constraints. The built-in `browser` type has the tools of the MCP server bound by `browser.mcp_name`, plus any whitelisted built-ins granted by `browser.tools`, and the same project-context omission; without that binding it is unavailable. `browser.model` and `browser.effort` pin its model and effort. Browser disables integrated search. Agent type selects behavior and tools, never a work budget.
@@ -172,19 +181,25 @@ every call carries a bearer token.
 _Avoid_: control socket (that is the status protocol).
 
 **API client**:
-One `api.clients` entry (`id`, `role`, `token_sha256`) and the program holding its
-token, which `coagent token <id>` prints once. Its id keys its chat rows and is stamped
-on the roots it creates; it reaches every root. The token authenticates
+One `api.clients` entry (`id`, `role`, `token_sha256`, optional `projects`) and the program holding its
+token, which `coagent token <id>` prints once. An operator client's id keys its chat rows; an app keeps no chat.
+The token authenticates
 an author and grants nothing itself: authority follows the source the host
 stamps on its input. The role `operator` names who holds the token: the person
 who owns the machine, `config.yaml` and the sandbox rules. Its input is
-**human input**.
+**human input** and it reaches every root. The role `app` holds delegated authority instead.
 _Avoid_: manager (a built-in front end), user.
 
+**app**:
+An API client with `role: app`, holding authority the operator delegated, optionally limited to projects.
+It sends sent messages, creates empty spawned sessions and ends only roots it started; it cannot change
+configuration, existing models, titles or orchestrator mode.
+_Avoid_: bot, integration, service account.
+
 **idempotency key**:
-The string a local API caller sends with each input. A repeated send of the same
-input to the same root appends nothing. Stored as the inbox delivery key
-`user:<key>`.
+The string a local API caller sends with each input. A repeated send by the same author to the same root appends
+nothing; two authors' keys never collide. Stored as the inbox delivery key `user:<author>:<key>` for an operator
+or manager and `app:<author>:<key>` for an app. Pre-upgrade rows retain `user:<key>`.
 _Avoid_: request id, dedup key.
 
 ## Agent loop & context management
@@ -362,7 +377,7 @@ delivery queue; a per-chat **chat cursor** records the selected position.
 _Avoid_: output queue, delivery backlog.
 
 **chat focus**:
-The durable root selected by one manager or API client and chat, stored in
+The durable root selected by one manager or operator API client and chat, stored in
 `chat_focus.session_id`. NULL means no session. Focus does not change which
 sessions keep running. The manager binds its row at startup without overwriting
 an existing selection; every selection write resets its **chat cursor**.
@@ -370,7 +385,7 @@ _Avoid_: active session (several sessions may run at once).
 
 **chat cursor**:
 `chat_focus.last_sent_id`, the selected session's highest output-log ID sent
-or skipped past by one manager or API client and chat. NULL means **entry** is owed. Numeric
+or skipped past by one manager or operator API client and chat. NULL means **entry** is owed. Numeric
 positions advance only while the same focus remains entered. Selection writes,
 including re-switch and clear, reset it to NULL; restart preserves it.
 _Avoid_: per-session read tracking, transport receipt, read position (that is an orchestrator's).
@@ -391,6 +406,7 @@ _Avoid_: subscription alone (say standing subscription; "subscription" also name
 One host-authored model line in an orchestrator's inbox naming the watched root's ids, project and turn outcome,
 and pointing to `read_session`; it carries no target-authored text or title. It is a `source=subagent` row.
 A stop or kill by an orchestrator names that session; that session gets no signal for its own action.
+An app's stop or kill names `app <id>`.
 The orchestrator's chat shows a persist-only `🔔 #N display name …` row using the shared project/title display name;
 that row never enters its model transcript. For `/clear` the name belongs to the cleared session. At most one is unread per watch
 ([ADR-0099](adr/0099-turn-outcomes-signal-watchers-through-armed-watch-rows.md)).
@@ -399,6 +415,7 @@ _Avoid_: notification (that is a manager event), reply, terminal signal.
 **turn outcome**:
 The end of a root's work for now: a final answer with no pending input and no background wake source, an error that
 ends the run, `/stop`, a budget park, `/kill` or `/clear`. Steps, idle flips and output rows are not outcomes.
+A local API client reads whether the current turn is over with `GetTurnOutcome`.
 _Avoid_: finish reason (that is the provider's), completion (a subagent's), iteration (one LLM call plus its tools;
 a turn outcome ends one or more iterations).
 
@@ -418,8 +435,9 @@ _Avoid_: entry context.
 
 **session title**:
 A live root's one-line name, `sessions.attributes.title`, 1–80 characters.
-The first inserted non-command user input names an untitled root once; the user
-renames it with `/title`. A `/clear` replacement starts untitled. A chat shows
+An inserted non-command user input or sent message from the creating app names an untitled root when its text
+yields a title. Text beginning with `/` leaves it untitled; a later message can name it. The user renames it with
+`/title`. A `/clear` replacement starts untitled and is eligible again. A chat shows
 `<project> · <title>`. It is not `agent_type` and does not follow the work as it changes.
 _Avoid_: label, session name.
 
@@ -475,8 +493,8 @@ can release a fired budget; a matching leading command creates its exact
 tool activation grant.
 Session commands are read only from human input and scheduled turns; other
 sources reach the model as text.
-The orchestrator host also writes one: the fixed `/stop` or `/kill` an orchestrator issues on a session it spawned,
-with sender attributes naming it — authority the human delegated through orchestrator mode.
+The daemon host also writes one: the fixed `/stop` or `/kill` an orchestrator or app issues on a session it started,
+with sender attributes naming it — authority the human delegated through orchestrator mode or an app token.
 _Avoid_: real user message (authority follows the source field).
 
 **tool activation grant**:
@@ -712,7 +730,7 @@ _Avoid_: sudo wrapper, privilege helper (nothing here is a persistent helper pro
 
 Naming conflicts this vocabulary resolves. "Resolved" means the winner above is the term to use going forward; where existing code or prose still uses a loser, fix it on touch rather than in a sweep.
 
-- **controller vs manager** — *Resolved.* `controllerapi.Controller` is the private manager-bound interface implemented by `managercontrol` over the daemon backend; a built-in front end is a **manager**. It does not name a public extension point. The public contract is the **local API**, served by `internal/localapi` over that same controller.
+- **controller vs manager** — *Resolved.* `controllerapi.Controller` is the private author-bound interface implemented by `managercontrol` over the daemon backend; a built-in front end is a **manager**. It does not name a public extension point. The public contract is the **local API**, served by `internal/localapi` over that same controller.
 - **task (work-unit) vs `task` tool** — *Resolved.* "task" is prose for a submitted unit of work, realized as a session with no `Task` type; the only code symbol named `task` is the subagent-spawning tool. Qualify in code contexts.
 - **state / status (three vocabularies)** — *Resolved.* Runtime **state** = `controllerapi.State*` (running/idle/error, in-memory); persisted **status** = active/completed/suspended/error; subagent **link state** = `subagent.State*`. Don't treat "running" and "active" as one word.
 - **agent loop vs ReAct loop vs iteration** — *Resolved.* Canonical is **agent loop** (entered through `Run`); "ReAct loop" is an acceptable doc alias; **iteration** is one turn, not a synonym for the loop.

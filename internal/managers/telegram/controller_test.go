@@ -112,6 +112,18 @@ func (f *fakeController) SendSessionMessage(_ context.Context, data controllerap
 	return nil
 }
 
+func (f *fakeController) StopSession(context.Context, controllerapi.SessionStopData) (int64, error) {
+	return 0, nil
+}
+
+func (f *fakeController) KillSession(context.Context, controllerapi.SessionKillData) (int64, error) {
+	return 0, nil
+}
+
+func (f *fakeController) TurnOver(context.Context, int64) (int64, bool, error) {
+	return 0, false, nil
+}
+
 func (f *fakeController) SetSessionModel(_ context.Context, data controllerapi.SessionSetModelData) error {
 	f.setModelCalls = append(f.setModelCalls, data)
 	return f.setModelErr

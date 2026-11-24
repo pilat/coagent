@@ -9,6 +9,41 @@ import (
 	"github.com/pilat/coagent/internal/controllerapi"
 )
 
+func TestIdempotencyKeysAreScopedToTheirAuthor(t *testing.T) {
+	h := newHarness(t, harnessOptions{respond: trivialRespond})
+	controllers := newTestController(h.mgr)
+	id := h.createRoot(nil)
+	input := controllerapi.SessionMessageData{SessionID: id, Message: "same key", IdempotencyKey: "k-1"}
+	alpha := controllers.ForManager("alpha")
+	beta := controllers.ForManager("beta")
+	require.NoError(t, alpha.SendSessionMessage(h.ctx, input))
+	require.NoError(t, beta.SendSessionMessage(h.ctx, input))
+	require.NoError(t, beta.SendSessionMessage(h.ctx, input))
+	rows, err := h.db.QueryContext(h.ctx,
+		`SELECT delivery_key FROM session_inbox WHERE session_id = ? AND source = 'user' ORDER BY id`, id)
+	require.NoError(t, err)
+	defer rows.Close()
+	var keys []string
+	for rows.Next() {
+		var key string
+		require.NoError(t, rows.Scan(&key))
+		keys = append(keys, key)
+	}
+	require.NoError(t, rows.Err())
+	assert.Equal(t, []string{"user:alpha:k-1", "user:beta:k-1"}, keys)
+	require.NoError(t, rows.Close())
+	bot := controllers.ForApp("bot", nil)
+	require.NoError(t, bot.SendSessionMessage(h.ctx, input))
+	require.NoError(t, bot.SendSessionMessage(h.ctx, input))
+	var count int
+	var appKey string
+	require.NoError(t, h.db.QueryRowContext(h.ctx,
+		`SELECT count(*), min(delivery_key) FROM session_inbox WHERE session_id = ? AND source = 'agent'`,
+		id).Scan(&count, &appKey))
+	assert.Equal(t, 1, count)
+	assert.Equal(t, "app:bot:k-1", appKey)
+}
+
 func TestHarnessScenario_TwoSurfacesDoubleNothingDurable(t *testing.T) {
 	h := newHarness(t, harnessOptions{respond: trivialRespond})
 	h.startInboxWake()
@@ -36,7 +71,7 @@ func TestHarnessScenario_TwoSurfacesDoubleNothingDurable(t *testing.T) {
 	h.waitAnswer(target, "done")
 	assertAnswerSignal(t, h, watcher, target)
 	h.waitAnswer(watcher, "done")
-	require.NoError(t, alpha.SendSessionMessage(h.ctx, input))
+	require.NoError(t, beta.SendSessionMessage(h.ctx, input))
 	applied, err := enqueueScheduledInput(h.ctx, h.schedules, target, "scheduled", false)
 	require.NoError(t, err)
 	require.True(t, applied)

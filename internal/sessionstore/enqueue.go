@@ -197,6 +197,20 @@ func CallPendingTx(ctx context.Context, tx *sql.Tx, sessionID int64, callID stri
 	return callPending(ctx, tx, sessionID, callID)
 }
 
+// NameUntitledRootTx derives a title only while the root has no title.
+func NameUntitledRootTx(ctx context.Context, tx *sql.Tx, id int64, content string) error {
+	if title := TitleFromInput(content); title != "" {
+		if _, err := tx.ExecContext(ctx, `UPDATE sessions
+			SET attributes = json_set(COALESCE(attributes, '{}'), '$.title', ?)
+			WHERE id = ? AND parent_id = 0
+			AND json_extract(attributes, '$.title') IS NULL`, title, id); err != nil {
+			return fmt.Errorf("name session from input: %w", err)
+		}
+	}
+
+	return nil
+}
+
 func callPending(ctx context.Context, q execer, sessionID int64, callID string) (bool, error) {
 	var pending bool
 
@@ -395,13 +409,8 @@ func prepareEnqueueAttributesTx(
 		return attributes, nil
 	}
 
-	if title := TitleFromInput(in.Content); title != "" {
-		if _, err := tx.ExecContext(ctx, `UPDATE sessions
-			SET attributes = json_set(COALESCE(attributes, '{}'), '$.title', ?)
-			WHERE id = ? AND parent_id = 0
-			AND json_extract(attributes, '$.title') IS NULL`, title, in.SessionID); err != nil {
-			return nil, fmt.Errorf("name session from input: %w", err)
-		}
+	if err := NameUntitledRootTx(ctx, tx, in.SessionID, in.Content); err != nil {
+		return nil, err
 	}
 
 	if parentID == 0 && !isExactControlCommand(in.Content) {

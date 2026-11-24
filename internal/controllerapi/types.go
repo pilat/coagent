@@ -24,6 +24,7 @@ const (
 const (
 	SessionAttributeOrchestrator = "orchestrator"
 	SessionAttributeSpawnedBy    = "spawned_by"
+	SessionAttributeSpawnedByApp = "spawned_by_app"
 	// SessionAttributeWorktreeOrigin attests that the daemon created the root's
 	// worktree; it is not accepted from a manager or ordinary session attributes.
 	SessionAttributeWorktreeOrigin = "coagent_worktree_origin"
@@ -190,4 +191,11 @@ func SpawnedBy(attrs map[string]any) int64 {
 	id, _ := attrs[SessionAttributeSpawnedBy].(float64)
 
 	return int64(id)
+}
+
+// SpawnedByApp accepts only the durable JSON string naming the app.
+func SpawnedByApp(attrs map[string]any) string {
+	id, _ := attrs[SessionAttributeSpawnedByApp].(string)
+
+	return id
 }

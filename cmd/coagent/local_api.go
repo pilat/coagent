@@ -37,7 +37,26 @@ func startLocalAPI(
 		return
 	}
 
-	srv, err := localapi.New(ctx, listener, cfg.UnifiedConfig.API.Clients, controllers)
+	clients := make([]localapi.Client, 0, len(cfg.UnifiedConfig.API.Clients))
+	for _, entry := range cfg.UnifiedConfig.API.Clients {
+		var control controllerapi.Controller
+
+		switch entry.Role {
+		case config.APIRoleOperator:
+			control = controllers.ForManager(entry.ID)
+		case config.APIRoleApp:
+			control = controllers.ForApp(entry.ID, entry.Projects)
+		default:
+			log.Error("local_api_client_refused", zap.String("client_id", entry.ID), zap.String("role", entry.Role))
+			continue
+		}
+
+		clients = append(clients, localapi.Client{
+			ID: entry.ID, TokenSHA256: entry.TokenSHA256, Control: control,
+		})
+	}
+
+	srv, err := localapi.New(ctx, listener, clients)
 	if err != nil {
 		_ = listener.Close()
 

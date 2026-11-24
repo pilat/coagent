@@ -23,6 +23,10 @@ func (f lineageFactory) ForManager(id string) controllerapi.Controller {
 	return f(id)
 }
 
+func (f lineageFactory) ForApp(id string, _ []string) controllerapi.Controller {
+	return f(id)
+}
+
 func (g *lineageGate) Successor(ctx context.Context, id int64) (int64, error) {
 	next, err := g.LineageController.Successor(ctx, id)
 	if err != nil {

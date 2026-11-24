@@ -4,16 +4,32 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"slices"
 
 	"github.com/pilat/coagent/internal/budget"
-	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/orchestrator"
 	"github.com/pilat/coagent/internal/sessionstore"
 )
 
 func (h orchestratorHost) StopSession(ctx context.Context, callerID, targetID int64) (orchestrator.Ended, error) {
-	caller, target, err := h.endTarget(ctx, callerID, targetID)
+	caller, err := h.caller(ctx, callerID)
+	if err != nil {
+		return orchestrator.Ended{}, err
+	}
+
+	return h.stop(ctx, delegate{root: caller}, targetID)
+}
+
+func (h orchestratorHost) KillSession(ctx context.Context, callerID, targetID int64) (orchestrator.Ended, error) {
+	caller, err := h.caller(ctx, callerID)
+	if err != nil {
+		return orchestrator.Ended{}, err
+	}
+
+	return h.kill(ctx, delegate{root: caller}, targetID)
+}
+
+func (h orchestratorHost) stop(ctx context.Context, from delegate, targetID int64) (orchestrator.Ended, error) {
+	target, err := h.endTarget(ctx, from, targetID)
 	if err != nil {
 		return orchestrator.Ended{}, err
 	}
@@ -54,11 +70,11 @@ func (h orchestratorHost) StopSession(ctx context.Context, callerID, targetID in
 		return ended, err
 	}
 
-	return ended, h.command(ctx, caller, target.ID, stopCommand)
+	return ended, h.command(ctx, from, target.ID, stopCommand)
 }
 
-func (h orchestratorHost) KillSession(ctx context.Context, callerID, targetID int64) (orchestrator.Ended, error) {
-	caller, target, err := h.endTarget(ctx, callerID, targetID)
+func (h orchestratorHost) kill(ctx context.Context, from delegate, targetID int64) (orchestrator.Ended, error) {
+	target, err := h.endTarget(ctx, from, targetID)
 	if err != nil {
 		return orchestrator.Ended{}, err
 	}
@@ -70,42 +86,45 @@ func (h orchestratorHost) KillSession(ctx context.Context, callerID, targetID in
 
 	ended.Changed = true
 
-	return ended, h.command(ctx, caller, target.ID, killCommand)
+	return ended, h.command(ctx, from, target.ID, killCommand)
 }
 
 func (h orchestratorHost) endTarget(
-	ctx context.Context, callerID, targetID int64,
-) (*sessionstore.SessionRecord, *sessionstore.SessionRecord, error) {
-	caller, err := h.caller(ctx, callerID)
-	if err != nil {
-		return nil, nil, err
-	}
-
+	ctx context.Context, from delegate, targetID int64,
+) (*sessionstore.SessionRecord, error) {
 	if err := h.rootTarget(ctx, targetID); err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
 	chain, err := h.s.store.ReplacementChain(ctx, targetID)
 	if err != nil {
-		return nil, nil, fmt.Errorf("resolve end target: %w", err)
+		return nil, fmt.Errorf("resolve end target: %w", err)
 	}
 
 	target, err := h.s.store.GetSession(ctx, chain[len(chain)-1])
 	if err != nil {
-		return nil, nil, fmt.Errorf("load end target: %w", err)
+		return nil, fmt.Errorf("load end target: %w", err)
 	}
 
-	lineage, err := h.s.store.ReplacementChain(ctx, callerID)
-	if err != nil {
-		return nil, nil, fmt.Errorf("resolve ending session: %w", err)
+	var lineage []int64
+	if from.root != nil {
+		lineage, err = h.s.store.ReplacementChain(ctx, from.root.ID)
+		if err != nil {
+			return nil, fmt.Errorf("resolve ending session: %w", err)
+		}
 	}
 
-	if !slices.Contains(lineage, controllerapi.SpawnedBy(target.Attributes)) {
-		return nil, nil, fmt.Errorf(
+	if !from.started(lineage, target) {
+		if from.root == nil {
+			return nil, fmt.Errorf(
+				"session #%d was not started by this app; you can stop or kill only sessions you started", target.ID)
+		}
+
+		return nil, fmt.Errorf(
 			"session #%d was not started by this session; you can stop or kill only sessions you spawned", target.ID)
 	}
 
-	return caller, target, nil
+	return target, nil
 }
 
 func (h orchestratorHost) stopNeeded(ctx context.Context, targetID int64, state string) (bool, error) {
@@ -147,11 +166,11 @@ func (h orchestratorHost) budgetArmed(ctx context.Context, targetID int64) (bool
 
 func (h orchestratorHost) command(
 	ctx context.Context,
-	caller *sessionstore.SessionRecord,
+	from delegate,
 	targetID int64,
 	content string,
 ) error {
-	attrs, err := h.provenance(ctx, caller)
+	attrs, err := h.provenance(ctx, from)
 	if err != nil {
 		return err
 	}
@@ -175,25 +194,33 @@ func (h orchestratorHost) command(
 	return err
 }
 
-func commandSender(input *sessionstore.InboxInput) int64 {
+func commandActor(input *sessionstore.InboxInput) orchestrator.Actor {
+	app, _ := input.Attributes[sessionstore.InputAttributeSenderApp].(string)
+	actor := orchestrator.Actor{App: app}
+
 	switch id := input.Attributes[sessionstore.InputAttributeSenderSessionID].(type) {
 	case int64:
-		return id
+		actor.Session = id
 	case float64:
-		return int64(id)
-	default:
-		return 0
+		actor.Session = int64(id)
 	}
+
+	return actor
 }
 
 func commandAcknowledgement(input *sessionstore.InboxInput, content string) string {
-	if sender := commandSender(input); sender != 0 {
+	actor := commandActor(input)
+	if actor.Session != 0 {
 		return fmt.Sprintf(
 			"%s — asked by #%d %s",
 			content,
-			sender,
+			actor.Session,
 			input.Attributes[sessionstore.InputAttributeSenderName],
 		)
+	}
+
+	if actor.App != "" {
+		return content + " — asked by app " + actor.App
 	}
 
 	return content

@@ -12,7 +12,6 @@ import (
 	"connectrpc.com/connect/v2/connecthttp"
 
 	"github.com/pilat/coagent/api/coagent/v1/coagentv1connect"
-	"github.com/pilat/coagent/internal/config"
 	"github.com/pilat/coagent/internal/controllerapi"
 )
 
@@ -28,13 +27,17 @@ type Server struct {
 	cancel   context.CancelFunc
 }
 
-// New binds authenticated authors to their existing manager capabilities.
-func New(ctx context.Context, listener net.Listener, entries []config.APIClientEntry,
-	controllers controllerapi.ManagerControllerFactory,
-) (*Server, error) {
+// Client binds a token hash to the capability its author may exercise.
+type Client struct {
+	ID, TokenSHA256 string
+	Control         controllerapi.Controller
+}
+
+// New binds authenticated authors to their supplied capabilities.
+func New(ctx context.Context, listener net.Listener, entries []Client) (*Server, error) {
 	clients := make([]*client, 0, len(entries))
 	for _, entry := range entries {
-		author, err := bindClient(entry, controllers)
+		author, err := bindClient(entry)
 		if err != nil {
 			return nil, err
 		}

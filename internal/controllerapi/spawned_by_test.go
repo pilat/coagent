@@ -27,3 +27,14 @@ func TestSpawnedBy(t *testing.T) {
 		})
 	}
 }
+
+func TestSpawnedByApp(t *testing.T) {
+	for _, value := range []any{nil, float64(12), int64(12), true, json.Number("12"), "bot"} {
+		want := ""
+		if value == "bot" {
+			want = "bot"
+		}
+		assert.Equal(t, want, SpawnedByApp(map[string]any{SessionAttributeSpawnedByApp: value}))
+	}
+	assert.Empty(t, SpawnedByApp(nil))
+}

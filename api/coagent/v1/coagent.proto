@@ -6,16 +6,24 @@ import "google/protobuf/timestamp.proto";
 
 option go_package = "github.com/pilat/coagent/api/coagent/v1;coagentv1";
 
-// SessionService creates roots and accepts their input; every client reaches every root.
+// SessionService creates roots and accepts their input within the caller's project scope.
 service SessionService {
-  // CreateSession creates an empty root.
+  // CreateSession creates an empty root. An app may create a root only in an existing registered
+  // project within its project scope, on the default or a tagged model.
   rpc CreateSession(CreateSessionRequest) returns (CreateSessionResponse);
-  // SendInput appends text to a root's durable input as human input. A repeated idempotency_key
-  // for the same root appends nothing, whichever client sends it, so a retry never doubles an input;
-  // choose keys unique across clients.
+  // SendInput appends text to a root's durable input: human input from an operator, a sent message
+  // with no session commands from an app. A repeated idempotency_key from the same client for the
+  // same root appends nothing, so a retry never doubles an input; keys of different clients never collide.
   // A retried /clear that already replaced the root clears its successor. A replaced root resolves
   // to its successor; address the newest session_id received.
   rpc SendInput(SendInputRequest) returns (SendInputResponse);
+  // StopSession stops a root as /stop does. An operator stops any root; an app stops only roots it started.
+  rpc StopSession(StopSessionRequest) returns (StopSessionResponse);
+  // KillSession kills a root as /kill does. An operator kills any root; an app kills only roots it started.
+  rpc KillSession(KillSessionRequest) returns (KillSessionResponse);
+  // GetTurnOutcome reports whether a root's turn is over, accounting for admission waits and newly accepted input.
+  // Read it after each StreamSessionEvents hint; a root that has had no input yet is over.
+  rpc GetTurnOutcome(GetTurnOutcomeRequest) returns (GetTurnOutcomeResponse);
   // ListSessions lists the live roots, newest activity first.
   rpc ListSessions(ListSessionsRequest) returns (ListSessionsResponse);
   // ListSessionDetails lists every root, killed ones included.
@@ -69,6 +77,34 @@ message SendInputRequest {
 }
 
 message SendInputResponse {}
+
+message StopSessionRequest {
+  int64 session_id = 1;
+}
+
+message StopSessionResponse {
+  // The root the command reached, after /clear replacements.
+  int64 session_id = 1;
+}
+
+message KillSessionRequest {
+  int64 session_id = 1;
+}
+
+message KillSessionResponse {
+  // The root the command reached, after /clear replacements.
+  int64 session_id = 1;
+}
+
+message GetTurnOutcomeRequest {
+  int64 session_id = 1;
+}
+
+message GetTurnOutcomeResponse {
+  // The newest root of the replacement chain.
+  int64 session_id = 1;
+  bool over = 2;
+}
 
 message TailOutputRequest {
   int64 session_id = 1;

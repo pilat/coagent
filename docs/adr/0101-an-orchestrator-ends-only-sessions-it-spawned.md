@@ -5,6 +5,7 @@
 - **Amends:** [ADR-0095](0095-only-human-input-carries-session-commands.md), [ADR-0097](0097-orchestrator-mode-is-a-human-granted-capability-on-an-ordinary-root.md), [ADR-0099](0099-turn-outcomes-signal-watchers-through-armed-watch-rows.md)
 - **Amended by:** [ADR-0106](0106-one-operator-every-surface-reaches-every-root.md) — the per-call check is orchestrator mode and a manager-root target
 - **Amended by:** [ADR-0107](0107-every-root-is-a-root.md)
+- **Amended by:** [ADR-0108](0108-an-app-acts-with-delegated-authority.md) — an app ends only roots it started, through the same command flow
 
 ## Context
 

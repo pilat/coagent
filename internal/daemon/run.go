@@ -8,6 +8,7 @@ import (
 
 	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/logger"
+	"github.com/pilat/coagent/internal/orchestrator"
 	"github.com/pilat/coagent/internal/session"
 	"github.com/pilat/coagent/internal/sessionevent"
 	"github.com/pilat/coagent/internal/sessionstore"
@@ -253,7 +254,7 @@ func (s *Service) finishRunnerDelivery(ctx context.Context, rs *runner, out runO
 	id := rs.sessionID
 
 	deliver := s.finalizeChildLocked(cleanup, id, errored)
-	s.signalOutcome(ctx, id, runSignalKind(out, errored), 0, 0)
+	s.signalOutcome(ctx, id, runSignalKind(out, errored), 0, orchestrator.Actor{})
 
 	if out.publishIdle && ctx.Err() == nil {
 		s.publishIdle(id)

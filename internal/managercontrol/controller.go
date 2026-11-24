@@ -3,6 +3,7 @@ package managercontrol
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 
 	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/loader"
@@ -39,12 +40,52 @@ func (f *factory) ForManager(managerID string) controllerapi.Controller {
 	return &controller{app: f.app, managerID: managerID}
 }
 
+func (f *factory) ForApp(appID string, projects []string) controllerapi.Controller {
+	projectPaths := make(projectScope, 0, len(projects))
+	for _, dir := range projects {
+		projectPaths = append(projectPaths, filepath.Clean(dir))
+	}
+
+	return &appController{operator: &controller{app: f.app, managerID: appID}, scope: projectPaths}
+}
+
 func (c *controller) CreateSession(ctx context.Context, data controllerapi.SessionCreateData) (int64, error) {
 	return c.app.createSession(ctx, c.managerID, data)
 }
 
 func (c *controller) SendSessionMessage(ctx context.Context, data controllerapi.SessionMessageData) error {
-	return c.app.sendSessionMessage(ctx, c.managerID, data)
+	_, err := c.app.sendSessionMessage(ctx, c.managerID, data)
+
+	return err
+}
+
+func (c *controller) StopSession(ctx context.Context, data controllerapi.SessionStopData) (int64, error) {
+	return c.app.sendSessionMessage(
+		ctx,
+		c.managerID,
+		controllerapi.SessionMessageData{SessionID: data.SessionID, Message: "/stop"},
+	)
+}
+
+func (c *controller) KillSession(ctx context.Context, data controllerapi.SessionKillData) (int64, error) {
+	return c.app.sendSessionMessage(
+		ctx,
+		c.managerID,
+		controllerapi.SessionMessageData{SessionID: data.SessionID, Message: "/kill"},
+	)
+}
+
+func (c *controller) TurnOver(ctx context.Context, id int64) (int64, bool, error) {
+	if _, err := c.chatSession(ctx, id); err != nil {
+		return 0, false, err
+	}
+
+	resolved, over, err := c.app.backend.TurnOver(ctx, id)
+	if err != nil {
+		return 0, false, fmt.Errorf("read turn outcome: %w", err)
+	}
+
+	return resolved, over, nil
 }
 
 func (c *controller) ListSessions(ctx context.Context) ([]controllerapi.SessionInfo, error) {

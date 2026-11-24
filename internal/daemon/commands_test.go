@@ -317,7 +317,7 @@ func TestSendSessionMessageWithARepeatedKeyAppendsOneInput(t *testing.T) {
 			SessionID: root, Message: "hello", IdempotencyKey: key,
 		}))
 	}
-	for _, key := range []string{"user:k1", "user:k2"} {
+	for _, key := range []string{"user:alpha:k1", "user:alpha:k2"} {
 		var count int
 		require.NoError(t, h.db.QueryRowContext(ctx,
 			"SELECT count(*) FROM session_inbox WHERE session_id = ? AND delivery_key = ?", root, key).Scan(&count))
