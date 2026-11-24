@@ -938,15 +938,16 @@ Built-in managers use the same services over an in-process connection with no
 socket or token; configuration binds the author, never request fields
 ([ADR-0105](docs/adr/0105-built-in-managers-are-local-api-clients-in-process.md)).
 
-An app's optional project scope lists clean absolute work directories. It covers a root by its project's work
-directory or an attested coagent worktree's listed `repo_root`; an out-of-project-scope root reads as missing.
+An app's optional project scope lists clean absolute work directories; an explicit empty list is refused. It covers
+a root by its project's work directory or an attested coagent worktree's listed `repo_root`; an out-of-project-scope root reads as missing.
 An app cannot mutate settings, create projects or keep chat state, and ends only roots it started. A project-scoped
 app cannot send to a root whose newest replacement has orchestrator mode on. Wake hints remain unfiltered root ids.
 The app controller explicitly implements its capabilities without embedding an operator controller, so a new
 interface method needs an explicit authority decision. Keys are per root and author. `GetTurnOutcome` reads durable
-obligations, runner state and the existing admission queue. An errored root with no active runner and no admission
-entry is over even if input from the failed run remains pending; agent or schedule input can wake it, and pending
-input keeps it not over while waiting for admission. It adds no output row or migration
+obligations, runner state and the existing admission queue. Every admission wait is not over. For an errored root,
+pending input newer than its error `updated_at` keeps it not over when the existing `wakeWorthy` predicate accepts
+that input, even before the wake goroutine runs; input from during the failed run does not restart it. Unknown API
+roles are refused by validation and also skipped and logged at binding. No output row or migration is added
 ([ADR-0108](docs/adr/0108-an-app-acts-with-delegated-authority.md)).
 
 ## Configuration and product surfaces

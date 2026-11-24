@@ -105,6 +105,65 @@ func TestTurnOverFollowsTheTurn(t *testing.T) {
 		h.waitAnswer(target, "done")
 		assertAppTurnOver(t, h, target, target, true)
 	})
+	t.Run("active root waiting for admission without pending input", func(t *testing.T) {
+		h := newHarness(t, harnessOptions{respond: trivialRespond})
+		target := h.createRoot(nil)
+		held := 0
+		t.Cleanup(func() {
+			for held > 0 {
+				h.mgr.runners.release(false, 0)
+				held--
+			}
+		})
+		for range maxTotal {
+			require.True(t, h.mgr.runners.tryAdmit(false, 0))
+			held++
+		}
+		require.NoError(t, h.mgr.start(h.ctx, target))
+		assert.True(t, h.mgr.runners.waitingForAdmission(target))
+		assert.Equal(t, sessionstore.SessionStatusActive, h.session(target).Status)
+		pending, err := h.store.ListPending(h.ctx, target)
+		require.NoError(t, err)
+		assert.Empty(t, pending)
+		assertAppTurnOver(t, h, target, target, false)
+	})
+	t.Run("fresh app input after error before wake", func(t *testing.T) {
+		entered, release := make(chan struct{}), make(chan struct{})
+		var once sync.Once
+		h := newHarness(t, harnessOptions{respond: func(_ string, messages []llmwire.Message) *llmwire.Response {
+			if hasUserContaining(messages, "retry after error") {
+				return textReply("done")
+			}
+			once.Do(func() { close(entered) })
+			<-release
+			return nil
+		}})
+		t.Cleanup(func() { closeOnce(release) })
+		target := h.createRoot(nil)
+		require.NoError(t, h.mgr.sendToSession(h.ctx, target, "A"))
+		waitForScenarioSignal(t, entered, "failing provider call")
+		_, err := h.mgr.SendForApp(h.ctx, "bot", target, "during failing run", "")
+		require.NoError(t, err)
+		closeOnce(release)
+		h.waitUntil("failed turn settled", func() bool {
+			return h.session(target).Status == sessionstore.SessionStatusError && !h.mgr.HasActiveLoop(target)
+		})
+		assertAppTurnOver(t, h, target, target, true)
+		failedAt := h.session(target).UpdatedAt
+		_, err = h.mgr.SendForApp(h.ctx, "bot", target, "retry after error", "")
+		require.NoError(t, err)
+		pending, err := h.store.ListPending(h.ctx, target)
+		require.NoError(t, err)
+		require.Len(t, pending, 2)
+		assert.True(t, pending[0].ReceivedAt.Before(failedAt))
+		assert.True(t, pending[1].ReceivedAt.After(failedAt))
+		assert.False(t, h.mgr.HasActiveLoop(target))
+		assert.False(t, h.mgr.runners.waitingForAdmission(target))
+		assertAppTurnOver(t, h, target, target, false)
+		h.startInboxWake()
+		h.waitAnswer(target, "done")
+		assertAppTurnOver(t, h, target, target, true)
+	})
 	t.Run("advertised background process", func(t *testing.T) {
 		h := newHarness(t, harnessOptions{respond: trivialRespond})
 		service := installScenarioProcessService(t, h)

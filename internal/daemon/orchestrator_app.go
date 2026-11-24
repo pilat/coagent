@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"fmt"
+	"slices"
 
 	"github.com/pilat/coagent/internal/orchestrator"
 	"github.com/pilat/coagent/internal/sessionstore"
@@ -61,6 +62,10 @@ func (s *Service) TurnOver(ctx context.Context, sessionID int64) (int64, bool, e
 		return id, true, nil
 	}
 
+	if s.runners.waitingForAdmission(id) {
+		return id, false, nil
+	}
+
 	state, err := (orchestratorHost{s: s}).sessionState(ctx, record)
 	if err != nil {
 		return id, false, err
@@ -72,12 +77,26 @@ func (s *Service) TurnOver(ctx context.Context, sessionID int64) (int64, bool, e
 	case sessionStateParked:
 		return id, true, nil
 	case string(sessionstore.SessionStatusError):
-		if !s.runners.waitingForAdmission(id) {
-			return id, true, nil
-		}
+		over, err := s.erroredTurnOver(ctx, record)
+
+		return id, over, err
 	}
 
 	over, err := s.outcomeQuiet(ctx, id)
 
 	return id, over, err
+}
+
+func (s *Service) erroredTurnOver(ctx context.Context, record *sessionstore.SessionRecord) (bool, error) {
+	inputs, err := s.store.ListPending(ctx, record.ID)
+	if err != nil {
+		return false, fmt.Errorf("list errored root inputs: %w", err)
+	}
+
+	// Input received during the failed run does not restart it.
+	fresh := slices.DeleteFunc(inputs, func(input *sessionstore.InboxInput) bool {
+		return !input.ReceivedAt.After(record.UpdatedAt)
+	})
+
+	return !wakeWorthy(record, fresh), nil
 }

@@ -142,7 +142,7 @@ _Avoid_: workspace, space; dialog (a dialog is a session in a project).
 **project scope**:
 The optional list of project work directories that limits an **app**'s delegation. A root is covered by its
 project's work directory or by the listed `repo_root` of a coagent-created worktree, attested by
-`coagent_worktree_origin = controller-created-v1`. An empty list reaches every project.
+`coagent_worktree_origin = controller-created-v1`. Omitting `projects` reaches every project; an explicit empty list is refused.
 _Avoid_: bare "scope" (that is the MCP registry's), tenant, owner.
 
 **agent type**:

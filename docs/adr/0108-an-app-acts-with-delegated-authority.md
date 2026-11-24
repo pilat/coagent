@@ -23,8 +23,9 @@ holds no role table, reads no role and inspects no input text. The app controlle
 field and explicitly implements every capability method. Interface growth therefore fails to compile until its
 app authority is decided; it cannot silently inherit operator authority.
 
-An app's optional `projects` lists unique, clean absolute project work directories. An empty list reaches every
-project; paths need not exist when config loads. Project scope is applied to all calls naming a project or root,
+An app's optional `projects` lists unique, clean absolute project work directories. Omitting the key reaches every
+project; an explicit empty list is refused, and paths need not exist when config loads. Project scope is applied
+to all calls naming a project or root,
 including reads, and filters lists. It covers a root by its registered work directory or by a listed `repo_root`
 when `coagent_worktree_origin` attests `controller-created-v1`. A root outside the project scope reads exactly as
 a missing root, `session N not found`. This limits a delegation in a single-tenant daemon and adds no session
@@ -58,10 +59,13 @@ commands, carrying app provenance. Acknowledgements append `— asked by app <id
 
 `GetTurnOutcome` returns the newest root id and `over`, derived on demand from durable rows and runner state
 using watcher outcome semantics together with the admission queue. Running, waiting or stopping work is not over;
-parked, killed and terminating roots are over. An errored root with no active runner and no admission-queue entry
-is over even if input from the failed run remains pending. Agent or schedule input can wake an errored root;
-while it waits for admission, pending input keeps `over` false. Other roots are over when they have no pending
-input and no background wake source, including a root that has never had input. No state string, output-log row
+parked, killed and terminating roots are over. Every root waiting for admission is not over, even without pending
+inbox input. For an errored root, pending input received after the root's `updated_at` is classified by the
+existing `wakeWorthy` predicate; wake-worthy fresh input keeps `over` false before the wake goroutine runs. Input
+received during the failed run does not restart it and can remain pending while the root is over. This uses inbox
+`received_at` and the session's error `updated_at`, with no new state. Clients may still read immediately after
+`SendInput`. Other roots are over when they have no pending input and no background wake source, including a root
+that has never had input. No state string, output-log row
 type or migration is added.
 
 Idempotency keys are per root and author. `managercontrol` prefixes a nonempty key with `<author>:`; the daemon
@@ -83,9 +87,11 @@ input. Stored pre-upgrade keys remain untouched, and the retried-`/clear` behavi
   read on the host, including another client's plaintext token file as ADR-0104 already accepts.
 - The app controller's project-scope and orchestrator-mode checks precede the daemon enqueue. Turning mode on
   in the same instant after the check can let one message through; this sub-second window is accepted.
-- In the sub-second window between enqueue and the wake goroutine reaching `start()`, an errored root may report over before entering the admission queue.
+- An errored root's `updated_at` is stamped before its commit takes the write lock. An app message enqueued in that
+  sub-second gap reads not-over until the next input; this race is accepted.
+- An old agent row from the failed run plus a fresh non-agent row wakes the root, yet reads over until it starts.
 - An external operator client retrying a pre-upgrade `user:<key>` across the upgrade can append once more; old keys remain unchanged.
-- Config validation is the only guard preventing an unknown role from binding operator capability in `cmd/coagent/local_api.go`.
+- Config validation rejects unknown roles first; `cmd/coagent/local_api.go` also skips and logs them instead of binding operator capability.
 - Manager ids are not format-validated. A colon in one could make its stored author/key prefix ambiguous with
   another manager's; configured ids are short words.
 - A sleep interrupted by an app message retains the `source=agent` notice, "another session sent a message".

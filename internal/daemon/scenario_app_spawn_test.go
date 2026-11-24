@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/projectpath"
 )
 
@@ -15,6 +16,14 @@ func TestAppSpawnRefusals(t *testing.T) {
 	h := orchestratorModelHarness(t)
 	_, path := orchestratorProject(t, h, "private-project-name")
 	unknown := t.TempDir()
+	t.Run("same missing project refusal within and outside project scope", func(t *testing.T) {
+		controllers := newTestController(h.mgr)
+		for _, projects := range [][]string{{h.workDir()}, {unknown}} {
+			_, err := controllers.ForApp("bot", projects).
+				CreateSession(h.ctx, controllerapi.SessionCreateData{WorkDir: unknown})
+			require.EqualError(t, err, fmt.Sprintf("no project at %q", unknown))
+		}
+	})
 	for _, selection := range []string{unknown, "private-project-name"} {
 		_, err := h.mgr.SpawnForApp(h.ctx, "bot", selection, "", "")
 		require.EqualError(t, err, fmt.Sprintf("no project at %q", selection))

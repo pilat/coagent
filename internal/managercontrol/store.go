@@ -11,6 +11,7 @@ type Store interface { //nolint:interfacebloat // Manager reads and chat state s
 	GetSession(context.Context, int64) (*sessionstore.SessionRecord, error)
 	ReplacementChain(context.Context, int64) ([]int64, error)
 	ListSessions(context.Context) ([]*sessionstore.SessionRecord, error)
+	ListProjects(context.Context) ([]sessionstore.ProjectRow, error)
 	GetOrCreateProject(context.Context, string) (int64, error)
 	GetProjectWorkDir(context.Context, int64) (string, error)
 	GetProjectName(context.Context, int64) (string, error)

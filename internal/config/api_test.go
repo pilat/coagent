@@ -20,6 +20,11 @@ func TestAPIClients_Validation(t *testing.T) {
 	}{
 		{name: "operator", clients: client},
 		{name: "app", clients: strings.ReplaceAll(client, "operator", "app")},
+		{
+			name:    "app empty projects",
+			clients: strings.ReplaceAll(client, "role: operator", "role: app, projects: []"),
+			want:    `api client "alpha": projects must not be empty; omit projects to reach every project`,
+		},
 		{name: "app projects", clients: strings.ReplaceAll(client, "role: operator", "role: app, projects: [/a, /b]")},
 		{
 			name: "relative project", clients: strings.ReplaceAll(client, "role: operator", "role: app, projects: [a]"),

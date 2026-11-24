@@ -66,6 +66,13 @@ func (c *UnifiedConfig) validateAPI() error {
 			return fmt.Errorf("api client %q: projects apply only to role app", entry.ID)
 		}
 
+		if entry.Projects != nil && len(entry.Projects) == 0 {
+			return fmt.Errorf(
+				"api client %q: projects must not be empty; omit projects to reach every project",
+				entry.ID,
+			)
+		}
+
 		projects := make(map[string]bool)
 
 		for _, project := range entry.Projects {

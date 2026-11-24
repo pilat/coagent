@@ -42,7 +42,7 @@ See [ADR-0104](adr/0104-the-local-api-is-the-two-durable-ledgers.md) and
 [ADR-0105](adr/0105-built-in-managers-are-local-api-clients-in-process.md).
 
 To delegate to a program, change the printed `role: operator` to `role: app`. Add `projects` when the delegation
-should reach only named work directories; omit it or use an empty list to reach every project:
+should reach only named work directories; omit the key to reach every project. An explicit empty list is refused:
 
 ```yaml
 api:
@@ -103,9 +103,11 @@ other clients' plaintext token files. This is a single-tenant delegation, with n
   distinguishes neither "nothing to stop" nor "already killed"; read the tail and turn outcome for the effect.
 - `SessionService.GetTurnOutcome` takes a positive `session_id` and returns the newest root's `session_id`
   plus `over`. It reads durable pending input, background wake sources and runner state. A new empty root,
-  parked root, or killed/terminating root is over; a running, waiting or stopping turn is not. An errored root
-  with no active runner and no admission-queue entry is over even if input from the failed run remains pending.
-  Agent or schedule input can wake an errored root; while it waits for admission, pending input keeps `over` false.
+  parked root, or killed/terminating root is over; a running, waiting or stopping turn is not. Every root waiting
+  for admission is not over, even with no pending inbox row. For an errored root, fresh app or scheduled input
+  received after the recorded error keeps `over` false, even before the wake goroutine processes it.
+  Input received during the failed run does not restart it and remains
+  compatible with `over=true` once no runner or admission wait remains.
 - `OutputService.TailOutput` takes `session_id` and `after_id` (0 for the whole log). It catches up, then
   follows live, continuing through `/clear`. It ends cleanly only after a killed root's last row. Each row
   has its own `session_id`. Keep the `session_id` and `id` of the last row received and use that session id

@@ -205,7 +205,7 @@ type SessionServiceClient interface {
 	StopSession(context.Context, *v1.StopSessionRequest) (*v1.StopSessionResponse, error)
 	// KillSession kills a root as /kill does. An operator kills any root; an app kills only roots it started.
 	KillSession(context.Context, *v1.KillSessionRequest) (*v1.KillSessionResponse, error)
-	// GetTurnOutcome reports whether a root's turn is over; an idle errored root is over with input still queued.
+	// GetTurnOutcome reports whether a root's turn is over, accounting for admission waits and newly accepted input.
 	// Read it after each StreamSessionEvents hint; a root that has had no input yet is over.
 	GetTurnOutcome(context.Context, *v1.GetTurnOutcomeRequest) (*v1.GetTurnOutcomeResponse, error)
 	// ListSessions lists the live roots, newest activity first.
@@ -245,7 +245,7 @@ type SessionServiceHandler interface {
 	StopSession(context.Context, *v1.StopSessionRequest) (*v1.StopSessionResponse, error)
 	// KillSession kills a root as /kill does. An operator kills any root; an app kills only roots it started.
 	KillSession(context.Context, *v1.KillSessionRequest) (*v1.KillSessionResponse, error)
-	// GetTurnOutcome reports whether a root's turn is over; an idle errored root is over with input still queued.
+	// GetTurnOutcome reports whether a root's turn is over, accounting for admission waits and newly accepted input.
 	// Read it after each StreamSessionEvents hint; a root that has had no input yet is over.
 	GetTurnOutcome(context.Context, *v1.GetTurnOutcomeRequest) (*v1.GetTurnOutcomeResponse, error)
 	// ListSessions lists the live roots, newest activity first.

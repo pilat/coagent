@@ -21,7 +21,7 @@ service SessionService {
   rpc StopSession(StopSessionRequest) returns (StopSessionResponse);
   // KillSession kills a root as /kill does. An operator kills any root; an app kills only roots it started.
   rpc KillSession(KillSessionRequest) returns (KillSessionResponse);
-  // GetTurnOutcome reports whether a root's turn is over; an idle errored root is over with input still queued.
+  // GetTurnOutcome reports whether a root's turn is over, accounting for admission waits and newly accepted input.
   // Read it after each StreamSessionEvents hint; a root that has had no input yet is over.
   rpc GetTurnOutcome(GetTurnOutcomeRequest) returns (GetTurnOutcomeResponse);
   // ListSessions lists the live roots, newest activity first.

@@ -40,10 +40,15 @@ func startLocalAPI(
 	clients := make([]localapi.Client, 0, len(cfg.UnifiedConfig.API.Clients))
 	for _, entry := range cfg.UnifiedConfig.API.Clients {
 		var control controllerapi.Controller
-		if entry.Role == config.APIRoleApp {
-			control = controllers.ForApp(entry.ID, entry.Projects)
-		} else {
+
+		switch entry.Role {
+		case config.APIRoleOperator:
 			control = controllers.ForManager(entry.ID)
+		case config.APIRoleApp:
+			control = controllers.ForApp(entry.ID, entry.Projects)
+		default:
+			log.Error("local_api_client_refused", zap.String("client_id", entry.ID), zap.String("role", entry.Role))
+			continue
 		}
 
 		clients = append(clients, localapi.Client{

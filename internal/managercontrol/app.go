@@ -30,6 +30,10 @@ func (c *appController) CreateSession(ctx context.Context, data controllerapi.Se
 		return 0, err
 	}
 
+	if err := c.requireProject(ctx, dir); err != nil {
+		return 0, err
+	}
+
 	id, err := c.operator.app.backend.SpawnForApp(ctx, c.operator.managerID, dir, data.WorktreeName, data.Model)
 	if err != nil {
 		return 0, fmt.Errorf("spawn app session: %w", err)
