@@ -6,11 +6,99 @@
 [`api/coagent/v1/coagent.proto`](../api/coagent/v1/coagent.proto). ConnectRPC serves its session, output, chat
 and discovery services on
 `~/.coagent/api.sock`, a same-user Unix socket with mode `0600`, bound only when `api.clients` is non-empty.
-It uses HTTP/1.1 and accepts Connect JSON or binary messages and gRPC-Web. There is no TCP listener.
+It uses HTTP/1.1 and accepts Connect JSON or binary messages and gRPC-Web. There is no TCP listener unless
+the operator sets `api.listen` to enable the loopback listener.
 Unary JSON calls work with `curl`; streams use envelopes and need a Connect, gRPC-Web or `buf curl` client.
 The separate `daemon.sock` serves only the tokenless [daemon status](#daemon-status) read.
 Built-in managers use the same services over an in-process connection, with the configured manager id as
 author and no socket or token.
+
+## Loopback listener
+
+A browser cannot open a Unix socket. Set `api.listen` to serve the API socket's same token-guarded handler
+on a loopback address. It is off by default; it serves no Web UI or static files and adds no RPC or authority.
+There is no TLS or cookie authentication in the daemon.
+
+```yaml
+api:
+  listen: 127.0.0.1:7878
+  origins:
+    - http://localhost:5173
+  clients:
+    - id: browser
+      role: operator
+      token_sha256: <hash printed by coagent token browser>
+```
+
+`listen` requires at least one API client and a canonical loopback IP literal with an explicit port
+from 1 through 65535: `127.0.0.1:7878`, `127.0.0.2:7878` or `[::1]:7878`, for example. Hostnames,
+wildcards, LAN addresses, IPv6 zones and IPv4-mapped IPv6 addresses are refused. Binding independently
+checks the loopback literal even if config validation was bypassed. The loopback listener binds only
+after the API socket attaches successfully. A failed bind logs `local_api_start_failed` in the daemon log
+with the address in `socket`; the daemon and API socket keep serving.
+
+`origins` requires `listen`. Each distinct entry must be a lowercase `http://host[:port]` or
+`https://host[:port]`, without credentials, a path (even `/`), query or fragment. An explicit port must
+be decimal 1–65535 without leading zeros, and must omit the scheme default (`80` for HTTP, `443` for HTTPS).
+`null` and `*` are refused. Copy the browser's serialized origin exactly; comparison is exact.
+
+The browser guard runs before the shared token check and Connect handler:
+
+1. `Host` must equal the bound address or `localhost:<same port>`, case-insensitively. An empty or other
+   host gets HTTP 403 before origin or token work. This stops DNS rebinding: an attacker's hostname is
+   still in `Host` after rebinding, and the attacker controls neither the literal address nor `localhost`.
+2. A present `Origin` must match an entry exactly. `Origin: null` is always refused. Host and origin
+   refusals have the same plain `forbidden` body and no CORS headers.
+3. An `OPTIONS` request whose path starts with `/`, with an allowed origin and
+   `Access-Control-Request-Method`, is answered with HTTP 204 and no body or token check. Known and unknown
+   paths receive the same static response. The browser enforces the allowed method and header lists.
+4. Other requests from an allowed origin receive CORS headers before the token check, so a browser can
+   read an authentication refusal. Every call needs `Authorization: Bearer <token>`.
+
+`OPTIONS *` and `OPTIONS` without the requested-method header fall through to authentication.
+With no `Origin`, the origin check passes and the request needs the token as on `api.sock`.
+`DaemonService.GetStatus` is not served here: a token gets HTTP 404; no token gets 401.
+
+Preflight responses carry these exact CORS values, with the allowed request origin echoed:
+
+```text
+Access-Control-Allow-Origin: <origin>
+Access-Control-Allow-Methods: POST
+Access-Control-Allow-Headers: Authorization, Content-Type, Connect-Protocol-Version, Connect-Timeout-Ms, Grpc-Timeout, X-Grpc-Web, X-User-Agent
+Access-Control-Max-Age: 7200
+Vary: Origin, Access-Control-Request-Method, Access-Control-Request-Headers
+```
+
+Actual responses with an allowed origin carry:
+
+```text
+Access-Control-Allow-Origin: <origin>
+Access-Control-Expose-Headers: Grpc-Status, Grpc-Message, Grpc-Status-Details-Bin
+Vary: Origin
+```
+
+Neither response sends `Access-Control-Allow-Credentials`; requests without an origin get no CORS headers.
+The [Connect CORS documentation](https://connectrpc.com/docs/cors/) describes the protocol headers.
+No `Access-Control-Allow-Private-Network` answer is provided; public pages may meet the browser's own
+local-network permission prompt. The daemon serves no same-origin page: list every browser caller in `origins`.
+
+For connect-web, use `createConnectTransport` with `baseUrl: "http://127.0.0.1:7878"` and an
+[`Authorization` interceptor](https://connectrpc.com/docs/web/interceptors/) that sets the bearer token on
+each request. Unary and server-streaming calls use browser `fetch` over HTTP/1.1. Tests prove streaming
+with generated Go clients and browser-like headers; they do not exercise a real browser's fetch or CORS enforcement.
+
+```sh
+curl http://127.0.0.1:7878/coagent.v1.SessionService/ListSessions -H "Authorization: Bearer $COAGENT_TOKEN" -H 'Content-Type: application/json' -d '{}'
+```
+
+A tunnel that changes the destination port, such as `ssh -L 9000:127.0.0.1:7878`, produces a refused
+`Host: localhost:9000`. Keep the port (`-L 7878:127.0.0.1:7878`) or set `Host` at the proxy.
+
+On TCP the 256-bit token is the only boundary: every local OS user and every container in the host network
+namespace can connect. There is no peer-UID check, rate limit or token lockout. A sandboxed session reaches
+the loopback listener like any loopback service and gains nothing beyond what `api.sock` already gives it:
+with a readable token it can already act through the API socket. Remote access belongs to the operator's
+tunnel or proxy. See [ADR-0110](adr/0110-an-opt-in-loopback-listener-carries-the-local-api-for-browsers.md).
 
 ## Daemon status
 

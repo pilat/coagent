@@ -24,7 +24,7 @@ Coagent is a self-hosted, headless coding agent. One daemon coordinates durable
 state, session lifecycle and admission. It backs the private controller contract
 implemented by `managercontrol` behind the local API server. Domain packages own
 their ledgers; the daemon owns runner capacity counters and quotas. It accepts no
-network listener.
+network listener unless `api.listen` binds the opt-in loopback listener.
 It listens on two same-user Unix sockets through `internal/localapi`: the control
 socket serves only tokenless `coagent.v1` `DaemonService.GetStatus` behind
 `coagent status`; when API clients are configured, the API socket serves the
@@ -34,6 +34,7 @@ authenticated session, output, chat and discovery services
 ```
 Telegram manager ── coagent.v1 in process ── localapi ── controller ──> daemon
 API client ── coagent.v1 on api.sock ── localapi ── controller ───────┤
+browser ── coagent.v1 on the loopback listener (api.listen) ── localapi ── controller
 coagent status ── coagent.v1 GetStatus on daemon.sock ── localapi
                  SQLite <── session lifecycle <── per-task session ───┤
           config, loader, tools, schedules, subagents ────────────────┘
@@ -83,7 +84,7 @@ does not imply a tier except where it expresses an implementation variant.
 - `internal/llm/llmtest` — test-support oracle for provider transcript validity; imported only by tests, never by a binary.
 - `internal/llmwire` — provider-neutral message, response and tool wire vocabulary.
 - `internal/loader` — project context, skills, subagent definitions and marketplace loading.
-- `internal/localapi` — authenticated session, output, chat and discovery services on the API socket and in process, dispatched through the bound controller capability; `DaemonService.GetStatus` alone on the anonymous control socket; owns both socket binds.
+- `internal/localapi` — authenticated session, output, chat and discovery services on the API socket and in process, dispatched through the bound controller capability; `DaemonService.GetStatus` alone on the anonymous control socket; owns both socket binds and, when `api.listen` is set, the loopback listener behind the browser guard.
 - `internal/logger` — structured logging and registered-secret redaction.
 - `internal/lsp` — language-server process client for code-intelligence tools.
 - `internal/managers` — manager lifecycle coordinator, opening each manager's in-process connection.
@@ -888,6 +889,8 @@ cloud-metadata destinations at dial time, which is a property of those tools, no
 of the sandbox. An operator who needs a network boundary runs the whole daemon
 inside a container or VM; that is a deployment decision
 ([ADR-0063](docs/adr/0063-explicit-filesystem-boundary.md)).
+Sessions reach the loopback listener when enabled, like any loopback service,
+and need a token there as on `api.sock`.
 
 Shell environment capture and executable lookup execute through the session's
 confinement runner (`shellenv.ConfinedRunner`), so a project hook or rc file
@@ -902,12 +905,13 @@ is the same authority that session's other processes already have.
 ### Local control boundary
 
 The control socket is a mode-0600, same-user Unix socket with no network listener.
-One `localapi.Server` owns two `connect.Server`/`http.Server` pairs, one per socket.
+One `localapi.Server` owns two Connect servers, one per socket, and an optional
+loopback listener sharing the authenticated API handler.
 The anonymous mux registers only `coagent.v1.DaemonService.GetStatus`; other
 procedures are `Unimplemented`, even while starting. The token middleware has no
 exemption ([ADR-0109](docs/adr/0109-status-is-a-coagent-v1-call-on-the-control-socket.md)).
-Both listeners bound header reads with `ReadHeaderTimeout`; stopping closes status
-connections at once and drains the API listener within `closeGrace`.
+All listeners bound header reads with `ReadHeaderTimeout`; stopping closes status
+connections at once and drains the API socket and loopback listener within one `closeGrace` deadline.
 
 Service installation registers the Linux systemd unit while running
 the daemon as the login user from a user-owned binary. Lifecycle verbs are
@@ -939,6 +943,17 @@ other `coagent.v1` call as that client, `SetOrchestratorMode` and `CreateProject
 Built-in managers use the same services over an in-process connection with no
 socket or token; configuration binds the author, never request fields
 ([ADR-0105](docs/adr/0105-built-in-managers-are-local-api-clients-in-process.md)).
+
+The opt-in loopback listener (`api.listen`) carries the API socket's same handler
+and token check. Configuration requires a canonical loopback IP literal and port;
+binding independently refuses non-loopback addresses. The browser guard first
+limits `Host` to the bound address or `localhost:<port>`, then requires an absent
+or explicitly listed `Origin`. It answers preflights without a token, before
+authenticating every other request. There are no cookies, credentials header or TLS.
+Every local OS user and host-network container can connect: on TCP the token is
+the only boundary. `GetStatus` is not served there. A failed bind is logged and
+leaves the daemon and API socket running
+([ADR-0110](docs/adr/0110-an-opt-in-loopback-listener-carries-the-local-api-for-browsers.md)).
 
 An app's optional project scope lists clean absolute work directories; an explicit empty list is refused. It covers
 a root by its project's work directory or an attested coagent worktree's listed `repo_root`; an out-of-project-scope root reads as missing.
@@ -1347,7 +1362,7 @@ stopped reading rather than waiting on it. Runtime state rides along as best
 effort. Reconnecting is the same call with the `session_id` and id of the last
 row received.
 
-Local API owns both socket binds and readiness; the composition root holds the
+Local API owns the socket and loopback binds and readiness; the composition root holds the
 single-instance lock.
 Release builder owns reproducible archive layout and checksum generation; the
 release workflow supplies clean tagged source and platform binaries. Official

@@ -121,3 +121,81 @@ func TestAPIClients_Validation(t *testing.T) {
 		})
 	}
 }
+
+func TestAPIListen_Validation(t *testing.T) {
+	accepted := []string{"127.0.0.1:7878", "127.0.0.2:7878", "[::1]:7878"}
+	refused := []string{
+		"0.0.0.0:7878", "[::]:7878", "192.168.1.5:7878", "localhost:7878", ":7878",
+		"127.0.0.1", "127.0.0.1:0", "[0:0:0:0:0:0:0:1]:7878", "[::1%lo]:7878",
+		"[::ffff:127.0.0.1]:7878",
+	}
+	for _, listen := range accepted {
+		t.Run(listen, func(t *testing.T) {
+			cfg := apiListenConfig()
+			cfg.API.Listen = listen
+			require.NoError(t, cfg.validateAPI())
+		})
+	}
+	for _, listen := range refused {
+		t.Run(listen, func(t *testing.T) {
+			cfg := apiListenConfig()
+			cfg.API.Listen = listen
+			require.EqualError(t, cfg.validateAPI(), fmt.Sprintf(
+				"api.listen %q must be a loopback IP address and port, such as 127.0.0.1:7878", listen,
+			))
+		})
+	}
+}
+
+func TestAPIListen_NeedsAClient(t *testing.T) {
+	cfg := &UnifiedConfig{API: APIConfig{Listen: "127.0.0.1:7878"}}
+	require.EqualError(t, cfg.validateAPI(), "api.listen requires at least one api client")
+}
+
+func TestAPIOrigins_Validation(t *testing.T) {
+	accepted := []string{"http://localhost:5173", "http://127.0.0.1:8080", "https://app.example", "http://[::1]:3000"}
+	refused := []string{
+		"*", "null", "http://localhost:5173/", "http://localhost:5173/app", "HTTP://localhost:5173",
+		"http://LOCALHOST:5173", "http://localhost:80", "https://app.example:443", "ftp://host",
+		"http://user@localhost:5173", "http://", "http://localhost:5173?x=1", "http://localhost:5173#f",
+		"http://localhost:0", "http://localhost:65536", "http://localhost:05173", "http://localhost:",
+		"http://localhost?", "http://localhost/#", "http://localhost#",
+	}
+	for _, origin := range accepted {
+		t.Run(origin, func(t *testing.T) {
+			cfg := apiListenConfig()
+			cfg.API.Origins = []string{origin}
+			require.NoError(t, cfg.validateAPI())
+		})
+	}
+	for _, origin := range refused {
+		t.Run(origin, func(t *testing.T) {
+			cfg := apiListenConfig()
+			cfg.API.Origins = []string{origin}
+			require.EqualError(t, cfg.validateAPI(), fmt.Sprintf(
+				"api origin %q must be scheme://host[:port] with scheme http or https, "+
+					"in lowercase, without a default port, path, query or credentials", origin,
+			))
+		})
+	}
+}
+
+func TestAPIOrigins_ListedTwice(t *testing.T) {
+	cfg := apiListenConfig()
+	cfg.API.Origins = []string{"http://localhost:5173", "http://localhost:5173"}
+	require.EqualError(t, cfg.validateAPI(), `api origin "http://localhost:5173" is listed twice`)
+}
+
+func TestAPIOrigins_NeedListen(t *testing.T) {
+	cfg := apiListenConfig()
+	cfg.API.Listen = ""
+	cfg.API.Origins = []string{"http://localhost:5173"}
+	require.EqualError(t, cfg.validateAPI(), "api.origins requires api.listen")
+}
+
+func apiListenConfig() *UnifiedConfig {
+	return &UnifiedConfig{API: APIConfig{
+		Listen:  "127.0.0.1:7878",
+		Clients: []APIClientEntry{{ID: "alpha", Role: APIRoleOperator, TokenSHA256: strings.Repeat("a", 64)}},
+	}}
+}

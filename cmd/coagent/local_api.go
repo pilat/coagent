@@ -103,5 +103,30 @@ func attachConfiguredAPI(
 		_ = listener.Close()
 
 		log.Error("local_api_start_failed", zap.Error(err))
+
+		return
 	}
+
+	attachConfiguredLoopback(ctx, srv, cfg.UnifiedConfig.API)
+}
+
+func attachConfiguredLoopback(ctx context.Context, srv *localapi.Server, api config.APIConfig) {
+	if api.Listen == "" {
+		return
+	}
+
+	log := logger.Ctx(ctx).Named("main.localapi")
+
+	listener, err := localapi.ListenLoopback(ctx, api.Listen)
+	if err != nil {
+		log.Error("local_api_start_failed", zap.String("socket", api.Listen), zap.Error(err))
+		return
+	}
+
+	srv.AttachLoopback(listener, api.Origins)
+	go func() {
+		if err := srv.ServeLoopback(); err != nil {
+			log.Error("local_api_serve_failed", zap.String("socket", api.Listen), zap.Error(err))
+		}
+	}()
 }

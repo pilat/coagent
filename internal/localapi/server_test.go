@@ -84,7 +84,7 @@ func TestServer_CloseDropsASilentStatusClient(t *testing.T) {
 			accepted <- struct{}{}
 		}
 	}
-	h := &apiServer{srv: srv, socket: socket, statusSocket: statusSocket, done: make(chan error, 2)}
+	h := &apiServer{srv: srv, socket: socket, statusSocket: statusSocket, done: make(chan error, 2), serving: 2}
 	go func() { h.done <- srv.ServeStatus() }()
 	go func() { h.done <- srv.ServeAPI() }()
 	t.Cleanup(func() { h.close(t) })

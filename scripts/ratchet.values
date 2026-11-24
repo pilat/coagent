@@ -45,14 +45,14 @@ edges todo 1
 edges tool 1
 edges total 211
 edges worktree 4
-lines cmd/coagent 1338
+lines cmd/coagent 1363
 lines cmd/releasebuilder 251
 lines internal/backgroundprocess 2256
 lines internal/bashsandbox 1767
 lines internal/budget 446
 lines internal/catalog 545
 lines internal/coagenthome 143
-lines internal/config 1497
+lines internal/config 1629
 lines internal/configapply 290
 lines internal/configops 518
 lines internal/controllerapi 337
@@ -65,7 +65,7 @@ lines internal/llm 4569
 lines internal/llm/llmtest 56
 lines internal/llmwire 180
 lines internal/loader 1605
-lines internal/localapi 1570
+lines internal/localapi 1676
 lines internal/logger 369
 lines internal/lsp 3093
 lines internal/managercontrol 1147

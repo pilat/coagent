@@ -7,6 +7,7 @@
 - **Amended by:** [ADR-0107](0107-every-root-is-a-root.md)
 - **Amended by:** [ADR-0108](0108-an-app-acts-with-delegated-authority.md) — app authors are served and idempotency keys are per author
 - **Amended by:** [ADR-0109](0109-status-is-a-coagent-v1-call-on-the-control-socket.md) — daemon.sock serves coagent.v1 GetStatus
+- **Amended by:** [ADR-0110](0110-an-opt-in-loopback-listener-carries-the-local-api-for-browsers.md) — an opt-in loopback listener serves the same API for browsers
 
 ## Context
 
