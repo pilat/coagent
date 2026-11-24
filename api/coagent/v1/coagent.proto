@@ -181,6 +181,48 @@ service DiscoveryService {
   rpc CreateProject(CreateProjectRequest) returns (CreateProjectResponse);
 }
 
+// DaemonService reports the daemon itself. GetStatus is the only call daemon.sock serves, without a token.
+service DaemonService {
+  // GetStatus reports daemon state; it answers Unavailable while the daemon is starting.
+  rpc GetStatus(GetStatusRequest) returns (GetStatusResponse);
+}
+
+message GetStatusRequest {}
+
+message GetStatusResponse {
+  string binary_version = 1;
+  // Names this run of the daemon: a restart reuses the pid, socket and binary.
+  string boot_id = 2;
+  int64 pid = 3;
+  int64 uptime_seconds = 4;
+  string config_path = 5;
+  // False before the operator has written a valid config; providers, models and managers are then empty.
+  bool config_present = 6;
+  repeated ProviderStatus providers = 7;
+  int64 model_count = 8;
+  string default_model = 9;
+  // Models their catalog no longer lists.
+  repeated string stale_models = 10;
+  // "tavily", "searxng (<base_url>)", "native (openrouter)", "disabled", or empty when unconfigured.
+  string search = 11;
+  repeated ManagerStatus managers = 12;
+}
+
+// ProviderStatus carries no credential, not even a hint.
+message ProviderStatus {
+  string name = 1;
+  string driver = 2;
+}
+
+message ManagerStatus {
+  string id = 1;
+  string driver = 2;
+  bool enabled = 3;
+  bool running = 4;
+  // Why an enabled manager is not running, credential-redacted.
+  string error = 5;
+}
+
 message ListSessionsRequest {}
 
 message ListSessionsResponse {

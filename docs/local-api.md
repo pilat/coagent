@@ -3,13 +3,81 @@
 ## Socket and protocol
 
 `coagent.v1` is the public Protocol Buffers contract in
-[`api/coagent/v1/coagent.proto`](../api/coagent/v1/coagent.proto). ConnectRPC serves it on
+[`api/coagent/v1/coagent.proto`](../api/coagent/v1/coagent.proto). ConnectRPC serves its session, output, chat
+and discovery services on
 `~/.coagent/api.sock`, a same-user Unix socket with mode `0600`, bound only when `api.clients` is non-empty.
 It uses HTTP/1.1 and accepts Connect JSON or binary messages and gRPC-Web. There is no TCP listener.
 Unary JSON calls work with `curl`; streams use envelopes and need a Connect, gRPC-Web or `buf curl` client.
-The separate `daemon.sock` still serves only [`coagent status`](control-api.md).
+The separate `daemon.sock` serves only the tokenless [daemon status](#daemon-status) read.
 Built-in managers use the same services over an in-process connection, with the configured manager id as
 author and no socket or token.
+
+## Daemon status
+
+`~/.coagent/daemon.sock` is always bound, including before configuration exists, as a same-user Unix socket
+with mode `0600`, unlinked on shutdown. It serves only `coagent.v1.DaemonService.GetStatus` and requires no
+token. Every other procedure returns HTTP 404 / `Unimplemented`, even during startup. `GetStatus` is served
+only here, outside the four services on `api.sock` and the in-process connection. Connecting successfully
+is the liveness check; there is no separate ping.
+
+```sh
+curl --unix-socket ~/.coagent/daemon.sock http://localhost/coagent.v1.DaemonService/GetStatus -H 'Content-Type: application/json' -d '{}'
+```
+
+Connect JSON uses lowerCamelCase names, encodes int64 values as strings, and omits zero and default values:
+
+```json
+{
+  "binaryVersion": "0.4.2",
+  "bootId": "9f3c1a7b0e5d2846",
+  "pid": "41337",
+  "uptimeSeconds": "8040",
+  "configPath": "~/.coagent/config.yaml",
+  "configPresent": true,
+  "providers": [
+    {"name": "work", "driver": "anthropic"}
+  ],
+  "modelCount": "3",
+  "search": "tavily",
+  "managers": [
+    {"id": "telegram-main", "driver": "telegram", "enabled": true, "running": true}
+  ]
+}
+```
+
+`boot_id` (`bootId` in JSON) names this run of the daemon, not the binary. A config apply restarts the daemon
+on the same socket, so compare boot ids for inequality to distinguish the new run from the old one still
+draining. Version, pid and uptime cannot do that. The id is opaque and stable for the process's lifetime.
+
+`config_present: false` is legal before the operator writes a valid `config.yaml`. Its JSON field,
+`configPresent`, is then omitted, as are providers, models and managers. An empty `default_model` is likewise
+omitted as `defaultModel` in the example. `stale_models` lists models their catalog no longer lists.
+
+`search` renders the integrated-search state: `tavily`, `searxng (<base_url>)`, `native (openrouter)`,
+`disabled`, or absent when unconfigured.
+
+An enabled manager that is not running carries its startup `error`, credential-redacted when one exists.
+A manager failing to start does not take the daemon down; the operator can repair configuration by hand
+while the daemon stays alive. `running` means the manager's own loops are up. Output is an append-only log
+with a per-chat cursor, so status reports configured managers without delivery backlog or per-row delivery
+health. Chat-level delivery pauses are logged.
+
+The socket answers from the bind. Until the managers have started, `GetStatus` returns `Unavailable` with
+`daemon is starting`, rather than reporting managers that have not started as down.
+`coagent status` prints the response and keeps three exit codes: **0** running, **2** not running or starting,
+**1** could not ask. A booting daemon prints `daemon starting — not answering yet` and exits **2**.
+The CLI bounds the whole call, including its dial, to three seconds; a connected but silent daemon also
+reads as starting. Other errors after connecting print an older-binary hint recommending
+`sudo coagent restart` and exit **1** ([ADR-0109](adr/0109-status-is-a-coagent-v1-call-on-the-control-socket.md)).
+
+### Single instance
+
+The daemon holds an exclusive `flock` on `~/.coagent/daemon.lock` for its whole
+life. Only the lock holder may remove a stale socket and bind. A second daemon
+exits immediately — two processes on one SQLite file under WAL corrupt each
+other, and two socket owners make "which daemon answered?" unanswerable. The
+lock is advisory and released by the kernel on death, so a crash never leaves one
+nobody can clear.
 
 ## Clients and tokens
 
@@ -26,7 +94,7 @@ api:
 
 Paste the printed block into `~/.coagent/config.yaml` and restart. Client ids must be unique and distinct
 from manager ids because operator clients key chat rows; hashes must be unique. Roles are `operator` and `app`.
-Every request on the socket,
+Every request on `api.sock`,
 RPC or not, is refused without a valid token in `Authorization: Bearer <token>`.
 Config keeps only the token's SHA-256.
 Removing the entry and restarting revokes it. Every operator client reaches every root, as every manager does;

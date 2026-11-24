@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/pilat/coagent/internal/config"
+	"github.com/pilat/coagent/internal/logger"
 )
 
 type fakeManager struct {
@@ -132,6 +133,22 @@ func TestRuntime_OnStart_ReportsNoErrorWhenEveryManagerStarts(t *testing.T) {
 	require.NoError(t, r.Start(context.Background()))
 	require.NoError(t, r.StartError("only"))
 	assert.Equal(t, []string{"only"}, r.RunningIDs())
+}
+
+func TestRuntime_StartErrorScrubsRegisteredSecrets(t *testing.T) {
+	logger.SetRedactedValues([]string{"bot-secret"})
+	t.Cleanup(func() { logger.SetRedactedValues(nil) })
+
+	r := runtimeFor(
+		&fakeManager{id: "failed", startErr: errors.New("unauthorized bot-secret")},
+		&fakeManager{id: "started"},
+	)
+	require.NoError(t, r.Start(context.Background()))
+	err := r.StartError("failed")
+	require.Error(t, err)
+	assert.NotContains(t, err.Error(), "bot-secret")
+	assert.Contains(t, err.Error(), "unauthorized")
+	require.NoError(t, r.StartError("started"))
 }
 
 func TestRuntime_DuplicateTelegramTokensStopOnlyTheConflictSet(t *testing.T) {

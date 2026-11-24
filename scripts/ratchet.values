@@ -10,7 +10,6 @@ edges config 2
 edges configapply 3
 edges configops 3
 edges controllerapi 1
-edges ctl 5
 edges daemon 31
 edges git 1
 edges install 1
@@ -44,9 +43,9 @@ edges subagent 6
 edges telegram 8
 edges todo 1
 edges tool 1
-edges total 216
+edges total 211
 edges worktree 4
-lines cmd/coagent 1241
+lines cmd/coagent 1338
 lines cmd/releasebuilder 251
 lines internal/backgroundprocess 2256
 lines internal/bashsandbox 1767
@@ -57,7 +56,6 @@ lines internal/config 1497
 lines internal/configapply 290
 lines internal/configops 518
 lines internal/controllerapi 337
-lines internal/ctl 1038
 lines internal/daemon 5789
 lines internal/git 868
 lines internal/humanize 24
@@ -67,13 +65,13 @@ lines internal/llm 4569
 lines internal/llm/llmtest 56
 lines internal/llmwire 180
 lines internal/loader 1605
-lines internal/localapi 1302
+lines internal/localapi 1570
 lines internal/logger 369
 lines internal/lsp 3093
 lines internal/managercontrol 1147
 lines internal/managerdelivery 451
 lines internal/managerdiscovery 237
-lines internal/managers 205
+lines internal/managers 210
 lines internal/managers/telegram 3063
 lines internal/mcp 1095
 lines internal/mcpstore 680

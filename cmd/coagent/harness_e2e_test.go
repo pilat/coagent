@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -19,9 +20,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/pilat/coagent/api/coagent/v1"
 	"github.com/pilat/coagent/internal/coagenthome"
 	"github.com/pilat/coagent/internal/configops"
-	"github.com/pilat/coagent/internal/ctl"
 )
 
 const catalogDropConfig = `providers:
@@ -98,7 +99,7 @@ func TestHarnessE2E_CatalogRollbackPreservesLastResolution(t *testing.T) {
 	require.NoError(t, os.WriteFile(path, []byte(configBody), 0o600))
 	for range 2 {
 		process, _ := startCapturedDaemon(t, binary, home)
-		waitForStatus(t, socket, func(st ctl.StatusResult) bool { return st.ModelCount == 1 })
+		waitForStatus(t, socket, func(st *coagentv1.GetStatusResponse) bool { return st.ModelCount == 1 })
 		stopDaemon(t, process)
 		dropped.Store(true)
 	}
@@ -118,16 +119,14 @@ func TestHarnessE2E_CatalogRollbackPreservesLastResolution(t *testing.T) {
 	require.True(t, ops.Commit(staged, configops.Pending{}).Applied)
 	t.Setenv("PATH", t.TempDir())
 	process, stderr := startCapturedDaemon(t, binary, home)
-	st := waitForStatus(t, socket, func(st ctl.StatusResult) bool { return st.ModelCount == 1 })
+	st := waitForStatus(t, socket, func(st *coagentv1.GetStatusResponse) bool { return st.ModelCount == 1 })
 	stopDaemon(t, process)
 	assert.Equal(t, []string{"vendor/dropped"}, st.StaleModels)
 	assert.Contains(t, stderr.String(), `"rolled_back": true`)
 	assert.Contains(t, stderr.String(), "bash sandbox:")
 }
 
-// The compiled daemon answers greeting, readiness, and status over the Unix
-// socket with no config file and no terminal chat involved.
-func TestHarnessE2E_DaemonAnswersGreetingReadinessAndStatus(t *testing.T) {
+func TestHarnessE2E_DaemonAnswersReadinessAndStatus(t *testing.T) {
 	home, err := os.MkdirTemp("/tmp", "coa-harness")
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = os.RemoveAll(home) })
@@ -137,32 +136,38 @@ func TestHarnessE2E_DaemonAnswersGreetingReadinessAndStatus(t *testing.T) {
 	process := startDaemon(t, binary, home)
 	defer func() { _ = process.Process.Kill() }()
 
-	st := waitForStatus(t, socket, func(status ctl.StatusResult) bool { return true })
+	st := waitForStatus(t, socket, func(status *coagentv1.GetStatusResponse) bool { return true })
 	assert.False(t, st.ConfigPresent, "no config file was provided")
+	assert.Equal(t, "dev", st.BinaryVersion, "the test build does not stamp a release version")
 
-	client, err := ctl.Dial(t.Context(), socket)
-	require.NoError(t, err)
-	defer func() { _ = client.Close() }()
-
-	greeting := client.Greeting()
-	assert.Equal(t, ctl.AppName, greeting.App)
-	assert.Equal(t, ctl.ProtocolVersion, greeting.ProtocolVersion)
-
-	// Every removed mutation is gone from the socket, not just unregistered.
-	var ignored struct{}
-	err = client.Call(t.Context(), "set_provider", nil, &ignored)
-	require.ErrorContains(t, err, "unknown method")
-
-	err = client.Call(t.Context(), "chat_open", nil, &ignored)
-	require.ErrorContains(t, err, "unknown method")
+	transport := &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+		var dialer net.Dialer
+		return dialer.DialContext(ctx, "unix", socket)
+	}}
+	t.Cleanup(transport.CloseIdleConnections)
+	client := &http.Client{Transport: transport}
+	for _, method := range []string{"set_provider", "chat_open"} {
+		request, err := http.NewRequestWithContext(t.Context(), http.MethodPost,
+			"http://coagent/coagent.v1.DaemonService/"+method, strings.NewReader("{}"))
+		require.NoError(t, err)
+		request.Header.Set("Content-Type", "application/json")
+		response, err := client.Do(request)
+		require.NoError(t, err)
+		require.NoError(t, response.Body.Close())
+		assert.Equal(t, http.StatusNotImplemented, response.StatusCode)
+	}
 }
 
 func assertCatalogDropBoot(t *testing.T, binary, home, socket string, stale bool) {
 	t.Helper()
 
 	process, stderr := startCapturedDaemon(t, binary, home)
-	st := waitForStatus(t, socket, func(st ctl.StatusResult) bool { return st.PID == process.Process.Pid })
-	assert.Equal(t, 2, st.ModelCount)
+	st := waitForStatus(
+		t,
+		socket,
+		func(st *coagentv1.GetStatusResponse) bool { return st.Pid == int64(process.Process.Pid) },
+	)
+	assert.Equal(t, int64(2), st.ModelCount)
 	if stale {
 		assert.Equal(t, []string{"vendor/dropped"}, st.StaleModels)
 		ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
@@ -261,7 +266,11 @@ func startDaemon(t *testing.T, binary, home string) *exec.Cmd {
 }
 
 // waitForStatus polls until a daemon answers a status that satisfies want.
-func waitForStatus(t *testing.T, socket string, want func(ctl.StatusResult) bool) ctl.StatusResult {
+func waitForStatus(
+	t *testing.T,
+	socket string,
+	want func(*coagentv1.GetStatusResponse) bool,
+) *coagentv1.GetStatusResponse {
 	t.Helper()
 
 	deadline := time.Now().Add(2 * time.Minute)
@@ -276,22 +285,14 @@ func waitForStatus(t *testing.T, socket string, want func(ctl.StatusResult) bool
 
 	t.Fatalf("no daemon answered on %s within the restart budget", socket)
 
-	return ctl.StatusResult{}
+	return nil
 }
 
-func tryStatus(socket string) (ctl.StatusResult, bool) {
+func tryStatus(socket string) (*coagentv1.GetStatusResponse, bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	c, err := ctl.Dial(ctx, socket)
-	if err != nil {
-		return ctl.StatusResult{}, false
-	}
-
-	defer func() { _ = c.Close() }()
-
-	var st ctl.StatusResult
-	err = c.Call(ctx, ctl.OpStatus, nil, &st)
+	st, _, err := fetchStatus(ctx, socket)
 
 	return st, err == nil
 }

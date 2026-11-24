@@ -55,10 +55,11 @@ type apiFixture struct {
 }
 
 type apiServer struct {
-	srv    *Server
-	socket string
-	done   chan error
-	closed bool
+	srv          *Server
+	socket       string
+	statusSocket string
+	done         chan error
+	closed       bool
 }
 
 func (b *apiBackend) CreateSession(
@@ -167,10 +168,12 @@ func apiListener(t *testing.T) (net.Listener, string) {
 
 func (f *apiFixture) serve(t *testing.T, listener net.Listener, socket string) *apiServer {
 	t.Helper()
-	srv, err := New(t.Context(), listener, f.clients())
-	require.NoError(t, err)
-	h := &apiServer{srv: srv, socket: socket, done: make(chan error, 1)}
-	go func() { h.done <- srv.Serve() }()
+	statusListener, statusSocket := apiListener(t)
+	srv := New(t.Context(), statusListener, StatusSource{})
+	require.NoError(t, srv.AttachAPI(listener, f.clients()))
+	h := &apiServer{srv: srv, socket: socket, statusSocket: statusSocket, done: make(chan error, 2)}
+	go func() { h.done <- srv.ServeStatus() }()
+	go func() { h.done <- srv.ServeAPI() }()
 	t.Cleanup(func() { h.close(t) })
 	return h
 }
@@ -200,11 +203,13 @@ func (h *apiServer) close(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	require.NoError(t, h.srv.Close(ctx))
-	select {
-	case err := <-h.done:
-		require.NoError(t, err)
-	case <-ctx.Done():
-		t.Fatal("API Serve did not finish")
+	for range 2 {
+		select {
+		case err := <-h.done:
+			require.NoError(t, err)
+		case <-ctx.Done():
+			t.Fatal("API Serve did not finish")
+		}
 	}
 }
 

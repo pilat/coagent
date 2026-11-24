@@ -11,11 +11,11 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/pilat/coagent/api/coagent/v1"
 	"github.com/pilat/coagent/internal/coagenthome"
 	"github.com/pilat/coagent/internal/config"
 	"github.com/pilat/coagent/internal/configops"
 	"github.com/pilat/coagent/internal/controllerapi"
-	"github.com/pilat/coagent/internal/ctl"
 )
 
 func TestAppShutdown_StopsInReverseOrderAndContinuesAfterError(t *testing.T) {
@@ -109,14 +109,9 @@ func TestRunDaemon_ReadinessPrecedesStatusAndDeferredShutdownClosesSocket(t *tes
 		result <- runDaemon(ctx, startupState{cfg: &config.Config{}}, ops, nil)
 	}()
 
-	socket, err := ctl.SocketPath()
+	socket, err := coagenthome.Join(coagenthome.SocketFileName)
 	require.NoError(t, err)
-	client := waitForReadyStatus(t, socket, result)
-	t.Cleanup(func() { _ = client.Close() })
-
-	var st ctl.StatusResult
-	err = client.Call(t.Context(), ctl.OpStatus, nil, &st)
-	require.NoError(t, err)
+	st := waitForReadyStatus(t, socket, result)
 	assert.False(t, st.ConfigPresent, "no config file was provided")
 
 	cancel()
@@ -129,22 +124,16 @@ func TestRunDaemon_ReadinessPrecedesStatusAndDeferredShutdownClosesSocket(t *tes
 	}
 
 	require.Eventually(t, func() bool {
-		probe, err := ctl.Dial(context.Background(), socket)
-		if err != nil {
-			return true
-		}
-
-		_ = probe.Close()
-
-		return false
+		_, connected, err := fetchStatus(t.Context(), socket)
+		return !connected && err != nil
 	}, time.Second, 10*time.Millisecond, "deferred shutdown must close the control socket")
 }
 
-func waitForReadyStatus(t *testing.T, socket string, result <-chan error) *ctl.Client {
+func waitForReadyStatus(t *testing.T, socket string, result <-chan error) *coagentv1.GetStatusResponse {
 	t.Helper()
 
 	var (
-		client   *ctl.Client
+		status   *coagentv1.GetStatusResponse
 		returned bool
 		runErr   error
 	)
@@ -156,23 +145,19 @@ func waitForReadyStatus(t *testing.T, socket string, result <-chan error) *ctl.C
 		default:
 		}
 
-		candidate, err := ctl.Dial(context.Background(), socket)
+		candidate, _, err := fetchStatus(t.Context(), socket)
 		if err == nil {
-			if err := candidate.Call(t.Context(), ctl.OpStatus, nil, &ctl.StatusResult{}); err == nil {
-				client = candidate
-				return true
-			}
-
-			_ = candidate.Close()
+			status = candidate
+			return true
 		}
 
 		return false
 	}, 10*time.Second, 10*time.Millisecond, "daemon readiness")
 
 	require.False(t, returned, "runDaemon stopped before status became ready: %v", runErr)
-	require.NotNil(t, client)
+	require.NotNil(t, status)
 
-	return client
+	return status
 }
 
 func registerTestStop(a *app, got *[]string, component string) {

@@ -20,6 +20,8 @@ const (
 	ChatServiceName = "coagent.v1.ChatService"
 	// DiscoveryServiceName is the fully-qualified name of the DiscoveryService service.
 	DiscoveryServiceName = "coagent.v1.DiscoveryService"
+	// DaemonServiceName is the fully-qualified name of the DaemonService service.
+	DaemonServiceName = "coagent.v1.DaemonService"
 )
 
 // These constants are the procedure names of the RPCs defined in this package. They're exposed at
@@ -101,6 +103,8 @@ const (
 	// DiscoveryServiceCreateProjectProcedure is the procedure name of the DiscoveryService's
 	// CreateProject RPC.
 	DiscoveryServiceCreateProjectProcedure = "/coagent.v1.DiscoveryService/CreateProject"
+	// DaemonServiceGetStatusProcedure is the procedure name of the DaemonService's GetStatus RPC.
+	DaemonServiceGetStatusProcedure = "/coagent.v1.DaemonService/GetStatus"
 )
 
 var (
@@ -1324,6 +1328,76 @@ func (h discoveryServiceHandler) createProject(ctx context.Context, _ connect.Sp
 		return err
 	}
 	res, err := h.svc.CreateProject(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
+}
+
+var (
+	daemonServiceGetStatusSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_coagent_v1_coagent_proto.Services().ByName("DaemonService").Methods().ByName("GetStatus"),
+			Procedure:  DaemonServiceGetStatusProcedure,
+		}
+	})
+)
+
+// DaemonServiceClient is a client for the coagent.v1.DaemonService service.
+type DaemonServiceClient interface {
+	// GetStatus reports daemon state; it answers Unavailable while the daemon is starting.
+	GetStatus(context.Context, *v1.GetStatusRequest) (*v1.GetStatusResponse, error)
+}
+
+// NewDaemonServiceClient constructs a client for the coagent.v1.DaemonService service. Multiple
+// service clients may share a single connect.Client.
+func NewDaemonServiceClient(client *connect.Client) DaemonServiceClient {
+	return &daemonServiceClient{client: client}
+}
+
+// DaemonServiceHandler is an implementation of the coagent.v1.DaemonService service.
+type DaemonServiceHandler interface {
+	// GetStatus reports daemon state; it answers Unavailable while the daemon is starting.
+	GetStatus(context.Context, *v1.GetStatusRequest) (*v1.GetStatusResponse, error)
+}
+
+// RegisterDaemonServiceHandler registers svc as the coagent.v1.DaemonService implementation on
+// server.
+func RegisterDaemonServiceHandler(server *connect.Server, svc DaemonServiceHandler) {
+	adapter := daemonServiceHandler{svc: svc}
+	server.Register(
+		connect.Method{Spec: daemonServiceGetStatusSpec(), Handler: adapter.getStatus},
+	)
+}
+
+// UnimplementedDaemonServiceHandler returns CodeUnimplemented from all methods.
+type UnimplementedDaemonServiceHandler struct{}
+
+func (UnimplementedDaemonServiceHandler) GetStatus(context.Context, *v1.GetStatusRequest) (*v1.GetStatusResponse, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "coagent.v1.DaemonService.GetStatus is not implemented")
+}
+
+type daemonServiceClient struct {
+	client *connect.Client
+}
+
+func (c *daemonServiceClient) GetStatus(ctx context.Context, req *v1.GetStatusRequest) (*v1.GetStatusResponse, error) {
+	var res v1.GetStatusResponse
+	if err := c.client.CallUnary(ctx, daemonServiceGetStatusSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+type daemonServiceHandler struct{ svc DaemonServiceHandler }
+
+func (h daemonServiceHandler) getStatus(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.GetStatusRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.GetStatus(ctx, &req)
 	if err != nil {
 		return err
 	}

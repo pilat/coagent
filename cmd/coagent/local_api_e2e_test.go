@@ -25,7 +25,6 @@ import (
 	"github.com/pilat/coagent/api/coagent/v1/coagentv1connect"
 	"github.com/pilat/coagent/internal/coagenthome"
 	"github.com/pilat/coagent/internal/config"
-	"github.com/pilat/coagent/internal/ctl"
 	"github.com/pilat/coagent/internal/localapi"
 )
 
@@ -60,7 +59,9 @@ func TestHarnessE2E_LocalAPICreatesSendsAndTailsAcrossRestart(t *testing.T) {
 	waitForStatus(
 		t,
 		controlSocket,
-		func(st ctl.StatusResult) bool { return st.PID == process.Process.Pid && st.ModelCount == 1 },
+		func(st *coagentv1.GetStatusResponse) bool {
+			return st.Pid == int64(process.Process.Pid) && st.ModelCount == 1
+		},
 	)
 	waitForLocalAPIE2E(t, socket)
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
@@ -105,7 +106,9 @@ func TestHarnessE2E_LocalAPICreatesSendsAndTailsAcrossRestart(t *testing.T) {
 	waitForStatus(
 		t,
 		controlSocket,
-		func(st ctl.StatusResult) bool { return st.PID == process.Process.Pid && st.ModelCount == 1 },
+		func(st *coagentv1.GetStatusResponse) bool {
+			return st.Pid == int64(process.Process.Pid) && st.ModelCount == 1
+		},
 	)
 	waitForLocalAPIE2E(t, socket)
 	client = localAPIE2EClient(t, socket, token)

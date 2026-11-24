@@ -2,6 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-08-17
+- **Amended by:** [ADR-0109](0109-status-is-a-coagent-v1-call-on-the-control-socket.md) — status is a coagent.v1 call; "starting" is Unavailable
 
 ## Context
 

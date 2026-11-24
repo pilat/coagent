@@ -139,13 +139,18 @@ func (r *Runtime) RunningIDs() []string {
 	return out
 }
 
-// StartError reports why this manager did not come up, or nil when it started —
-// including when it started and died later, which is not a start failure.
+// StartError reports a startup failure, scrubbed for display to the operator.
+// It returns nil after a successful start, including when the manager died later.
 func (r *Runtime) StartError(id string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	return r.startErrs[id]
+	err := r.startErrs[id]
+	if err == nil {
+		return nil
+	}
+
+	return errors.New(logger.Redact(err.Error()))
 }
 
 func (r *Runtime) startOne(ctx context.Context, entry config.ManagerEntry) (Manager, error) {

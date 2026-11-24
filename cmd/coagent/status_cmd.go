@@ -4,16 +4,27 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
+	"net/http"
 	"os"
+	"sync/atomic"
+	"time"
 
-	"github.com/pilat/coagent/internal/ctl"
+	"connectrpc.com/connect/v2"
+	"connectrpc.com/connect/v2/connecthttp"
+
+	"github.com/pilat/coagent/api/coagent/v1"
+	"github.com/pilat/coagent/api/coagent/v1/coagentv1connect"
+	"github.com/pilat/coagent/internal/coagenthome"
 	"github.com/pilat/coagent/internal/version"
 )
+
+var statusTimeout = 3 * time.Second
 
 // runStatus reports daemon state. Exit codes are the contract: 0 running,
 // 2 not running, not installed or not ready yet, 1 could not ask.
 func runStatus(ctx context.Context) int {
-	path, err := ctl.SocketPath()
+	path, err := coagenthome.Join(coagenthome.SocketFileName)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "%v\n", err)
 
@@ -24,51 +35,84 @@ func runStatus(ctx context.Context) int {
 }
 
 func statusOf(ctx context.Context, socket string) int {
-	client, err := ctl.Dial(ctx, socket)
+	st, connected, err := fetchStatus(ctx, socket)
 	if err != nil {
-		return reportStatusFailure(err)
+		return reportStatusFailure(err, connected)
 	}
 
-	defer func() { _ = client.Close() }()
-
-	var st ctl.StatusResult
-
-	err = client.Call(ctx, ctl.OpStatus, nil, &st)
-	if err != nil {
-		return reportStatusFailure(err)
-	}
-
-	printStatus(st, client.Greeting())
+	printStatus(st)
 
 	return exitOK
 }
 
+func fetchStatus(ctx context.Context, socket string) (*coagentv1.GetStatusResponse, bool, error) {
+	var connected atomic.Bool
+
+	transport := &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+		var dialer net.Dialer
+
+		conn, err := dialer.DialContext(ctx, "unix", socket)
+		if err == nil {
+			connected.Store(true)
+		}
+
+		return conn, err
+	}}
+
+	defer transport.CloseIdleConnections()
+
+	client := connect.NewClient(connecthttp.NewTransport(&http.Client{Transport: transport}, "http://coagent"))
+	ctx, cancel := context.WithTimeout(ctx, statusTimeout)
+
+	defer cancel()
+
+	status, err := coagentv1connect.NewDaemonServiceClient(client).GetStatus(ctx, &coagentv1.GetStatusRequest{})
+
+	return status, connected.Load(), err
+}
+
 // reportStatusFailure names the state instead of printing a transport error.
 // A booting daemon is retryable, like a missing one — not "could not ask".
-func reportStatusFailure(err error) int {
-	if errors.Is(err, ctl.ErrNotRunning) {
+func reportStatusFailure(err error, connected bool) int {
+	if !connected {
 		fmt.Println("daemon not running")
 
 		return exitNotRunning
 	}
 
-	if errors.Is(err, ctl.ErrStarting) {
+	if isStarting(err) {
 		fmt.Println("daemon starting — not answering yet")
 
 		return exitNotRunning
 	}
 
 	fmt.Fprintf(os.Stderr, "%v\n", err)
+	fmt.Fprintln(
+		os.Stderr,
+		"the daemon may be running an older coagent binary — `sudo coagent restart` to apply this one",
+	)
 
 	return exitError
 }
 
-func printStatus(st ctl.StatusResult, g ctl.Greeting) {
-	fmt.Printf("running · pid %d · up %s · %s\n", st.PID, humanDuration(st.UptimeSeconds), st.BinaryVersion)
+func isStarting(err error) bool {
+	var remote *connect.Error
 
-	if skewed(g.BinaryVersion, version.Version) {
+	return errors.As(err, &remote) && remote.IsRemote() && remote.Code() == connect.CodeUnavailable ||
+		errors.Is(err, context.DeadlineExceeded)
+}
+
+func printStatus(st *coagentv1.GetStatusResponse) {
+	fmt.Printf(
+		"running · pid %d · up %s · %s\n",
+		st.GetPid(),
+		humanDuration(st.GetUptimeSeconds()),
+		st.GetBinaryVersion(),
+	)
+
+	if skewed(st.GetBinaryVersion(), version.Version) {
 		fmt.Printf("version skew · daemon %s ≠ cli %s — restart the daemon on the new binary\n",
-			g.BinaryVersion, version.Version)
+			st.GetBinaryVersion(), version.Version)
 	}
 
 	if !st.ConfigPresent {
@@ -94,7 +138,7 @@ func printStatus(st ctl.StatusResult, g ctl.Greeting) {
 	}
 }
 
-func managerLine(m ctl.ManagerStatus) string {
+func managerLine(m *coagentv1.ManagerStatus) string {
 	state := "disabled"
 
 	switch {
@@ -104,7 +148,7 @@ func managerLine(m ctl.ManagerStatus) string {
 		state = "not running"
 	}
 
-	line := fmt.Sprintf("manager %s (%s) · %s", m.ID, m.Driver, state)
+	line := fmt.Sprintf("manager %s (%s) · %s", m.GetId(), m.GetDriver(), state)
 	if m.Error != "" {
 		line += " · " + m.Error
 	}

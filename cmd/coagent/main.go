@@ -21,7 +21,6 @@ import (
 	"github.com/pilat/coagent/internal/configapply"
 	"github.com/pilat/coagent/internal/configops"
 	"github.com/pilat/coagent/internal/controllerapi"
-	"github.com/pilat/coagent/internal/ctl"
 	"github.com/pilat/coagent/internal/daemon"
 	"github.com/pilat/coagent/internal/git"
 	"github.com/pilat/coagent/internal/llm"
@@ -43,7 +42,6 @@ import (
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/subagent"
 	"github.com/pilat/coagent/internal/tool/builtin"
-	"github.com/pilat/coagent/internal/version"
 )
 
 // catalogEnrichTimeout bounds the whole enrichment pass; individual catalog
@@ -409,7 +407,7 @@ func runDaemon(
 		return err
 	}
 
-	a.onStop("ctl.lock", func(context.Context) error { return lock.Release() })
+	a.onStop("instance.lock", func(context.Context) error { return lock.release() })
 
 	core, err := startCore(ctx, a, cfg, secrets, ops)
 	if err != nil {
@@ -421,28 +419,22 @@ func runDaemon(
 
 	a.onStop("schedule.executor", func(context.Context) error { executor.Stop(); return nil })
 
-	startLocalAPI(ctx, a, cfg, core.controller)
-
 	var connector managers.Connector = localapi.NewInProcess(ctx, core.controller)
 	mgrRuntime := managers.NewRuntime(cfg, connector)
 
-	ctlSrv, err := prepareControlSocket(ctx, cfg, mgrRuntime)
+	// Answering starts with the bind, not with readiness: connect success is the
+	// liveness test, so a bound socket nobody answers reads as a broken daemon.
+	api, err := startLocalAPI(ctx, a, cfg, core.controller, mgrRuntime)
 	if err != nil {
 		return err
 	}
-
-	a.onStop("ctl.server", func(context.Context) error { return ctlSrv.Close() })
-
-	// Answering starts with the bind, not with readiness: connect success is the
-	// liveness test, so a bound socket nobody answers reads as a broken daemon.
-	serveControlSocket(ctx, ctlSrv)
 
 	if err := mgrRuntime.Start(ctx); err != nil {
 		return fmt.Errorf("start managers: %w", err)
 	}
 
 	a.onStop("managers", mgrRuntime.Stop)
-	ctlSrv.MarkReady()
+	api.MarkReady()
 
 	noticeConfigRollback(ctx, core.sessionStore, ops, outcome)
 
@@ -605,50 +597,4 @@ func marketplacePolicy(unified *config.UnifiedConfig, dir string) (sandboxpolicy
 	return sandboxpolicy.Compile(sandboxpolicy.Request{
 		ProjectRoot: dir, WorkDir: dir, GlobalRules: unified.Sandbox.Rules,
 	})
-}
-
-func acquireInstanceLock() (*ctl.Lock, error) {
-	path, err := ctl.LockPath()
-	if err != nil {
-		return nil, err
-	}
-
-	lock, err := ctl.Acquire(path)
-	if err != nil {
-		return nil, fmt.Errorf("single-instance lock: %w", err)
-	}
-
-	return lock, nil
-}
-
-// prepareControlSocket binds the status-only control socket. Readiness is marked
-// only once the managers register theirs, so a client sees "starting", not unknown op.
-func prepareControlSocket(
-	ctx context.Context,
-	cfg *config.Config,
-	mgrs ctl.ManagerControl,
-) (*ctl.Server, error) {
-	path, err := ctl.SocketPath()
-	if err != nil {
-		return nil, err
-	}
-
-	srv, err := ctl.NewServer(ctx, path, version.Version, ctl.Deps{
-		Config:     cfg,
-		ConfigPath: config.DefaultUnifiedConfigFile,
-		Managers:   mgrs,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("control socket: %w", err)
-	}
-
-	return srv, nil
-}
-
-func serveControlSocket(ctx context.Context, srv *ctl.Server) {
-	go func() {
-		if err := srv.ServeStarting(ctx); err != nil {
-			logger.Named("ctl").Error("serve_failed", zap.Error(err))
-		}
-	}()
 }
