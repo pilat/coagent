@@ -21,14 +21,16 @@ const (
 	maxRequestBytes = 8 << 20
 )
 
-// Server owns both local API sockets and bounds shutdown of their calls.
+// Server owns the local API listeners and bounds shutdown of their calls.
 type Server struct {
-	statusListener net.Listener
-	apiListener    net.Listener
-	status         *http.Server
-	api            *http.Server
-	cancel         context.CancelFunc
-	ready          atomic.Bool
+	statusListener   net.Listener
+	apiListener      net.Listener
+	loopbackListener net.Listener
+	status           *http.Server
+	api              *http.Server
+	loopback         *http.Server
+	cancel           context.CancelFunc
+	ready            atomic.Bool
 }
 
 // Client binds a token hash to the capability its author may exercise.
@@ -48,12 +50,9 @@ func New(ctx context.Context, statusListener net.Listener, source StatusSource) 
 
 	mux := http.NewServeMux()
 	connecthttp.Mount(mux, server, connecthttp.WithReadMaxBytes(maxRequestBytes))
-	s.status = &http.Server{
-		DisableGeneralOptionsHandler: true,
-		Handler:                      mux,
-		ReadHeaderTimeout:            10 * time.Second,
-		BaseContext:                  func(net.Listener) context.Context { return base },
-	}
+	s.status = newHTTPServer(base, mux)
+	s.api = newHTTPServer(base, nil)
+	s.loopback = newHTTPServer(base, nil)
 
 	return s
 }
@@ -77,15 +76,18 @@ func (s *Server) AttachAPI(listener net.Listener, entries []Client) error {
 	connecthttp.Mount(mux, server, connecthttp.WithReadMaxBytes(maxRequestBytes))
 
 	s.apiListener = listener
-	s.api = &http.Server{
-		// net/http would otherwise answer OPTIONS * before the token check.
-		DisableGeneralOptionsHandler: true,
-		Handler:                      authenticate(clients, mux),
-		ReadHeaderTimeout:            10 * time.Second,
-		BaseContext:                  s.status.BaseContext,
-	}
+	s.api.Handler = authenticate(clients, mux)
 
 	return nil
+}
+
+// AttachLoopback requires a TCP listener and a successfully attached API handler.
+func (s *Server) AttachLoopback(listener net.Listener, origins []string) {
+	address := listener.Addr().String()
+	_, port, _ := net.SplitHostPort(address)
+	hosts := []string{address, "localhost:" + port}
+	s.loopbackListener = listener
+	s.loopback.Handler = browserGuard(hosts, origins, s.api.Handler)
 }
 
 // ServeStatus returns nil on an orderly shutdown through Close.
@@ -95,11 +97,20 @@ func (s *Server) ServeStatus() error {
 
 // ServeAPI returns immediately when no API listener is attached.
 func (s *Server) ServeAPI() error {
-	if s.api == nil {
+	if s.apiListener == nil {
 		return nil
 	}
 
 	return serve(s.api, s.apiListener)
+}
+
+// ServeLoopback returns immediately when unattached, or nil on orderly shutdown.
+func (s *Server) ServeLoopback() error {
+	if s.loopbackListener == nil {
+		return nil
+	}
+
+	return serve(s.loopback, s.loopbackListener)
 }
 
 // MarkReady makes status available after the managers have started.
@@ -113,20 +124,35 @@ func (s *Server) Close(ctx context.Context) error {
 	_ = s.status.Close()
 	_ = s.statusListener.Close()
 
-	if s.api == nil {
+	if s.apiListener == nil {
 		return nil
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, closeGrace)
 	defer cancel()
 
-	if err := s.api.Shutdown(ctx); err != nil {
-		_ = s.api.Close()
+	for _, server := range []*http.Server{s.api, s.loopback} {
+		if err := server.Shutdown(ctx); err != nil {
+			_ = server.Close()
+		}
 	}
 
 	_ = s.apiListener.Close()
+	if s.loopbackListener != nil {
+		_ = s.loopbackListener.Close()
+	}
 
 	return nil
+}
+
+func newHTTPServer(base context.Context, handler http.Handler) *http.Server {
+	return &http.Server{
+		// net/http would otherwise answer OPTIONS * before the token check.
+		DisableGeneralOptionsHandler: true,
+		Handler:                      handler,
+		ReadHeaderTimeout:            10 * time.Second,
+		BaseContext:                  func(net.Listener) context.Context { return base },
+	}
 }
 
 func serve(server *http.Server, listener net.Listener) error {

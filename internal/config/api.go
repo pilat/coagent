@@ -19,6 +19,10 @@ var (
 
 // APIConfig declares the clients allowed to use the local API.
 type APIConfig struct {
+	// Listen opts in to serving the local API on a loopback IP address and port.
+	Listen string `yaml:"listen,omitempty"`
+	// Origins lists the browser origins allowed to call the loopback listener.
+	Origins []string         `yaml:"origins,omitempty"`
 	Clients []APIClientEntry `yaml:"clients,omitempty"`
 }
 
@@ -36,6 +40,14 @@ func ValidAPIClientID(id string) bool {
 }
 
 func (c *UnifiedConfig) validateAPI() error {
+	if err := c.API.validateAPIListen(); err != nil {
+		return err
+	}
+
+	if err := c.API.validateAPIOrigins(); err != nil {
+		return err
+	}
+
 	ids := make(map[string]bool)
 	hashes := make(map[string]string)
 

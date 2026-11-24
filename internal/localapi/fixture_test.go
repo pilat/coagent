@@ -4,15 +4,12 @@ import (
 	"context"
 	"fmt"
 	"net"
-	"net/http"
 	"os"
 	"path/filepath"
 	"sync"
 	"testing"
 	"time"
 
-	"connectrpc.com/connect/v2"
-	"connectrpc.com/connect/v2/connecthttp"
 	"github.com/stretchr/testify/require"
 
 	"github.com/pilat/coagent/api/coagent/v1"
@@ -60,6 +57,8 @@ type apiServer struct {
 	statusSocket string
 	done         chan error
 	closed       bool
+	serving      int
+	addr         string
 }
 
 func (b *apiBackend) CreateSession(
@@ -166,18 +165,6 @@ func apiListener(t *testing.T) (net.Listener, string) {
 	return listener, path
 }
 
-func (f *apiFixture) serve(t *testing.T, listener net.Listener, socket string) *apiServer {
-	t.Helper()
-	statusListener, statusSocket := apiListener(t)
-	srv := New(t.Context(), statusListener, StatusSource{})
-	require.NoError(t, srv.AttachAPI(listener, f.clients()))
-	h := &apiServer{srv: srv, socket: socket, statusSocket: statusSocket, done: make(chan error, 2)}
-	go func() { h.done <- srv.ServeStatus() }()
-	go func() { h.done <- srv.ServeAPI() }()
-	t.Cleanup(func() { h.close(t) })
-	return h
-}
-
 func (f *apiFixture) clients() []Client {
 	clients := append([]Client(nil), f.entries...)
 	for i := range clients {
@@ -203,7 +190,7 @@ func (h *apiServer) close(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	require.NoError(t, h.srv.Close(ctx))
-	for range 2 {
+	for range h.serving {
 		select {
 		case err := <-h.done:
 			require.NoError(t, err)
@@ -211,30 +198,6 @@ func (h *apiServer) close(t *testing.T) {
 			t.Fatal("API Serve did not finish")
 		}
 	}
-}
-
-func (h *apiServer) httpClient(t *testing.T) *http.Client {
-	t.Helper()
-	transport := &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-		var dialer net.Dialer
-		return dialer.DialContext(ctx, "unix", h.socket)
-	}}
-	t.Cleanup(transport.CloseIdleConnections)
-	return &http.Client{Transport: transport}
-}
-
-func (h *apiServer) client(t *testing.T, authorization string) *connect.Client {
-	t.Helper()
-	return connect.NewClient(connecthttp.NewTransport(h.httpClient(t), "http://localapi"),
-		func(next connect.ClientFunc) connect.ClientFunc {
-			return func(ctx context.Context, spec connect.Spec) (connect.ClientStream, error) {
-				info, ok := connect.CallInfoForClientContext(ctx)
-				if ok && authorization != "" {
-					info.RequestHeader().Set("Authorization", authorization)
-				}
-				return next(ctx, spec)
-			}
-		})
 }
 
 func (f *apiFixture) root(t *testing.T, h *apiServer, owner string) int64 {

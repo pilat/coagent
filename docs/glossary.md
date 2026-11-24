@@ -36,9 +36,9 @@ producer ledgers and admission. `managercontrol`
 implements the in-process `controllerapi.Controller` over the daemon's command
 backend and reads persistence and subscriptions from their owners.
 Domain packages own durable ledgers; the daemon owns runner lifecycle and
-capacity counters. It binds no *network* socket — it listens only on same-user
-unix sockets: the **control socket** and, when API clients are configured, the
-**API socket**.
+capacity counters. It binds no *network* socket unless the operator sets
+`api.listen`, which binds the **loopback listener**. Its same-user Unix sockets
+are the **control socket** and, when API clients are configured, the **API socket**.
 _Avoid_: server, gateway.
 
 **session**:
@@ -153,12 +153,12 @@ _Avoid_: role, persona, mode (mode is a separate axis on the same config).
 `~/.coagent/daemon.sock`, mode 0600, served by `internal/localapi` with only
 `coagent.v1.DaemonService.GetStatus` and no token. It answers from the bind and
 reports starting (`Unavailable`) until the daemon is ready. A Unix socket is
-not a network listener; the "no inbound listener" rule is about the network.
+not a network listener; `api.listen` is the opt-in exception to the network listener rule.
 _Avoid_: RPC server, API server, IPC channel; local API (that is `coagent.v1` on the **API socket**).
 
 **local API**:
 `coagent.v1`, the daemon's public contract: the Protocol Buffers schema
-`api/coagent/v1/coagent.proto`, served with ConnectRPC on the **API socket** and
+`api/coagent/v1/coagent.proto`, served with ConnectRPC on the **API socket**, the **loopback listener** and
 over **in-process connections** by `internal/localapi`, with its one tokenless
 read, `DaemonService.GetStatus`, alone on the **control socket**. It exposes the two durable
 ledgers (keyed input into `session_inbox`, a tail of `session_outbox`), chat focus
@@ -180,8 +180,14 @@ _Avoid_: notification (the daemon-internal session event), push.
 
 **API socket**:
 `~/.coagent/api.sock`, mode 0600, bound only when `api.clients` is non-empty;
-every call carries a bearer token.
+every call carries a bearer token (for browsers, the **loopback listener** serves the same calls).
 _Avoid_: control socket (the other, anonymous status listener).
+
+**loopback listener**:
+The opt-in loopback TCP address `api.listen` binds, serving the API socket's
+handler behind the browser guard (`Host`, `Origin`, preflight), with a token on
+every call.
+_Avoid_: TCP port, HTTP server, web server.
 
 **API client**:
 One `api.clients` entry (`id`, `role`, `token_sha256`, optional `projects`) and the program holding its

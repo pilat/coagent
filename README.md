@@ -11,8 +11,9 @@ finishes or needs a decision.
 
 Accepted input, conversations, schedules, and subagent links are persisted in
 SQLite and recovered from durable boundaries after a restart. Telegram uses
-outbound polling; local control and the `coagent.v1` local API stay on same-user
-Unix sockets. There is no TCP listener, web UI or IDE extension.
+outbound polling; local control and the `coagent.v1` local API use same-user
+Unix sockets by default. There is no web UI or IDE extension, and no TCP listener
+unless you set `api.listen` (loopback only).
 
 > Interactive agents are built for steering. coagent is built for handoff.
 
@@ -148,10 +149,12 @@ deliberately narrow and explicit.
 
 What is enforced:
 
-- **No TCP listener.** Telegram is outbound-only. Local operations use same-user
+- **No TCP listener unless you set `api.listen`.** Telegram is outbound-only. Local operations use same-user
   Unix sockets created with mode `0600`: `~/.coagent/daemon.sock` for the tokenless `coagent status` read and,
   when API clients are configured, `~/.coagent/api.sock` for the local API, where
   every call carries a bearer token whose SHA-256 is in `config.yaml`.
+  `api.listen` binds a loopback address for browsers with the same token on every
+  call and an `Origin` allowlist. Every local user can connect, so the token is the boundary.
 - **Coagent-managed credentials are not injected into tool subprocesses.** The
   secrets file is parsed into memory rather than loaded into the environment.
   Ordinary environment variables inherited by the daemon remain visible to its
