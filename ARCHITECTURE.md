@@ -314,7 +314,7 @@ session commands and slash turn barriers; other sources reach the model as text.
 Queued read-only commands are resolved by the loop without a model call.
 A stopped root may consume a human read-only command at the FIFO head without
 reactivating; process and subagent facts ahead of that command remain parked.
-Agent input to a root starts its manager episode and activates a stopped root
+Agent input to a root starts its episode and activates a stopped root
 in the enqueue transaction, unless its budget has fired; it never releases a budget.
 Standalone scheduled work is a root-session capability: the daemon attaches
 `schedule` only to roots, while subagents retain `sleep` to resolve an existing

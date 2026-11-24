@@ -196,7 +196,7 @@ func (s *Store) CancelPendingInputsForStop(
 }
 
 // readOnlyCommandReceipts mirrors the recovery query's read-only set: these
-// inputs to a manager root answer the manager directly and owe no model reply.
+// inputs to a root answer the caller directly and owe no model reply.
 func readOnlyCommandReceipt(content string) bool {
 	trimmed := strings.TrimSpace(content)
 

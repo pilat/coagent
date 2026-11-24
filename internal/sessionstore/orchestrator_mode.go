@@ -7,7 +7,7 @@ import (
 	"fmt"
 )
 
-// SetOrchestrator changes only the mode on a live manager root, preserving other attributes.
+// SetOrchestrator changes only the mode on a live root, preserving other attributes.
 func (s *Store) SetOrchestrator(ctx context.Context, id int64, on bool) (bool, error) {
 	update := `json_remove(attributes, '$.orchestrator')`
 	predicate := `json_type(attributes, '$.orchestrator') = 'true'`
@@ -35,7 +35,7 @@ func (s *Store) SetOrchestrator(ctx context.Context, id int64, on bool) (bool, e
 	return changed != 0, err
 }
 
-// OrchestratorMode reads the mode only for a live manager root.
+// OrchestratorMode reads the mode only for a live root.
 func (s *Store) OrchestratorMode(ctx context.Context, id int64) (bool, error) {
 	var on bool
 

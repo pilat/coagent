@@ -16,7 +16,7 @@ func TestOutputStore_BootKillCloseIsAtomicWithKilledTransition(t *testing.T) {
 	ctx := context.Background()
 	store, db, projectID := newTestStore(t)
 
-	record, _, err := store.CreateManagerRoot(ctx, ManagerRootCreate{
+	record, _, err := store.CreateRoot(ctx, RootCreate{
 		ProjectID: projectID, Model: "model", Attributes: map[string]any{},
 		Name: "project", WorkDir: "/work/project",
 	})

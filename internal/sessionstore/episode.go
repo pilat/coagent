@@ -20,5 +20,5 @@ func activateAgentInputTx(ctx context.Context, tx *sql.Tx, id int64, at time.Tim
 		return nil
 	}
 
-	return activateManagerInputTx(ctx, tx, id, at)
+	return activateRootInputTx(ctx, tx, id, at)
 }

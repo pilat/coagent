@@ -9,15 +9,15 @@ import (
 	"time"
 )
 
-func (s *Store) CreateManagerRoot(
+func (s *Store) CreateRoot(
 	ctx context.Context,
-	create ManagerRootCreate,
+	create RootCreate,
 ) (*SessionRecord, *OutputCommit, error) {
 	var record *SessionRecord
 	var output *OutputCommit
 	err := s.WithTx(ctx, func(tx *sql.Tx) error {
 		var err error
-		record, output, err = createManagerRootTx(ctx, tx, create)
+		record, output, err = createRootTx(ctx, tx, create)
 
 		return err
 	})
@@ -25,10 +25,10 @@ func (s *Store) CreateManagerRoot(
 	return record, output, err
 }
 
-func createManagerRootTx(
+func createRootTx(
 	ctx context.Context,
 	tx *sql.Tx,
-	create ManagerRootCreate,
+	create RootCreate,
 ) (*SessionRecord, *OutputCommit, error) {
 	if create.ProjectID <= 0 || create.Name == "" || create.WorkDir == "" {
 		return nil, nil, errors.New("manager root requires project, name, and work dir")
@@ -40,7 +40,7 @@ func createManagerRootTx(
 
 	now := time.Now().UTC()
 
-	record, err := insertManagerRoot(ctx, tx, create, now)
+	record, err := insertRoot(ctx, tx, create, now)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -75,15 +75,15 @@ func createManagerRootTx(
 	return record, output, err
 }
 
-func (s *Store) ReplaceManagerRoot(
+func (s *Store) ReplaceRoot(
 	ctx context.Context,
 	oldSessionID int64,
 	name, workDir string,
 ) (*SessionRecord, *OutputCommit, error) {
-	return s.replaceManagerRoot(ctx, oldSessionID, 0, name, workDir)
+	return s.replaceRoot(ctx, oldSessionID, 0, name, workDir)
 }
 
-func (s *Store) ReplaceManagerRootForInput(
+func (s *Store) ReplaceRootForInput(
 	ctx context.Context,
 	oldSessionID, inputID int64,
 	name, workDir string,
@@ -92,10 +92,10 @@ func (s *Store) ReplaceManagerRootForInput(
 		return nil, nil, errors.New("manager root replacement requires command input")
 	}
 
-	return s.replaceManagerRoot(ctx, oldSessionID, inputID, name, workDir)
+	return s.replaceRoot(ctx, oldSessionID, inputID, name, workDir)
 }
 
-func (s *Store) replaceManagerRoot(
+func (s *Store) replaceRoot(
 	ctx context.Context,
 	oldSessionID, inputID int64,
 	name, workDir string,
@@ -135,7 +135,7 @@ func (s *Store) replaceManagerRoot(
 
 	delete(old.Attributes, TitleAttribute)
 
-	newRecord, err := insertManagerRoot(ctx, tx, ManagerRootCreate{
+	newRecord, err := insertRoot(ctx, tx, RootCreate{
 		ProjectID: old.ProjectID, Model: old.Model, ReasoningLevel: old.ReasoningLevel, Attributes: old.Attributes,
 	}, now)
 	if err != nil {
@@ -220,10 +220,10 @@ func replaceChatTx(ctx context.Context, tx *sql.Tx, oldID, newID, inputID int64,
 	return nil
 }
 
-func insertManagerRoot(
+func insertRoot(
 	ctx context.Context,
 	tx *sql.Tx,
-	create ManagerRootCreate,
+	create RootCreate,
 	now time.Time,
 ) (*SessionRecord, error) {
 	if create.Attributes == nil {

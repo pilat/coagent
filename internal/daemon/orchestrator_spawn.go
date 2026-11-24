@@ -68,8 +68,8 @@ func (h orchestratorHost) spawn(
 		attrs[controllerapi.SessionAttributeTitle] = title
 	}
 
-	return h.s.createManagerRoot(ctx, rootRequest{
-		Root: sessionstore.ManagerRootCreate{
+	return h.s.createRoot(ctx, rootRequest{
+		Root: sessionstore.RootCreate{
 			ProjectID: selected.ID, Name: selected.Name, WorkDir: selected.WorkDir,
 			Model: request.Model, ReasoningLevel: request.Effort, Attributes: attrs,
 			Input: sessionstore.Input{

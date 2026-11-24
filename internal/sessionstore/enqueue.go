@@ -104,7 +104,7 @@ func EnqueueTx(ctx context.Context, tx *sql.Tx, in Input) (*Enqueued, error) {
 			return &Enqueued{}, nil
 		}
 
-		if err := activateManagerInputTx(ctx, tx, in.SessionID, now); err != nil {
+		if err := activateRootInputTx(ctx, tx, in.SessionID, now); err != nil {
 			return nil, err
 		}
 	}
@@ -264,7 +264,7 @@ func isExactControlCommand(content string) bool {
 	}
 }
 
-func prepareManagerModelInputTx(ctx context.Context, tx *sql.Tx, id int64, now time.Time) error {
+func prepareRootModelInputTx(ctx context.Context, tx *sql.Tx, id int64, now time.Time) error {
 	if _, err := tx.ExecContext(ctx, `UPDATE sessions SET episode_started_at = ? WHERE id = ?
   AND (episode_started_at IS NULL OR status NOT IN ('active','suspended'))`, now, id); err != nil {
 		return fmt.Errorf("start autonomous episode: %w", err)
@@ -414,7 +414,7 @@ func prepareEnqueueAttributesTx(
 	}
 
 	if parentID == 0 && !isExactControlCommand(in.Content) {
-		if err := prepareManagerModelInputTx(
+		if err := prepareRootModelInputTx(
 			ctx,
 			tx,
 			in.SessionID,
@@ -427,8 +427,8 @@ func prepareEnqueueAttributesTx(
 	return attributes, nil
 }
 
-func activateManagerInputTx(ctx context.Context, tx *sql.Tx, id int64, at time.Time) error {
-	if err := startManagerEpisode(ctx, tx, id); err != nil {
+func activateRootInputTx(ctx context.Context, tx *sql.Tx, id int64, at time.Time) error {
+	if err := startRootEpisode(ctx, tx, id); err != nil {
 		return err
 	}
 

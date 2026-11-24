@@ -91,10 +91,10 @@ func TestOutputStore_MarkSessionKilledWithOutputCommitsBoth(t *testing.T) {
 	assertInputState(t, db, childInput.ID, InputStateCancelled)
 }
 
-func TestOutputStore_CreatesManagerRootWithLifecycleAndInitialInputAtomically(t *testing.T) {
+func TestOutputStore_CreatesRootWithLifecycleAndInitialInputAtomically(t *testing.T) {
 	ctx := context.Background()
 	store, db, projectID := newTestStore(t)
-	record, output, err := store.CreateManagerRoot(ctx, ManagerRootCreate{
+	record, output, err := store.CreateRoot(ctx, RootCreate{
 		ProjectID: projectID, Model: "model", Attributes: nil,
 		Input: Input{Source: InputSourceUser, Content: "start"}, Name: "project", WorkDir: "/work/project",
 	})
@@ -117,15 +117,15 @@ func TestOutputStore_CreatesManagerRootWithLifecycleAndInitialInputAtomically(t 
 	assert.False(t, episodeStartedAt.IsZero())
 }
 
-func TestOutputStore_CreatesManagerRootWithAgentInputAndCreatorWatch(t *testing.T) {
+func TestOutputStore_CreatesRootWithAgentInputAndCreatorWatch(t *testing.T) {
 	ctx := t.Context()
 	store, db, projectID := newTestStore(t)
-	watcher, _, err := store.CreateManagerRoot(ctx, ManagerRootCreate{
+	watcher, _, err := store.CreateRoot(ctx, RootCreate{
 		ProjectID: projectID, Model: "model", Attributes: nil,
 		Name: "project", WorkDir: "/work/project",
 	})
 	require.NoError(t, err)
-	record, output, err := store.CreateManagerRoot(ctx, ManagerRootCreate{
+	record, output, err := store.CreateRoot(ctx, RootCreate{
 		ProjectID: projectID, Model: "model", Attributes: nil,
 		Name: "project", WorkDir: "/work/project", Watcher: watcher.ID,
 		Input: Input{
@@ -163,15 +163,15 @@ func TestOutputStore_CreatesManagerRootWithAgentInputAndCreatorWatch(t *testing.
 	assert.Equal(t, 1, rows)
 }
 
-func TestOutputStore_ReplacesManagerRootWithOneLifecycleOutput(t *testing.T) {
+func TestOutputStore_ReplacesRootWithOneLifecycleOutput(t *testing.T) {
 	ctx := context.Background()
 	store, db, projectID := newTestStore(t)
-	old, _, err := store.CreateManagerRoot(ctx, ManagerRootCreate{
+	old, _, err := store.CreateRoot(ctx, RootCreate{
 		ProjectID: projectID, Model: "model", Attributes: nil,
 		Name: "project", WorkDir: "/work/project",
 	})
 	require.NoError(t, err)
-	newRecord, output, err := store.ReplaceManagerRoot(ctx, old.ID, "project", "/work/project")
+	newRecord, output, err := store.ReplaceRoot(ctx, old.ID, "project", "/work/project")
 	require.NoError(t, err)
 	require.NotZero(t, output.OutputID)
 
@@ -190,14 +190,14 @@ func TestOutputStore_ReplacesManagerRootWithOneLifecycleOutput(t *testing.T) {
 func TestOutputStore_ClearInputReplacesRootAndAcknowledgesAtomically(t *testing.T) {
 	ctx := context.Background()
 	store, db, projectID := newTestStore(t)
-	old, _, err := store.CreateManagerRoot(ctx, ManagerRootCreate{
+	old, _, err := store.CreateRoot(ctx, RootCreate{
 		ProjectID: projectID, Model: "model", Attributes: nil,
 		Name: "project", WorkDir: "/work/project",
 	})
 	require.NoError(t, err)
 	input, err := enqueueInput(ctx, store, old.ID, InputSourceUser, "/clear")
 	require.NoError(t, err)
-	newRecord, _, err := store.ReplaceManagerRootForInput(ctx, old.ID, input.ID, "project", "/work/project")
+	newRecord, _, err := store.ReplaceRootForInput(ctx, old.ID, input.ID, "project", "/work/project")
 	require.NoError(t, err)
 
 	var state string
@@ -271,19 +271,19 @@ func TestOutputStore_BootReconciliationEmitsCloseWithoutReplacement(t *testing.T
 	ctx := context.Background()
 	store, db, projectID := newTestStore(t)
 
-	killed, _, err := store.CreateManagerRoot(ctx, ManagerRootCreate{
+	killed, _, err := store.CreateRoot(ctx, RootCreate{
 		ProjectID: projectID, Model: "model", Attributes: nil,
 		Name: "project", WorkDir: "/work/project",
 	})
 	require.NoError(t, err)
 	require.NoError(t, store.UpdateSessionStatus(ctx, killed.ID, SessionStatusTerminating))
 
-	cleared, _, err := store.CreateManagerRoot(ctx, ManagerRootCreate{
+	cleared, _, err := store.CreateRoot(ctx, RootCreate{
 		ProjectID: projectID, Model: "model", Attributes: nil,
 		Name: "project", WorkDir: "/work/project",
 	})
 	require.NoError(t, err)
-	_, _, err = store.ReplaceManagerRoot(ctx, cleared.ID, "project", "/work/project")
+	_, _, err = store.ReplaceRoot(ctx, cleared.ID, "project", "/work/project")
 	require.NoError(t, err)
 
 	for _, id := range []int64{killed.ID, cleared.ID} {
@@ -329,15 +329,15 @@ func TestOutputStore_RejectsAssistantOutputAfterLifecycleFence(t *testing.T) {
 	require.ErrorIs(t, err, ErrSessionStopping)
 }
 
-func TestOutputStore_ResolvesManagerOwnedReplacementChain(t *testing.T) {
+func TestOutputStore_ResolvesRootReplacementChain(t *testing.T) {
 	ctx := context.Background()
 	store, _, projectID := newTestStore(t)
-	old, _, err := store.CreateManagerRoot(ctx, ManagerRootCreate{
+	old, _, err := store.CreateRoot(ctx, RootCreate{
 		ProjectID: projectID, Model: "model", Attributes: nil,
 		Name: "project", WorkDir: "/work/project",
 	})
 	require.NoError(t, err)
-	newRecord, _, err := store.ReplaceManagerRoot(ctx, old.ID, "project", "/work/project")
+	newRecord, _, err := store.ReplaceRoot(ctx, old.ID, "project", "/work/project")
 	require.NoError(t, err)
 	_, err = store.MarkSessionKilledWithOutput(ctx, old.ID, 0)
 	require.NoError(t, err)

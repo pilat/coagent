@@ -84,7 +84,7 @@ func TestSessionTitle_CreateAndClear(t *testing.T) {
 		if title != "" {
 			attrs[TitleAttribute] = title
 		}
-		root, _, err := store.CreateManagerRoot(t.Context(), ManagerRootCreate{
+		root, _, err := store.CreateRoot(t.Context(), RootCreate{
 			ProjectID:  project,
 			Name:       "test",
 			WorkDir:    "/project",
@@ -100,7 +100,7 @@ func TestSessionTitle_CreateAndClear(t *testing.T) {
 		assertSessionTitle(t, store, root.ID, want)
 		input, err := store.Enqueue(t.Context(), Input{SessionID: root.ID, Source: InputSourceUser, Content: "/clear"})
 		require.NoError(t, err)
-		replacement, _, err := store.ReplaceManagerRootForInput(
+		replacement, _, err := store.ReplaceRootForInput(
 			t.Context(),
 			root.ID,
 			input.Input.ID,

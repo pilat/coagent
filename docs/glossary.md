@@ -118,11 +118,8 @@ _Avoid_: controller, bot, adapter, integration; manager for an **API client**.
 **root**:
 A session with no parent (`parent_id = 0`). Every manager and operator API client lists, reads and writes
 it; an app's reach follows its project scope. It has an output log, titles, episodes and the chat, config and
-orchestrator surfaces. The identifiers
-`CreateManagerRoot`, `ManagerRootCreate`, `ReplaceManagerRoot`, `ReplaceManagerRootForInput`, `createManagerRoot`,
-`createManagerRootTx`, `insertManagerRoot`, `replaceManagerRoot`, `startManagerEpisode`, `prepareManagerModelInputTx`
-and `activateManagerInputTx` are historical names for a root, to be renamed. The "manager root" wording in this
-family's comments and error strings is historical too and will be renamed with it.
+orchestrator surfaces. Some error texts still say "manager root" or "manager session"; managers and API clients show
+error texts verbatim, so they keep their wording.
 _Avoid_: manager root, manager-owned root, owned root.
 
 **subagent**:

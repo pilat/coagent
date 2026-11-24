@@ -32,12 +32,11 @@ const (
 type boundaryFlow uint8
 
 type PendingInput struct {
-	ID           int64
-	Content      string
-	Attributes   map[string]any
-	ReceivedAt   time.Time
-	ManagerOwned bool
-	Source       sessionstore.InputSource
+	ID         int64
+	Content    string
+	Attributes map[string]any
+	ReceivedAt time.Time
+	Source     sessionstore.InputSource
 }
 
 type boundaryBatch struct {

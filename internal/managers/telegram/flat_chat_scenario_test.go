@@ -267,7 +267,7 @@ func createChatWork(t *testing.T, h *delayedTelegramHarness) int64 {
 	t.Helper()
 	project, err := h.sessions.GetOrCreateProject(t.Context(), h.workDir)
 	require.NoError(t, err)
-	root, _, err := h.sessions.CreateManagerRoot(t.Context(), sessionstore.ManagerRootCreate{
+	root, _, err := h.sessions.CreateRoot(t.Context(), sessionstore.RootCreate{
 		ProjectID: project, Model: "fake-model", Name: "project", WorkDir: h.workDir,
 		Attributes: map[string]any{},
 	})

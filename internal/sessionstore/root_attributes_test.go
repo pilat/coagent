@@ -7,9 +7,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestCreateManagerRootWithoutAttributesStoresAnEmptyObject(t *testing.T) {
+func TestCreateRootWithoutAttributesStoresAnEmptyObject(t *testing.T) {
 	store, db, project := newTestStore(t)
-	root, _, err := store.CreateManagerRoot(t.Context(), ManagerRootCreate{
+	root, _, err := store.CreateRoot(t.Context(), RootCreate{
 		ProjectID: project, Model: "model", Name: "test", WorkDir: "/project",
 	})
 	require.NoError(t, err)

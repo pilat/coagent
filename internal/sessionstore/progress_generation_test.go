@@ -71,7 +71,7 @@ func TestMessageAndLifecycleOutputsDoNotStampGeneration(t *testing.T) {
 	assert.NotContains(t, ownerAttrs(t, db, commit.OutputID), "model_input_generation")
 
 	// Lifecycle outputs carry no generation.
-	opened, _, err := store.CreateManagerRoot(ctx, sessionstore.ManagerRootCreate{
+	opened, _, err := store.CreateRoot(ctx, sessionstore.RootCreate{
 		ProjectID: projectID, Attributes: map[string]any{},
 		Name: "n", WorkDir: "/tmp/wd", Input: sessionstore.Input{Source: sessionstore.InputSourceUser, Content: "go"},
 	})

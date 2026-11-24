@@ -82,7 +82,7 @@ func (b *apiBackend) CreateSession(
 	if err != nil {
 		return 0, fmt.Errorf("load test project: %w", err)
 	}
-	root, _, err := b.store.CreateManagerRoot(ctx, sessionstore.ManagerRootCreate{
+	root, _, err := b.store.CreateRoot(ctx, sessionstore.RootCreate{
 		ProjectID: project, Model: model, Attributes: attrs, Name: "test", WorkDir: workDir,
 	})
 	if err != nil {

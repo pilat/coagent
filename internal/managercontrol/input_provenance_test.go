@@ -48,7 +48,7 @@ func (b *inputBackend) CreateSession(
 	prompt, model string,
 	attrs map[string]any,
 ) (int64, error) {
-	root, _, err := b.store.CreateManagerRoot(ctx, sessionstore.ManagerRootCreate{
+	root, _, err := b.store.CreateRoot(ctx, sessionstore.RootCreate{
 		ProjectID: project, Model: "model", Attributes: attrs, Name: "project", WorkDir: "/project",
 		Input: sessionstore.Input{Source: sessionstore.InputSourceUser, Content: prompt},
 	})

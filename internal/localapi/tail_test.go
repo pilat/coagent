@@ -87,7 +87,7 @@ func TestTailOutput_FollowsClearReplacement(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("tail did not check the old root's successor")
 	}
-	root, commit, err := f.store.ReplaceManagerRoot(t.Context(), id, "test", "/project")
+	root, commit, err := f.store.ReplaceRoot(t.Context(), id, "test", "/project")
 	require.NoError(t, err)
 	_, err = f.store.MarkSessionKilledWithOutput(t.Context(), id, 0)
 	require.NoError(t, err)

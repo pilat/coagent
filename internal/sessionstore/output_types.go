@@ -53,7 +53,7 @@ type OutputCommit struct {
 	LiveContent string
 }
 
-type ManagerRootCreate struct {
+type RootCreate struct {
 	ProjectID      int64
 	Model          string
 	ReasoningLevel string

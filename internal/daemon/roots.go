@@ -13,7 +13,7 @@ import (
 
 // rootRequest carries the differences between a human creation and an orchestrator spawn.
 type rootRequest struct {
-	Root        sessionstore.ManagerRootCreate
+	Root        sessionstore.RootCreate
 	Worktree    string // Forks Root's project into a fresh worktree the root runs in.
 	NoExecution bool
 	Start       bool // Launches the runner at once; a spawned root is woken by its first input instead.
@@ -50,8 +50,8 @@ func (s *Service) CreateSession(
 		return 0, fmt.Errorf("resolve project name: %w", err)
 	}
 
-	id, _, err := s.createManagerRoot(ctx, rootRequest{
-		Root: sessionstore.ManagerRootCreate{
+	id, _, err := s.createRoot(ctx, rootRequest{
+		Root: sessionstore.RootCreate{
 			ProjectID: projectID, Name: projectName, WorkDir: workDir,
 			Model: model, ReasoningLevel: level, Attributes: attrs,
 			Input: sessionstore.Input{Source: sessionstore.InputSourceUser, Content: prompt},
@@ -62,7 +62,7 @@ func (s *Service) CreateSession(
 	return id, err
 }
 
-func (s *Service) createManagerRoot(ctx context.Context, request rootRequest) (int64, string, error) {
+func (s *Service) createRoot(ctx context.Context, request rootRequest) (int64, string, error) {
 	root := request.Root
 
 	created, err := s.forkRootWorktree(ctx, &root, request)
@@ -70,7 +70,7 @@ func (s *Service) createManagerRoot(ctx context.Context, request rootRequest) (i
 		return 0, "", err
 	}
 
-	record, _, err := s.store.CreateManagerRoot(ctx, root)
+	record, _, err := s.store.CreateRoot(ctx, root)
 	if err != nil {
 		return 0, "", fmt.Errorf("create manager root: %w", created.Abandon(err))
 	}
@@ -86,7 +86,7 @@ func (s *Service) createManagerRoot(ctx context.Context, request rootRequest) (i
 
 func (s *Service) forkRootWorktree(
 	ctx context.Context,
-	root *sessionstore.ManagerRootCreate,
+	root *sessionstore.RootCreate,
 	request rootRequest,
 ) (worktree.Result, error) {
 	if request.Worktree == "" {
