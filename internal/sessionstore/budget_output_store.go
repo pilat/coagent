@@ -273,11 +273,10 @@ func budgetOutputByKey(
 	rootID, generation int64,
 ) (*OutputCommit, error) {
 	var id int64
-	var owner string
 
-	err := tx.QueryRowContext(ctx, `SELECT id, json_extract(attributes, '$.manager_id')
+	err := tx.QueryRowContext(ctx, `SELECT id
 		FROM session_outbox WHERE session_id = ? AND source_key = ?`,
-		rootID, fmt.Sprintf("budget:%d:checkpoint", generation)).Scan(&id, &owner)
+		rootID, fmt.Sprintf("budget:%d:checkpoint", generation)).Scan(&id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrOutputConflict
 	}
@@ -286,7 +285,7 @@ func budgetOutputByKey(
 		return nil, fmt.Errorf("load budget checkpoint output: %w", err)
 	}
 
-	return &OutputCommit{OutputID: id, OwnerID: owner, Existing: true}, nil
+	return &OutputCommit{OutputID: id, Existing: true}, nil
 }
 
 func (s *Store) listBudgets(ctx context.Context, suffix string) ([]*budget.Record, error) {

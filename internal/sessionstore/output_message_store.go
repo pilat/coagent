@@ -49,7 +49,7 @@ func insertOutputTx(ctx context.Context, tx *sql.Tx, draft OutputDraft, mode Com
 		}
 	}
 
-	if err := validateLifecycleTarget(ctx, tx, draft, owner); err != nil {
+	if err := validateLifecycleTarget(ctx, tx, draft); err != nil {
 		return nil, err
 	}
 
@@ -77,17 +77,17 @@ func insertOutputTx(ctx context.Context, tx *sql.Tx, draft OutputDraft, mode Com
 			return nil, fmt.Errorf("output id: %w", idErr)
 		}
 
-		return &OutputCommit{OutputID: id, OwnerID: owner, Content: draft.Content}, nil
+		return &OutputCommit{OutputID: id, Content: draft.Content}, nil
 	}
 
 	if draft.SourceKey == "" || !isUniqueConstraintError(err) {
 		return nil, fmt.Errorf("insert output: %w", err)
 	}
 
-	return existingOutputTx(ctx, tx, draft, owner)
+	return existingOutputTx(ctx, tx, draft)
 }
 
-func existingOutputTx(ctx context.Context, tx *sql.Tx, draft OutputDraft, owner string) (*OutputCommit, error) {
+func existingOutputTx(ctx context.Context, tx *sql.Tx, draft OutputDraft) (*OutputCommit, error) {
 	var existingID int64
 	var content string
 
@@ -97,5 +97,5 @@ func existingOutputTx(ctx context.Context, tx *sql.Tx, draft OutputDraft, owner 
 		return nil, fmt.Errorf("load existing output: %w", err)
 	}
 
-	return &OutputCommit{OutputID: existingID, OwnerID: owner, Existing: true, Content: content}, nil
+	return &OutputCommit{OutputID: existingID, Existing: true, Content: content}, nil
 }

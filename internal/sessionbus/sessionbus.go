@@ -14,28 +14,24 @@ const subscriberBufferSize = 64
 
 // Bus publishes session notifications to session, manager and global subscribers.
 type Bus struct {
-	mu       sync.RWMutex
-	subs     map[int64][]chan sessionevent.Notification // per-session subscribers
-	globals  []chan controllerapi.SessionNotification   // wildcard subscribers (carry session ID)
-	managers map[string][]chan controllerapi.SessionNotification
+	mu           sync.RWMutex
+	subs         map[int64][]chan sessionevent.Notification // per-session subscribers
+	globals      []chan controllerapi.SessionNotification   // wildcard subscribers (carry session ID)
+	managerRoots []chan controllerapi.SessionNotification
 }
 
 func New() *Bus {
 	return &Bus{
-		subs:     make(map[int64][]chan sessionevent.Notification),
-		managers: make(map[string][]chan controllerapi.SessionNotification),
+		subs: make(map[int64][]chan sessionevent.Notification),
 	}
 }
 
-// SubscribeManager receives only sessions durably owned by managerID.
-func (ps *Bus) SubscribeManager(managerID string) <-chan controllerapi.SessionNotification {
+// SubscribeManagerRoots receives every manager root's events.
+func (ps *Bus) SubscribeManagerRoots() <-chan controllerapi.SessionNotification {
 	ch := make(chan controllerapi.SessionNotification, subscriberBufferSize)
-	if managerID == "" {
-		return ch
-	}
 
 	ps.mu.Lock()
-	ps.managers[managerID] = append(ps.managers[managerID], ch)
+	ps.managerRoots = append(ps.managerRoots, ch)
 	ps.mu.Unlock()
 
 	return ch
@@ -96,38 +92,32 @@ func (ps *Bus) UnsubscribeAll(ch <-chan controllerapi.SessionNotification) {
 	}
 }
 
-// UnsubscribeManager removes a manager-scoped subscriber. It does not close it.
-func (ps *Bus) UnsubscribeManager(ch <-chan controllerapi.SessionNotification) {
+// UnsubscribeManagerRoots removes a manager-root subscriber without closing it.
+func (ps *Bus) UnsubscribeManagerRoots(ch <-chan controllerapi.SessionNotification) {
 	ps.mu.Lock()
 	defer ps.mu.Unlock()
 
-	for managerID, subscribers := range ps.managers {
-		for i, subscriber := range subscribers {
-			if subscriber != ch {
-				continue
-			}
-
-			ps.managers[managerID] = append(subscribers[:i], subscribers[i+1:]...)
-			if len(ps.managers[managerID]) == 0 {
-				delete(ps.managers, managerID)
-			}
-
-			return
+	for i, subscriber := range ps.managerRoots {
+		if subscriber == ch {
+			ps.managerRoots = append(ps.managerRoots[:i], ps.managerRoots[i+1:]...)
+			break
 		}
 	}
 }
 
-// Publish fans an event out to observers and to the session's one owning
-// manager. An empty owner reaches no manager subscription.
-func (ps *Bus) Publish(sessionID int64, managerID string, n sessionevent.Notification) {
+// Publish fans an event out to observers and, for a manager root, to every manager-root subscriber.
+func (ps *Bus) Publish(sessionID int64, managerRoot bool, n sessionevent.Notification) {
 	log := logger.Named("sessionbus")
 
 	ps.mu.RLock()
 	perSession := append([]chan sessionevent.Notification(nil), ps.subs[sessionID]...)
 	globals := append([]chan controllerapi.SessionNotification(nil), ps.globals...)
-	managerSubscribers := append(
-		[]chan controllerapi.SessionNotification(nil), ps.managers[managerID]...,
-	)
+	var managerSubscribers []chan controllerapi.SessionNotification
+
+	if managerRoot {
+		managerSubscribers = append(managerSubscribers, ps.managerRoots...)
+	}
+
 	ps.mu.RUnlock()
 
 	for _, ch := range perSession {
@@ -163,7 +153,6 @@ func (ps *Bus) Publish(sessionID int64, managerID string, n sessionevent.Notific
 			log.Warn(
 				"pubsub_slow_manager_subscriber",
 				zap.Int64("session_id", sessionID),
-				zap.String("manager_id", managerID),
 				zap.String("type", string(n.Type)),
 			)
 		}

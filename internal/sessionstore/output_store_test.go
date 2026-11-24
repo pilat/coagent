@@ -350,7 +350,7 @@ func TestOutputStore_ResolvesManagerOwnedReplacementChain(t *testing.T) {
 	_, err = store.MarkSessionKilledWithOutput(ctx, old.ID, 0)
 	require.NoError(t, err)
 
-	resolved, err := store.ResolveReplacement(ctx, old.ID, "telegram-test")
+	resolved, err := store.ResolveReplacement(ctx, old.ID)
 	require.NoError(t, err)
 	assert.Equal(t, newRecord.ID, resolved)
 }

@@ -64,8 +64,7 @@ func (s *Store) CompleteExplicitStop(
 		return nil, fmt.Errorf("%w: session %d", ErrStopNotStopping, rootID)
 	}
 
-	owner, err := outputOwner(ctx, tx, rootID)
-	if err != nil {
+	if _, err := outputOwner(ctx, tx, rootID); err != nil {
 		return nil, err
 	}
 
@@ -80,7 +79,7 @@ func (s *Store) CompleteExplicitStop(
 		return nil, fmt.Errorf("commit explicit stop completion: %w", err)
 	}
 
-	return &OutputCommit{OutputID: outputID, OwnerID: owner}, nil
+	return &OutputCommit{OutputID: outputID}, nil
 }
 
 func (s *Store) SelectInterruptedExplicitStops(

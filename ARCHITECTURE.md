@@ -40,7 +40,7 @@ coagent status ── status-only control socket ──────────�
 
 A manager submits work as a session. A session owns one agent-loop activation:
 its model client, tool registry, prompt projection, and conversation handling.
-Each manager chat selects one owned root through `/switch`, or has no session
+Each manager chat selects one root through `/switch`, or has no session
 in focus. Selected roots' messages and tool trails reach the chat through
 output-log reads.
 The daemon coordinates work that crosses sessions, survives a process restart,
@@ -165,12 +165,12 @@ then keys durable replacement and idempotent final output.
 Boundary commits accept pending inbox rows only; resubmitting an accepted input
 fails with `ErrInputResolved` and rolls back the whole step.
 
-Manager-owned roots append messages and lifecycle facts to `session_outbox` in
+Manager roots append messages and lifecycle facts to `session_outbox` in
 the same transaction as their transcript/control effects. Its closed vocabulary
 is `message`, `session_opened`, `session_replaced` and `session_closed`.
-Rows keep their owner and stable source-key identity; there are no
+Rows keep a stable source-key identity; there are no
 attempts, transport receipts, delivery states or external-message edits.
-Every accepted tool-calling step of a manager-owned root publishes one message:
+Every accepted tool-calling step of a manager root publishes one message:
 model text when present, then a tool trail, including steps with no text.
 Subagents publish nothing. The trail stays out of the model transcript.
 Confirmed finals and compaction/stop notices also append;
@@ -182,7 +182,7 @@ An API client's input carries its idempotency key as the inbox delivery key
 per-session delivery-key uniqueness producers already use. A tailing client holds its
 own output-log position; only `ChatService` calls store one, as a chat's cursor in `chat_focus`.
 
-Each `chat_focus` row holds one manager/chat's selection and
+Each `chat_focus` row holds one manager or API client/chat's selection and
 `last_sent_id`. A NULL session means no focus; a NULL cursor means entry is
 owed. Every selection write, including a re-switch to the same root, resets
 the cursor to NULL. Root replacement transfers every focus and resets its cursor
@@ -254,12 +254,11 @@ marketplace content is loadable instruction/definition data, not executable
 code with privileged integration rights. New managers and drivers are source
 contributions governed by the internal dependency graph.
 
-Each root created by a manager or API client carries one durable owner ID. The
-composition root binds the local API server's controller capability to each manager
-and API client ID, which config validation keeps distinct: creation stamps it, every
-session-addressed operation checks it, and subscriptions deliver only that
-owner's events. Driver and channel names cannot route ownership
-because several configured managers may share them.
+Each root created by a manager or API client carries `manager_id`, which marks a
+manager root and names its creator; nothing compares it. Every bound controller
+reaches every manager root, and its id keys only its chat rows. Config validation
+keeps manager and API client ids distinct
+([ADR-0106](docs/adr/0106-one-operator-every-surface-reaches-every-root.md)).
 
 Agent-type policy is immutable after construction. Registry inputs and returned
 configs are copied so a caller cannot mutate global capability policy or another
@@ -299,7 +298,7 @@ task. Resume uses those stored rows unchanged; the system prompt contains only
 stable environment and registry context, while new timestamped input carries
 local time, zone abbreviation and numeric offset.
 The session boundary resolves FIFO inbox rows and command outputs in one commit.
-After acceptance commits, a matching manager-owned human command creates a
+After acceptance commits, a matching human command on a manager root creates a
 one-turn grant held only by the running session. Its turn blocks later input;
 the first matching mutation's receipt spends it. An unspent grant produces a
 releasing unchanged notice at run end; cancellation or restart simply loses it.
@@ -406,7 +405,7 @@ the model retries explicitly. A stopped link is retained for explicit follow-up
 but is not automatically resumed.
 `/stop` is stronger than an ordinary interruption: it fences an active tree,
 cancels and joins its runners, settles each active unresolved call in the
-append-only transcript, and only then parks it. An explicit manager-owned stop
+append-only transcript, and only then parks it. An explicit stop on a manager root
 appends a start message with the fence and, after every descendant
 obligation settles, one terminal transaction releases an armed budget, moves the
 root to `stopped`, and appends a separate completion message; failure leaves
@@ -533,7 +532,7 @@ completion committed later observes the killed root and suppresses its handoff.
 Clear uses the same killed-tree boundary.
 Status and events expose stable IDs, state, timing, size, path and bounded text
 previews, never raw command text or complete output. The deliberate exception is
-a manager-owned root's step message and its `NotifyMessage` event to the owning manager:
+a manager root's step message and its `NotifyMessage` event to every surface:
 its tool trail includes the bash command after registered-secret redaction and
 clipping to 80 runes. `/status`, process status/previews and other event kinds
 keep the invariant ([ADR-0073](docs/adr/0073-chat-shows-where-each-message-comes-from-and-every-model-step.md)).
@@ -548,7 +547,7 @@ Neither package publishes automatic output or owns delivery readiness. The
 daemon publishes idle for a completed, parked, stopped or killed root when its
 runner is no longer active, regardless of whether its output has been sent.
 
-`/budget` grants one exact manager-owned human input authority to arm, replace or clear
+On a manager root, `/budget` grants one exact human input authority to arm, replace or clear
 a one-shot root-tree cost/duration checkpoint. The budget mutation and its keyed
 receipt share a transaction; the session spends its in-memory grant once it executes.
 Model responses and successful
@@ -734,10 +733,8 @@ notifications to reconstitute state. Startup may re-arm unfinished producer
 work, but it must validate exact delivery ownership before making a transcript
 mutation.
 
-Only root sessions publish session events to managers, and each event reaches
-only the subscription matching the session's durable manager owner. Ownerless
-sessions fail closed. Subagent events remain inside their tree; parent
-completion is the explicit cross-boundary signal.
+Root session events reach every manager-root subscription. Ownerless sessions and
+subagents reach none; parent completion is the explicit cross-boundary signal.
 The daemon resolves and caches that route; `sessionbus` owns subscriber state
 and bounded non-blocking fan-out after the route is known.
 Managers receive wake hints through `StreamSessionEvents`, fed by the local API server's
@@ -749,11 +746,11 @@ reading the output log. The control socket carries no event traffic or server pu
 
 ### Orchestrator boundary
 
-Orchestrator mode is a durable attribute on an ordinary manager-owned root,
+Orchestrator mode is a durable attribute on an ordinary manager root,
 granted and revoked only by a human through `/orchestrate on|off` in a chat or
 `SetOrchestratorMode` from an operator client; it survives restart and `/clear`.
-From its next run, that root alone gets list, send, spawn, read, subscribe, unsubscribe, stop and kill tools, with mode and
-ownership checked on every call; its subagents and targets receive no new tool.
+From its next run, that root alone gets list, send, spawn, read, subscribe, unsubscribe, stop and kill tools,
+reaching every manager root, with mode checked on every call; its subagents and targets receive no new tool.
 Sent messages carry host-authored sender provenance at acceptance and appear in
 the target's chat. Their authority is plain text: no commands, grants, skill
 expansion, budget release or title naming. A send wakes a stopped root but refuses
@@ -916,8 +913,7 @@ non-empty. It serves the full `coagent.v1` surface with ConnectRPC over HTTP/1.1
 Every call carries `Authorization: Bearer <token>`. The daemon keeps only each client's
 SHA-256 token hash from `config.yaml`. The server checks the token in front of
 the RPC layer on every request to the socket, compares in constant time, and
-removes the bearer value from the request before any handler runs. It binds
-each authenticated call to that client's id through the manager-bound controller. A sandboxed
+removes the bearer value from the request before any handler runs. A sandboxed
 session can connect through the read-only host bind, so the token, not the
 socket mode, is the boundary. The token authenticates an author and grants
 nothing itself: as everywhere in the core, authority follows the source the
@@ -970,7 +966,7 @@ model-invocable skill plus arguments. The parent resolves and renders that skill
 before creating the subagent, then sends the canonical envelope through the
 child's ordinary initial-input path; the child does not rediscover it by name.
 
-Every manager-owned root exposes `config_read` and `config_edit` under the
+Every manager root exposes `config_read` and `config_edit` under the
 same one-turn `/config` grant. Unowned roots receive neither tool. Only edit
 declares the activation route; read returns the exact trusted configuration document without consuming the grant.
 An edit replaces the complete document, restarts, boot-validates and rolls back
@@ -988,7 +984,7 @@ per-task execution and SQLite transaction ownership. The daemon supplies owner
 tools to session assembly and routes session events. `managercontrol` implements
 the manager controller over the daemon's command backend and reads persistence
 and subscriptions directly from their owners. The daemon creates every new
-manager-owned root through one path, whoever asks: the human's `/new`, `/spawn`
+manager root through one path, whoever asks: the human's `/new`, `/spawn`
 and `/gwt` through the controller, or an orchestrator's `spawn_session`. A
 `/clear` replacement root is written by its own replacement transaction instead.
 An optional fresh worktree comes first (guarded no-execution only for a spawn),
@@ -1018,7 +1014,7 @@ transcript context. The loop receives those prepared values and emits live
 notifications through its sole outward events port. Final answer notifications
 retain the raw answer; durable manager messages carry the same unadorned text.
 Work-step messages and their live notifications include the same tool trail;
-session assembly enables this policy for every manager-owned root.
+session assembly enables this policy for every manager root.
 Scheduled announcements, sent messages and tool direct outputs reach managers only through
 the outbox; their commit metadata excludes them from live message events.
 Ownerless sessions publish live answers without creating manager outbox rows.
@@ -1036,7 +1032,7 @@ The session reads pending inbox rows directly and reloads the active transcript
 after every step commit. Stop commits unresolved-call
 failures without status or output changes, then finishes
 the stop and cancels
-producer obligations. Explicit stop completes the manager-owned root atomically
+producer obligations. Explicit stop completes the manager root atomically
 with its terminal output; pending schedules or later agent input can then reactivate it.
 Boot finishes interrupted lifecycle operations and process interruptions,
 reconciles armed budgets, parking any that fired while the daemon was down,
@@ -1227,7 +1223,7 @@ Config owns parsing and secret-sink resolution; config operations own
 whole-document staging that accepts literal credential values and `${VAR}`
 references alike, backup retention and pending-apply recovery. Config apply owns
 the agent-facing schema and strict argument parsing; the `/config`
-read/edit tools register on every manager-owned root; an edit commits only
+read/edit tools register on every manager root; an edit commits only
 under the running session's one-turn `/config` grant. Config apply owns the
 process-wide commit claim and restart channel. The tool writes synchronously
 and returns an ordinary result and receipt; the daemon gates tool availability
@@ -1250,7 +1246,7 @@ helpers with no durable protocol ownership.
 The manager coordinator isolates manager failures and opens each manager's
 in-process connection. Telegram calls `coagent.v1`; its chat port adapts
 `ChatService`, `OutputService` and `SessionService` calls to the small local ports
-owned by `managerdelivery`. `managercontrol` owns ownership,
+owned by `managerdelivery`. `managercontrol` owns manager-root validation,
 liveness validation, DTO conversion, focus/cursor operations and project resolution;
 `managerdiscovery` owns project, model, skill and spawn-favorites discovery. The
 composition root supplies the daemon backend, store, discovery and session bus.
@@ -1265,17 +1261,17 @@ exactly one local line:
 transcribed and media is not downloaded. `/new`, `/spawn`, `/sessions`,
 `/switch N`, numbered `/kill N` and `/stop N`, `/help` and `/start` remain
 available; help omits session skills without focus.
-`/switch` selects only positive live owned root IDs, accepting one leading
+`/switch` selects only positive live root IDs, accepting one leading
 `#`, as numbered kill and stop do. Commands and media route to the durable
 focus; heartbeats type only for the loop's positive focused root. `/config`
-uses the selected manager-owned root's ordinary activation grant.
+uses the selected manager root's ordinary activation grant.
 
-Manager-owned roots carry a one-line session title in their attributes. The first inserted
+Manager roots carry a one-line session title in their attributes. The first inserted
 non-command user input names an untitled root atomically with its inbox row;
 `/title` renames the focused root, and `/clear` starts untitled. Titles do not
 change activity order. Session summaries, entry headers and delivered rows share
 the display name `<project> · <title>`, or `<project>` when untitled.
-`/sessions` lists live owned roots by newest activity, ties by descending ID.
+`/sessions` lists live manager roots by newest activity, ties by descending ID.
 Activity is the later timestamp of the newest output and newest user/agent
 inbox row, falling back to creation for empty roots. It marks the focus with
 ` ◀` and scheduled roots with ` ⏰`, shows at most 30 lines, then `… and N more`.

@@ -76,7 +76,11 @@ func (s *service) sendSessionMessage(
 	managerID string,
 	data controllerapi.SessionMessageData,
 ) error {
-	if err := s.requireOwnedSession(ctx, managerID, data.SessionID); err != nil {
+	if err := requireManagerIdentity(managerID); err != nil {
+		return err
+	}
+
+	if _, err := s.managerRoot(ctx, data.SessionID); err != nil {
 		return err
 	}
 
@@ -96,6 +100,10 @@ func (s *service) listSessions(
 	ctx context.Context,
 	managerID string,
 ) ([]controllerapi.SessionInfo, error) {
+	if err := requireManagerIdentity(managerID); err != nil {
+		return nil, err
+	}
+
 	records, err := s.store.ListSessions(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("list sessions: list sessions: %w", err)
@@ -103,7 +111,7 @@ func (s *service) listSessions(
 
 	infos := make([]controllerapi.SessionInfo, 0, len(records))
 	for _, record := range records {
-		if !s.canListSession(ctx, managerID, record) {
+		if record.ParentID != 0 || !controllerapi.ManagerRoot(record.Attributes) {
 			continue
 		}
 
@@ -126,7 +134,11 @@ func (s *service) setSessionModel(
 	managerID string,
 	data controllerapi.SessionSetModelData,
 ) error {
-	if err := s.requireOwnedSession(ctx, managerID, data.SessionID); err != nil {
+	if err := requireManagerIdentity(managerID); err != nil {
+		return err
+	}
+
+	if _, err := s.managerRoot(ctx, data.SessionID); err != nil {
 		return err
 	}
 
@@ -142,7 +154,7 @@ func (s *service) subscribe(managerID string) <-chan controllerapi.SessionNotifi
 		return make(chan controllerapi.SessionNotification)
 	}
 
-	return s.bus.SubscribeManager(managerID)
+	return s.bus.SubscribeManagerRoots()
 }
 
 func (s *service) publishInputReceived(sessionID int64, message, source string) {

@@ -21,7 +21,7 @@ type rootRequest struct {
 }
 
 // CreateSession creates and starts a root, optionally in a fresh worktree.
-// A manager-owned root commits its opened row and first input with the session.
+// A manager root commits its opened row and first input with the session.
 func (s *Service) CreateSession(
 	ctx context.Context,
 	projectID int64,
@@ -42,8 +42,7 @@ func (s *Service) CreateSession(
 		return 0, fmt.Errorf("resolve reasoning level for model %s: %w", model, err)
 	}
 
-	owner, _ := attrs[controllerapi.SessionAttributeManagerID].(string)
-	if owner != "" {
+	if controllerapi.ManagerRoot(attrs) {
 		projectName, err := s.store.GetProjectName(ctx, projectID)
 		if err != nil {
 			return 0, fmt.Errorf("resolve project name: %w", err)

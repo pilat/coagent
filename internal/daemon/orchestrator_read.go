@@ -14,16 +14,16 @@ func (h orchestratorHost) ReadSession(
 	callerID, targetID int64,
 	latest bool,
 ) (orchestrator.Page, error) {
-	_, owner, err := h.caller(ctx, callerID)
+	_, err := h.caller(ctx, callerID)
 	if err != nil {
 		return orchestrator.Page{}, err
 	}
 
-	if err := h.rootTarget(ctx, owner, targetID); err != nil {
+	if err := h.rootTarget(ctx, targetID); err != nil {
 		return orchestrator.Page{}, err
 	}
 
-	chain, err := h.s.store.ReplacementChain(ctx, targetID, owner)
+	chain, err := h.s.store.ReplacementChain(ctx, targetID)
 	if err != nil {
 		return orchestrator.Page{}, fmt.Errorf("resolve read target: %w", err)
 	}

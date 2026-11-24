@@ -9,13 +9,12 @@ import (
 	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/logger"
 	"github.com/pilat/coagent/internal/sessionevent"
-	"github.com/pilat/coagent/internal/sessionstore"
 )
 
 type routes struct {
-	mu    sync.Mutex
-	child map[int64]bool
-	owner map[int64]string
+	mu          sync.Mutex
+	child       map[int64]bool
+	managerRoot map[int64]bool
 }
 
 type sessionEvents struct {
@@ -43,7 +42,7 @@ func (s *Service) publish(sessionID int64, n sessionevent.Notification) {
 		return
 	}
 
-	isChild, managerID, known := s.routes.lookup(sessionID)
+	isChild, managerRoot, known := s.routes.lookup(sessionID)
 	if !known {
 		// Background: NotifySession carries no ctx, and inheriting a caller's dead
 		// one would fail the check and mis-drop.
@@ -54,52 +53,46 @@ func (s *Service) publish(sessionID int64, n sessionevent.Notification) {
 				zap.Int64("session_id", sessionID),
 				zap.Error(err),
 			)
-			s.bus.Publish(sessionID, "", n)
+			s.bus.Publish(sessionID, false, n)
 
 			return
 		}
 
 		isChild = rec.ParentID != 0
-		managerID, _ = rec.Attributes[controllerapi.SessionAttributeManagerID].(string)
-		managerID = s.routes.cache(sessionID, isChild, managerID)
+		managerRoot = controllerapi.ManagerRoot(rec.Attributes)
+		managerRoot = s.routes.cache(sessionID, isChild, managerRoot)
 	}
 
 	if isChild {
 		return
 	}
 
-	s.bus.Publish(sessionID, managerID, n)
+	s.bus.Publish(sessionID, managerRoot, n)
 }
 
-// lookupPublishRoute reports the immutable root/owner route for a session.
-func (r *routes) lookup(sessionID int64) (bool, string, bool) {
+// lookupPublishRoute reports the immutable root/marker route for a session.
+func (r *routes) lookup(sessionID int64) (bool, bool, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	isChild, known := r.child[sessionID]
-	managerID := r.owner[sessionID]
+	managerRoot := r.managerRoot[sessionID]
 
-	return isChild, managerID, known
+	return isChild, managerRoot, known
 }
 
-func (r *routes) cache(sessionID int64, isChild bool, managerID string) string {
+func (r *routes) cache(sessionID int64, isChild, managerRoot bool) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	if cachedOwner, known := r.owner[sessionID]; known {
-		managerID = cachedOwner
+	if cached, known := r.managerRoot[sessionID]; known {
+		managerRoot = cached
 	}
 
 	r.child[sessionID] = isChild
-	r.owner[sessionID] = managerID
+	r.managerRoot[sessionID] = managerRoot
 
-	return managerID
-}
-
-func ownerlessSession(record *sessionstore.SessionRecord) bool {
-	owner, _ := record.Attributes[controllerapi.SessionAttributeManagerID].(string)
-
-	return owner == ""
+	return managerRoot
 }
 
 func (e *sessionEvents) Emit(n sessionevent.Notification) {

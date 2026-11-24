@@ -1,6 +1,6 @@
 # ADR-0023: Session events are routed to one owning manager
 
-- **Status:** Accepted
+- **Status:** Superseded by [ADR-0106](0106-one-operator-every-surface-reaches-every-root.md)
 - **Date:** 2026-08-19
 
 ## Context

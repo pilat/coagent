@@ -107,10 +107,6 @@ func TestHarnessScenario_ReplaySelectsFirstOwnedMessageAndSkipsOtherTails(t *tes
 	assert.Equal(t, "<b>→ #2 &lt;name&gt;</b>", calls[0].Text)
 	assert.Equal(t, "<b>#2 &lt;name&gt;</b>\n\nselected first", calls[1].Text)
 	assert.Equal(t, "<b>#2 &lt;name&gt;</b>\n\nselected second", calls[2].Text)
-	controller := &fakeController{managerID: replayManagerID, listSessions: []controllerapi.SessionInfo{
-		{ID: 1, Attributes: map[string]any{"manager_id": "foreign"}},
-	}}
-	require.EqualError(t, controller.SetChatFocus(t.Context(), "chat", 1), "#1 is not a live session")
 }
 
 func replayDaemonTraceThroughOutbox(t *testing.T, trace harnessTraceFile) []telegramHarnessCall {

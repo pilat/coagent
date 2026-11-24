@@ -17,30 +17,15 @@ func requireManagerIdentity(managerID string) error {
 	return nil
 }
 
-func (s *service) requireOwnedSession(ctx context.Context, managerID string, sessionID int64) error {
-	if err := requireManagerIdentity(managerID); err != nil {
-		return err
-	}
-
+func (s *service) managerRoot(ctx context.Context, sessionID int64) (*sessionstore.SessionRecord, error) {
 	record, err := s.store.GetSession(ctx, sessionID)
 	if err != nil || record == nil {
-		return fmt.Errorf("session %d not found", sessionID)
+		return nil, fmt.Errorf("session %d not found", sessionID)
 	}
 
-	owner, _ := record.Attributes[controllerapi.SessionAttributeManagerID].(string)
-	if owner != managerID {
-		return fmt.Errorf("session %d belongs to another manager", sessionID)
+	if record.ParentID != 0 || !controllerapi.ManagerRoot(record.Attributes) {
+		return nil, fmt.Errorf("session %d is not a root session", sessionID)
 	}
 
-	return nil
-}
-
-func (s *service) canListSession(
-	_ context.Context,
-	managerID string,
-	record *sessionstore.SessionRecord,
-) bool {
-	owner, _ := record.Attributes[controllerapi.SessionAttributeManagerID].(string)
-
-	return owner == managerID && owner != ""
+	return record, nil
 }

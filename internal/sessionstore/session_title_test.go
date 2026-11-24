@@ -128,7 +128,7 @@ func TestSessionTitle_RenameAuthorityAndOrder(t *testing.T) {
 	t.Parallel()
 	store, _, project := newTestStore(t)
 	root := chatTestRoot(t, store, project, "owner")
-	require.NoError(t, store.SetSessionTitle(t.Context(), "owner", root.ID, " chosen "))
+	require.NoError(t, store.SetSessionTitle(t.Context(), root.ID, " chosen "))
 	assertSessionTitle(t, store, root.ID, "chosen")
 	updated, err := store.GetSession(t.Context(), root.ID)
 	require.NoError(t, err)
@@ -137,14 +137,16 @@ func TestSessionTitle_RenameAuthorityAndOrder(t *testing.T) {
 	for _, raw := range []string{"", strings.Repeat("界", 81), "two\nlines", "two\rlines"} {
 		require.EqualError(
 			t,
-			store.SetSessionTitle(t.Context(), "owner", root.ID, raw),
+			store.SetSessionTitle(t.Context(), root.ID, raw),
 			"title must be one line of 1-80 characters",
 		)
 	}
-	require.Error(t, store.SetSessionTitle(t.Context(), "other", root.ID, "foreign"))
+	child, err := store.CreateSubagentSession(t.Context(), project, root.ID, root.ID, "general", "model", "")
+	require.NoError(t, err)
+	require.Error(t, store.SetSessionTitle(t.Context(), child, "foreign"))
 	_, err = store.MarkSessionKilledWithOutput(t.Context(), root.ID, 0)
 	require.NoError(t, err)
-	require.Error(t, store.SetSessionTitle(t.Context(), "owner", root.ID, "killed"))
+	require.Error(t, store.SetSessionTitle(t.Context(), root.ID, "killed"))
 	assertSessionTitle(t, store, root.ID, "chosen")
 }
 

@@ -38,15 +38,14 @@ func TestOrchestratorReadSessionRefusals(t *testing.T) {
 		text string
 	}{
 		{id: 99999, text: "session #99999 not found"},
-		{id: foreign, text: fmt.Sprintf("session #%d not found", foreign)},
-		{id: foreignChild, text: fmt.Sprintf("session #%d not found", foreignChild)},
+		{id: foreignChild, text: fmt.Sprintf("session #%d is a subagent, not a root session", foreignChild)},
 		{id: child, text: fmt.Sprintf("session #%d is a subagent, not a root session", child)},
 		{id: caller, text: "cannot read this session itself"},
 	} {
 		_, err := (orchestratorHost{s: h.mgr}).ReadSession(h.ctx, caller, tc.id, false)
 		require.EqualError(t, err, tc.text)
 	}
-	_, err := h.store.SetOrchestrator(h.ctx, "owner", caller, false)
+	_, err := h.store.SetOrchestrator(h.ctx, caller, false)
 	require.NoError(t, err)
 	_, err = (orchestratorHost{s: h.mgr}).ReadSession(h.ctx, caller, 99999, false)
 	require.EqualError(t, err, "orchestrator mode is off for this session")

@@ -41,7 +41,7 @@ var (
 	_ tool.PromptDeclarer = (*sessionTool)(nil)
 )
 
-// Host revalidates the caller's capability and ownership for every operation.
+// Host rechecks orchestrator mode on every call; stop and kill also require that the caller spawned the target.
 type Host interface {
 	ListSessions(ctx context.Context, callerID int64, filter string) ([]Entry, int, error)
 	SendToSession(ctx context.Context, callerID, targetID int64, message string) (int64, bool, error)

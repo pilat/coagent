@@ -2,7 +2,7 @@ package controllerapi
 
 import "context"
 
-// LineageController follows an owned root through its /clear replacements.
+// LineageController follows any manager root through its /clear replacements.
 //
 //nolint:iface // optional capability asserted by the local API server.
 type LineageController interface {

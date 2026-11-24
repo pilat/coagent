@@ -52,7 +52,7 @@ func TestWakeSource_ArmedWait(t *testing.T) {
 	})
 	t.Run("mutual waits do not count", func(t *testing.T) {
 		store, _, watcher, target := signalTestPair(t)
-		_, err := store.SetOrchestrator(t.Context(), "owner", target, true)
+		_, err := store.SetOrchestrator(t.Context(), target, true)
 		require.NoError(t, err)
 		signalTestArm(t, store, watcher, target, false)
 		signalTestArm(t, store, target, watcher, false)
@@ -62,7 +62,7 @@ func TestWakeSource_ArmedWait(t *testing.T) {
 	t.Run("mode off does not count", func(t *testing.T) {
 		store, _, watcher, target := signalTestPair(t)
 		signalTestArm(t, store, watcher, target, false)
-		_, err := store.SetOrchestrator(t.Context(), "owner", watcher, false)
+		_, err := store.SetOrchestrator(t.Context(), watcher, false)
 		require.NoError(t, err)
 		signalTestWake(t, store, watcher, false)
 	})
@@ -72,7 +72,7 @@ func TestWakeSource_InactiveReciprocalWait(t *testing.T) {
 	for _, inactive := range []string{"mode off", "killed", "unread signal"} {
 		t.Run(inactive, func(t *testing.T) {
 			store, db, watcher, target := signalTestPair(t)
-			_, err := store.SetOrchestrator(t.Context(), "owner", target, true)
+			_, err := store.SetOrchestrator(t.Context(), target, true)
 			require.NoError(t, err)
 			signalTestArm(t, store, watcher, target, false)
 			signalTestArm(t, store, target, watcher, false)
@@ -81,7 +81,7 @@ func TestWakeSource_InactiveReciprocalWait(t *testing.T) {
 
 			switch inactive {
 			case "mode off":
-				_, err = store.SetOrchestrator(t.Context(), "owner", watcher, false)
+				_, err = store.SetOrchestrator(t.Context(), watcher, false)
 				require.NoError(t, err)
 			case "killed":
 				_, err = store.MarkSessionKilledWithOutput(t.Context(), watcher, 0)

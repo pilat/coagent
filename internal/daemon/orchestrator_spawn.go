@@ -20,7 +20,7 @@ func (h orchestratorHost) SpawnSession(
 	callerID int64,
 	request orchestrator.SpawnRequest,
 ) (int64, string, error) {
-	caller, owner, err := h.caller(ctx, callerID)
+	caller, err := h.caller(ctx, callerID)
 	if err != nil {
 		return 0, "", err
 	}
@@ -47,7 +47,7 @@ func (h orchestratorHost) SpawnSession(
 	}
 
 	attrs := map[string]any{
-		controllerapi.SessionAttributeManagerID: owner,
+		controllerapi.SessionAttributeManagerID: caller.Attributes[controllerapi.SessionAttributeManagerID],
 		controllerapi.SessionAttributeSpawnedBy: callerID,
 	}
 	if title := controllerapi.SessionTitleFromInput(request.Prompt); title != "" {

@@ -48,7 +48,6 @@ func TestChatFocus_RefusesNonLiveOwnedRootsWithoutChangingSelection(t *testing.T
 	ctx := t.Context()
 	store, _, project := newTestStore(t)
 	current := chatTestRoot(t, store, project, "owner")
-	foreign := chatTestRoot(t, store, project, "other")
 	terminating := chatTestRoot(t, store, project, "owner")
 	require.NoError(t, store.UpdateSessionStatus(ctx, terminating.ID, SessionStatusTerminating))
 	killed := chatTestRoot(t, store, project, "owner")
@@ -57,7 +56,7 @@ func TestChatFocus_RefusesNonLiveOwnedRootsWithoutChangingSelection(t *testing.T
 	child, err := store.CreateSubagentSession(ctx, project, current.ID, current.ID, "general", "model", "")
 	require.NoError(t, err)
 	require.NoError(t, store.SetChatFocus(ctx, "owner", "chat", current.ID))
-	for _, id := range []int64{foreign.ID, terminating.ID, killed.ID, child, 999999, -1} {
+	for _, id := range []int64{terminating.ID, killed.ID, child, 999999, -1} {
 		err := store.SetChatFocus(ctx, "owner", "chat", id)
 		require.EqualError(t, err, fmt.Sprintf("#%d is not a live session", id))
 		focus, err := store.ChatFocus(ctx, "owner", "chat")

@@ -77,7 +77,11 @@ func (c *controller) ListSkills(
 	ctx context.Context,
 	data controllerapi.ConfigSkillsData,
 ) (*controllerapi.ConfigSkillsResultData, error) {
-	result, err := c.app.discovery.ListSkills(ctx, c.managerID, data)
+	if err := requireManagerIdentity(c.managerID); err != nil {
+		return nil, err
+	}
+
+	result, err := c.app.discovery.ListSkills(ctx, data)
 	if err != nil {
 		return nil, fmt.Errorf("list skills: %w", err)
 	}
@@ -89,7 +93,7 @@ func (c *controller) CreateProject(
 	ctx context.Context,
 	data controllerapi.ProjectCreateData,
 ) (*controllerapi.ProjectCreateResultData, error) {
-	result, err := c.app.discovery.CreateProject(ctx, c.managerID, data)
+	result, err := c.app.discovery.CreateProject(ctx, data)
 	if err != nil {
 		return nil, fmt.Errorf("create project: %w", err)
 	}
@@ -111,5 +115,5 @@ func (c *controller) Subscribe() <-chan controllerapi.SessionNotification {
 }
 
 func (c *controller) Unsubscribe(ch <-chan controllerapi.SessionNotification) {
-	c.app.bus.UnsubscribeManager(ch)
+	c.app.bus.UnsubscribeManagerRoots(ch)
 }

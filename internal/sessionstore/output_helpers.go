@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+
+	"github.com/pilat/coagent/internal/controllerapi"
 )
 
 func outputOwner(ctx context.Context, tx *sql.Tx, sessionID int64) (string, error) {
@@ -32,7 +34,7 @@ func outputOwner(ctx context.Context, tx *sql.Tx, sessionID int64) (string, erro
 	}
 
 	owner, _ := values[managerIDAttribute].(string)
-	if owner == "" {
+	if !controllerapi.ManagerRoot(values) {
 		return "", ErrOutputOwner
 	}
 

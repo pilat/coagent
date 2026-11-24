@@ -4,8 +4,8 @@ import (
 	"context"
 )
 
-// ManagerControllerFactory binds the private controller to one manager ID.
-// The local API server receives each capability; ownership is not caller input.
+// ManagerControllerFactory binds the private controller to one manager or API client id, which keys its chat rows and is stamped on the roots it creates.
+// Every bound controller reaches every manager root; the id is not caller input.
 //
 //nolint:iface // factory capability consumed by composition roots in other packages
 type ManagerControllerFactory interface {

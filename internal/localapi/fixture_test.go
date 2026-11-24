@@ -121,8 +121,8 @@ func (b *apiBackend) HasActiveLoop(int64) bool { return false }
 func (b *apiBackend) NotifySession(id int64, n sessionevent.Notification) {
 	record, err := b.store.GetSession(context.Background(), id)
 	if err == nil {
-		owner, _ := record.Attributes[controllerapi.SessionAttributeManagerID].(string)
-		b.bus.Publish(id, owner, n)
+		managerRoot := controllerapi.ManagerRoot(record.Attributes)
+		b.bus.Publish(id, managerRoot, n)
 	}
 }
 
@@ -244,7 +244,7 @@ func (f *apiFixture) append(t *testing.T, id int64, text string) int64 {
 }
 
 func (f *apiFixture) wake(id int64) {
-	f.bus.Publish(id, "alpha", sessionevent.Notification{Type: sessionevent.NotifyHeartbeat})
+	f.bus.Publish(id, true, sessionevent.Notification{Type: sessionevent.NotifyHeartbeat})
 }
 
 func (f *apiFixture) tail(

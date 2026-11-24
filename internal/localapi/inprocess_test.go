@@ -24,7 +24,16 @@ func TestInProcess_CallsActAsTheBoundManager(t *testing.T) {
 	record, err := f.store.GetSession(t.Context(), response.GetSessionId())
 	require.NoError(t, err)
 	assert.Equal(t, "alpha", record.Attributes[controllerapi.SessionAttributeManagerID])
-	beta := inProcessRoot(t, f, "beta")
+	beta, err := f.store.CreateSubagentSession(
+		t.Context(),
+		record.ProjectID,
+		record.ID,
+		record.ID,
+		"general",
+		"model",
+		"",
+	)
+	require.NoError(t, err)
 	_, err = sessions.GetSessionKilled(t.Context(), &coagentv1.GetSessionKilledRequest{SessionId: beta})
 	require.Error(t, err)
 	assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))

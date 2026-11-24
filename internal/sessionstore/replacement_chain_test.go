@@ -17,20 +17,21 @@ func TestReplacementChain(t *testing.T) {
 	third, _, err := store.ReplaceManagerRoot(t.Context(), second.ID, "test", "/project")
 	require.NoError(t, err)
 	for _, id := range []int64{first.ID, second.ID, third.ID} {
-		chain, err := store.ReplacementChain(t.Context(), id, "owner")
+		chain, err := store.ReplacementChain(t.Context(), id)
 		require.NoError(t, err)
 		assert.Equal(t, []int64{first.ID, second.ID, third.ID}, chain)
 	}
 	killed := chatTestRoot(t, store, project, "owner")
 	_, err = store.MarkSessionKilledWithOutput(t.Context(), killed.ID, 0)
 	require.NoError(t, err)
-	chain, err := store.ReplacementChain(t.Context(), killed.ID, "owner")
+	chain, err := store.ReplacementChain(t.Context(), killed.ID)
 	require.NoError(t, err)
 	assert.Equal(t, []int64{killed.ID}, chain)
-	_, err = store.ResolveReplacement(t.Context(), killed.ID, "owner")
+	_, err = store.ResolveReplacement(t.Context(), killed.ID)
 	require.ErrorIs(t, err, ErrSessionNotAcceptingInput)
-	foreign := chatTestRoot(t, store, project, "other")
-	_, err = store.ReplacementChain(t.Context(), foreign.ID, "owner")
+	foreign, err := store.CreateSubagentSession(t.Context(), project, first.ID, first.ID, "general", "model", "")
+	require.NoError(t, err)
+	_, err = store.ReplacementChain(t.Context(), foreign)
 	require.ErrorIs(t, err, ErrOutputOwner)
 
 	t.Run("predecessor query errors are returned", func(t *testing.T) {
@@ -39,7 +40,7 @@ func TestReplacementChain(t *testing.T) {
 		_, err := db.ExecContext(t.Context(),
 			`ALTER TABLE session_outbox RENAME COLUMN attributes TO broken_attributes`)
 		require.NoError(t, err)
-		_, err = store.ReplacementChain(t.Context(), root.ID, "owner")
+		_, err = store.ReplacementChain(t.Context(), root.ID)
 		require.ErrorContains(t, err, "load session predecessor")
 	})
 
@@ -50,7 +51,7 @@ func TestReplacementChain(t *testing.T) {
 		require.NoError(t, err)
 		_, err = db.ExecContext(t.Context(), `UPDATE sessions SET created_at = 'invalid' WHERE id = ?`, first.ID)
 		require.NoError(t, err)
-		_, err = store.ReplacementChain(t.Context(), second.ID, "owner")
+		_, err = store.ReplacementChain(t.Context(), second.ID)
 		require.ErrorContains(t, err, "load predecessor session")
 	})
 
@@ -64,7 +65,7 @@ func TestReplacementChain(t *testing.T) {
 				SET attributes = json_set(attributes, '$.old_session_id', ?)
 				WHERE session_id = ? AND type = 'session_replaced'`, id, second.ID)
 			require.NoError(t, err)
-			chain, err := store.ReplacementChain(t.Context(), second.ID, "owner")
+			chain, err := store.ReplacementChain(t.Context(), second.ID)
 			require.NoError(t, err)
 			assert.Equal(t, []int64{second.ID}, chain)
 		}
@@ -97,7 +98,7 @@ func TestResolveReplacement_StatusFidelity(t *testing.T) {
 					_, err := db.ExecContext(t.Context(),
 						`UPDATE sessions SET status = ?, killed_at = ? WHERE id = ?`, status, killedAt, root.ID)
 					require.NoError(t, err)
-					resolved, err := store.ResolveReplacement(t.Context(), root.ID, "owner")
+					resolved, err := store.ResolveReplacement(t.Context(), root.ID)
 					if !replaced && (status == SessionStatusTerminating || killed) {
 						require.ErrorIs(t, err, ErrSessionNotAcceptingInput)
 						assert.Zero(t, resolved)

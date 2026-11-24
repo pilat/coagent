@@ -133,7 +133,7 @@ func TestTailOutput_CarriesRuntimeState(t *testing.T) {
 	id := f.root(t, h, "alpha")
 	stream := f.tail(t, h, id, 0)
 	_ = nextOutput(t, stream)
-	f.bus.Publish(id, "alpha", sessionevent.Notification{
+	f.bus.Publish(id, true, sessionevent.Notification{
 		Type: sessionevent.NotifyStateChanged, Status: sessionevent.StateRunning,
 	})
 	event, err := stream.Receive()

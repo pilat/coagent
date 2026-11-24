@@ -203,7 +203,7 @@ func (s *Service) killLocked(ctx context.Context, sessionID int64) error {
 
 func (s *Service) stopLocked(ctx context.Context, record *sessionstore.SessionRecord, inputID int64) error {
 	sessionID := record.ID
-	explicit := inputID > 0 && !ownerlessSession(record)
+	explicit := inputID > 0 && controllerapi.ManagerRoot(record.Attributes)
 
 	if !explicit {
 		s.publish(sessionID, sessionevent.Notification{
@@ -361,11 +361,10 @@ func (s *Service) clearLocked(ctx context.Context, sessionID, inputID int64) (in
 
 	workDir, _ := s.store.GetProjectWorkDir(ctx, rec.ProjectID)
 	projectName, _ := s.store.GetProjectName(ctx, rec.ProjectID)
-	owner, _ := rec.Attributes[controllerapi.SessionAttributeManagerID].(string)
 	var newRec *sessionstore.SessionRecord
 
-	//nolint:nestif // Owner-aware replacement is the one boundary that preserves a manager surface.
-	if owner != "" {
+	//nolint:nestif // Manager root replacement preserves the chat surface.
+	if controllerapi.ManagerRoot(rec.Attributes) {
 		if inputID > 0 {
 			newRec, _, err = s.store.ReplaceManagerRootForInput(ctx, sessionID, inputID, projectName, workDir)
 		} else {

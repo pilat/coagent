@@ -16,7 +16,7 @@ func TestOrchestratorSubscribeRefusals(t *testing.T) {
 	h := newHarness(t, harnessOptions{respond: trivialRespond})
 	h.startInboxWake()
 	watcher, target := modeRoot(t, h), modeRoot(t, h)
-	foreign := h.createRoot(managerAttrs("other"))
+	foreign := h.createUnlinkedChild(h.createRoot(managerAttrs("other")))
 	child := h.createChild(watcher, subagent.Link{TaskCallID: "subscribe-child"})
 	killed := h.createRoot(managerAttrs("owner"))
 	h.say(killed, "/kill")
@@ -27,7 +27,7 @@ func TestOrchestratorSubscribeRefusals(t *testing.T) {
 		text string
 	}{
 		{id: 99999, text: "session #99999 not found"},
-		{id: foreign, text: fmt.Sprintf("session #%d not found", foreign)},
+		{id: foreign, text: fmt.Sprintf("session #%d is a subagent, not a root session", foreign)},
 		{id: child, text: fmt.Sprintf("session #%d is a subagent, not a root session", child)},
 		{id: killed, text: fmt.Sprintf("session #%d is killed", killed)},
 		{id: watcher, text: "cannot subscribe to this session itself"},
@@ -57,7 +57,7 @@ func TestOrchestratorSubscribeRefusals(t *testing.T) {
 	id, _, err = host.Subscribe(h.ctx, watcher, target)
 	require.NoError(t, err)
 	assert.Equal(t, replacement, id)
-	_, err = h.store.SetOrchestrator(h.ctx, "owner", watcher, false)
+	_, err = h.store.SetOrchestrator(h.ctx, watcher, false)
 	require.NoError(t, err)
 	_, _, err = host.Subscribe(h.ctx, watcher, target)
 	require.EqualError(t, err, "orchestrator mode is off for this session")

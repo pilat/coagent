@@ -182,7 +182,7 @@ func (f *fakeController) SetChatFocus(_ context.Context, _ string, id int64) err
 	defer f.mu.Unlock()
 	for _, session := range f.listSessions {
 		if session.ID == id && session.KilledAt == nil && session.Status != "terminating" &&
-			session.Status != "killed" && session.Attributes["manager_id"] == f.owner() {
+			session.Status != "killed" && controllerapi.ManagerRoot(session.Attributes) {
 			f.focus, f.cursor, f.entered = id, 0, false
 			return nil
 		}
@@ -276,7 +276,7 @@ func (f *fakeController) ChatSessions(context.Context, string) ([]controllerapi.
 	var rows []controllerapi.ChatSessionInfo
 	for _, session := range f.listSessions {
 		if session.KilledAt != nil || session.Status == "terminating" || session.Status == "killed" ||
-			session.Attributes["manager_id"] != f.owner() {
+			!controllerapi.ManagerRoot(session.Attributes) {
 			continue
 		}
 		rows = append(rows, controllerapi.ChatSessionInfo{ID: session.ID, Name: session.Name})

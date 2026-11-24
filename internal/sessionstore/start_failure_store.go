@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"fmt"
 	"time"
+
+	"github.com/pilat/coagent/internal/controllerapi"
 )
 
 // RecordSessionStartFailure parks failed work without consuming input and records
@@ -38,10 +40,8 @@ func (s *Store) RecordSessionStartFailure(ctx context.Context, sessionID int64, 
 		return false, fmt.Errorf("park failed session: %w", err)
 	}
 
-	owner, _ := record.Attributes[managerIDAttribute].(string)
-
 	reported := record.Status != SessionStatusError
-	if owner != "" && record.ParentID == 0 {
+	if controllerapi.ManagerRoot(record.Attributes) && record.ParentID == 0 {
 		reported, err = recordStartFailureOutputTx(ctx, tx, record, content, now)
 		if err != nil {
 			return false, err

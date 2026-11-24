@@ -34,7 +34,7 @@ func TestOrchestratorToolsOnlyOnModeRoots(t *testing.T) {
 	root := h.send("initial", managerAttrs("owner"))
 	h.waitAnswer(root, "done")
 	assertModeToolSchemas(t, h.schemas.first(t, root), false)
-	_, err := h.store.SetOrchestrator(h.ctx, "owner", root, true)
+	_, err := h.store.SetOrchestrator(h.ctx, root, true)
 	require.NoError(t, err)
 	h.say(root, "start child")
 	h.waitUntil("child launched", func() bool { return h.linkByCall(root, "mode-child") != nil })
@@ -71,8 +71,7 @@ func TestOrchestratorSendRefusals(t *testing.T) {
 		text string
 	}{
 		{99999, "session #99999 not found"},
-		{foreign, fmt.Sprintf("session #%d not found", foreign)},
-		{foreignChild, fmt.Sprintf("session #%d not found", foreignChild)},
+		{foreignChild, fmt.Sprintf("session #%d is a subagent, not a root session", foreignChild)},
 		{child, fmt.Sprintf("session #%d is a subagent, not a root session", child)},
 		{killed, fmt.Sprintf("session #%d is killed", killed)},
 		{caller, "cannot send to this session itself"},
@@ -82,7 +81,7 @@ func TestOrchestratorSendRefusals(t *testing.T) {
 		_, _, err := (orchestratorHost{h.mgr}).SendToSession(h.ctx, caller, tc.id, "hello")
 		require.EqualError(t, err, tc.text)
 	}
-	_, err = h.store.SetOrchestrator(h.ctx, "owner", caller, false)
+	_, err = h.store.SetOrchestrator(h.ctx, caller, false)
 	require.NoError(t, err)
 	_, _, err = (orchestratorHost{h.mgr}).SendToSession(h.ctx, caller, stopping, "hello")
 	require.EqualError(t, err, "orchestrator mode is off for this session")
@@ -102,7 +101,7 @@ func TestOrchestratorSendCarriesNoHumanAuthority(t *testing.T) {
 	h.startInboxWake()
 	caller := modeRoot(t, h)
 	target := h.createRoot(managerAttrs("owner"))
-	require.NoError(t, h.store.SetSessionTitle(h.ctx, "owner", target, "unchanged"))
+	require.NoError(t, h.store.SetSessionTitle(h.ctx, target, "unchanged"))
 	for _, text := range []string{"/status", "/budget one dollar", "fix the login bug"} {
 		resolved, _, err := (orchestratorHost{h.mgr}).SendToSession(h.ctx, caller, target, text)
 		require.NoError(t, err)
@@ -143,7 +142,7 @@ func TestOrchestratorSendFollowsClearReplacement(t *testing.T) {
 	var replacement int64
 	h.waitUntil("clear replacement", func() bool {
 		var err error
-		replacement, err = h.store.ResolveReplacement(h.ctx, target, "owner")
+		replacement, err = h.store.ResolveReplacement(h.ctx, target)
 		return err == nil && replacement != target
 	})
 	resolved, _, err := (orchestratorHost{h.mgr}).SendToSession(h.ctx, caller, target, "after clear")
@@ -181,7 +180,7 @@ func TestOrchestratorToolTrailInOwnChat(t *testing.T) {
 func modeRoot(t *testing.T, h *harness) int64 {
 	t.Helper()
 	id := h.createRoot(managerAttrs("owner"))
-	_, err := h.store.SetOrchestrator(h.ctx, "owner", id, true)
+	_, err := h.store.SetOrchestrator(h.ctx, id, true)
 	require.NoError(t, err)
 	return id
 }

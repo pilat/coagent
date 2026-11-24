@@ -25,17 +25,19 @@ api:
 ```
 
 Paste the printed block into `~/.coagent/config.yaml` and restart. Client ids must be unique and distinct
-from manager ids; hashes must be unique. Only `operator` is accepted. Every request on the socket,
+from manager ids because they key chat rows; hashes must be unique. Only `operator` is accepted.
+Every request on the socket,
 RPC or not, is refused without a valid token in `Authorization: Bearer <token>`.
 Config keeps only the token's SHA-256.
-Removing the entry and restarting revokes it. The client owns and sees only the roots it creates.
+Removing the entry and restarting revokes it. Every client reaches every root, as every manager does;
+each keeps its own chat focus and cursor.
 
 `operator` names the person who owns the machine, config and sandbox rules. Its input is human input,
-including session commands and `/config`; the host stamps its source and owner, never the request.
+including session commands and `/config`; the host stamps its source, never the request.
 A read-only host mount still permits connecting to a Unix socket, so socket mode alone is no boundary.
 A client's plaintext token file is as readable from the sandbox as any operator credential; with it a
-session can send `/config` to that client's roots and edit config, or use the chat, session-setting and
-discovery calls on those roots. With the sandbox off, a session already has the user's authority.
+session can send `/config` to every root and edit config, or use the chat, session-setting and
+discovery calls on every root. With the sandbox off, a session already has the user's authority.
 See [ADR-0104](adr/0104-the-local-api-is-the-two-durable-ledgers.md) and
 [ADR-0105](adr/0105-built-in-managers-are-local-api-clients-in-process.md).
 
@@ -46,7 +48,8 @@ See [ADR-0104](adr/0104-the-local-api-is-the-two-durable-ledgers.md) and
   there; empty runs in `work_dir`. It creates an empty root; send the first input separately. Retrying a lost
   create response can leave an extra empty root.
 - `SessionService.SendInput` takes `session_id`, non-blank `text` and a client-chosen `idempotency_key` of
-  1–128 bytes. Reuse a key only to retry the same input.
+  1–128 bytes. Reuse a key only to retry the same input. Keys are scoped to the root, which every client
+  reaches: choose keys unique across clients, for example a random 128-bit value.
   An accepted send runs to completion even if the client disconnects or its deadline passes. Uniqueness is
   per root, through the existing inbox delivery key `user:<key>`; a retry never appends twice. A repeated key
   answers OK once the input is on the root. It does not report whether a command finished; the tail does.
@@ -60,11 +63,11 @@ See [ADR-0104](adr/0104-the-local-api-is-the-two-durable-ledgers.md) and
   for both tail and send: an id 16 or more replacements old stops resolving. Rows a replaced root commits
   after replacement are not streamed. Runtime state is best effort, sent only on change; a missed wake delays
   output until a fallback read. The client holds its cursor; reconnecting does not replay rows at or below it.
-- `SessionService` also serves session reads and settings. `ListSessions` lists the caller's live roots,
-  newest activity first; `ListSessionDetails` lists every owned root, killed ones included;
-  `GetSessionKilled` reports whether an owned root has been killed. `SetSessionModel` switches an owned root's
-  model and reasoning effort; `SetSessionTitle` renames a live owned root. `GetOrchestratorMode` reports whether
-  a live owned root has orchestrator mode; `SetOrchestratorMode` turns it on or off.
+- `SessionService` also serves session reads and settings. `ListSessions` lists the live roots,
+  newest activity first; `ListSessionDetails` lists every root, killed ones included;
+  `GetSessionKilled` reports whether a root has been killed. `SetSessionModel` switches a root's
+  model and reasoning effort; `SetSessionTitle` renames a live root. `GetOrchestratorMode` reports whether
+  a live root has orchestrator mode; `SetOrchestratorMode` turns it on or off.
 - `OutputService` also serves bounded reads and wake hints. `ListOutput` returns up to `limit` rows of a root
   above `after_id`, oldest first. `ReadEntry` returns the newest renderable rows and newest output id from one
   read, oldest first, leaving out `session_opened` and `session_replaced` rows. Both require `limit` in 1–100.
@@ -76,10 +79,10 @@ See [ADR-0104](adr/0104-the-local-api-is-the-two-durable-ledgers.md) and
   `GetChatCursor` returns focus, cursor and whether entry has been acknowledged. `EnterChat` acknowledges entry
   at `newest_id` while `session_id` is the focus and entry is still owed. `AdvanceChat` moves the cursor to
   `output_id` while `session_id` is the entered focus and the cursor is below it. `SetChatFocus` focuses a live
-  owned root and resets the cursor, owing entry. `ResetChatFocus` clears focus and cursor while focus is still
+  root and resets the cursor, owing entry. `ResetChatFocus` clears focus and cursor while focus is still
   `from_session_id`.
 - `DiscoveryService` lists what the caller can start work with. `ListModels` lists configured models;
-  `ListSkills` lists skills available to an owned root; `ListProjects` lists daemon-managed projects, most
+  `ListSkills` lists skills available to a root; `ListProjects` lists daemon-managed projects, most
   recently active first; `ListSpawnFavorites` lists configured favorite project paths. `CreateProject` creates
   a folder project under the projects root, or opens an existing one.
 
@@ -89,7 +92,7 @@ See [ADR-0104](adr/0104-the-local-api-is-the-two-durable-ledgers.md) and
 `InvalidArgument` (malformed request) and `Unauthenticated` (missing or wrong token) never succeed unchanged.
 `FailedPrecondition` carries the controller's refusal text and may succeed after the session's state changes;
 the message says why. Retry sends under the same key. A first tail read failure is a refusal; a later read
-failure is `Unavailable`. A refusal can reveal that a root id exists under another owner, but no output.
+failure is `Unavailable`.
 
 ## Unary JSON examples
 

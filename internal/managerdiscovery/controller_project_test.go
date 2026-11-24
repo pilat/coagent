@@ -93,7 +93,7 @@ func TestCreateProject_MkdirGetOrCreateIdempotent(t *testing.T) {
 		UnifiedConfig: &config.UnifiedConfig{ProjectsRoot: root},
 	}, nil)
 
-	res, err := ctrl.CreateProject(ctx, "test", controllerapi.ProjectCreateData{Name: "посты"})
+	res, err := ctrl.CreateProject(ctx, controllerapi.ProjectCreateData{Name: "посты"})
 	require.NoError(t, err)
 	assert.Positive(t, res.ID)
 	assert.Equal(t, "посты", res.Name)
@@ -104,7 +104,7 @@ func TestCreateProject_MkdirGetOrCreateIdempotent(t *testing.T) {
 	assert.True(t, info.IsDir())
 
 	// Repeat with the same name: same id, no error (get-or-create is idempotent).
-	res2, err := ctrl.CreateProject(ctx, "test", controllerapi.ProjectCreateData{Name: "посты"})
+	res2, err := ctrl.CreateProject(ctx, controllerapi.ProjectCreateData{Name: "посты"})
 	require.NoError(t, err)
 	assert.Equal(t, res.ID, res2.ID)
 }
@@ -115,7 +115,7 @@ func TestCreateProject_RejectsBadName(t *testing.T) {
 		UnifiedConfig: &config.UnifiedConfig{ProjectsRoot: t.TempDir()},
 	}, nil)
 
-	_, err := ctrl.CreateProject(context.Background(), "test", controllerapi.ProjectCreateData{Name: "../escape"})
+	_, err := ctrl.CreateProject(context.Background(), controllerapi.ProjectCreateData{Name: "../escape"})
 	require.Error(t, err)
 }
 

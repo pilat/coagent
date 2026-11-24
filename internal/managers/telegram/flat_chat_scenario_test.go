@@ -90,7 +90,7 @@ func TestHarnessScenario_SwitchShowsSessionTitles(t *testing.T) {
 func TestHarnessScenario_ScheduledSessionMarkers(t *testing.T) {
 	h := newDelayedTelegramHarness(t)
 	work := createChatWork(t, h)
-	require.NoError(t, h.sessions.SetSessionTitle(t.Context(), delayedTelegramManagerID, work, "daily check"))
+	require.NoError(t, h.sessions.SetSessionTitle(t.Context(), work, "daily check"))
 	manager := newChatTelegramManager(t, h)
 	require.NoError(t, manager.Start(t.Context()))
 	t.Cleanup(func() { require.NoError(t, manager.Stop(context.Background())) })

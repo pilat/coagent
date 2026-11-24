@@ -4,6 +4,7 @@
 - **Date:** 2026-11-23
 - **Amends:** [ADR-0104](0104-the-local-api-is-the-two-durable-ledgers.md)
 - **Amends:** [ADR-0097](0097-orchestrator-mode-is-a-human-granted-capability-on-an-ordinary-root.md)
+- **Amended by:** [ADR-0106](0106-one-operator-every-surface-reaches-every-root.md) — owned-root reads cover every root
 
 ## Context
 

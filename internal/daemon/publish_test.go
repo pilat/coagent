@@ -22,21 +22,21 @@ func TestPublishGate_RootPasses(t *testing.T) {
 	assert.Equal(t, "hi", sn.Notification.Message)
 }
 
-func TestPublishGate_RoutesRootOnlyToOwningManager(t *testing.T) {
+func TestPublishGate_RoutesRootToEveryManager(t *testing.T) {
 	h := newHarness(t, harnessOptions{configure: withTestModels, clientFor: (&mockFactory{}).client})
 	mgr := h.mgr
-	alpha := mgr.bus.SubscribeManager("alpha")
-	beta := mgr.bus.SubscribeManager("beta")
+	alpha := mgr.bus.SubscribeManagerRoots()
+	beta := mgr.bus.SubscribeManagerRoots()
 	rec := h.createRoot(managerAttrs("alpha"))
 	mgr.NotifySession(rec, sessionevent.Notification{Type: sessionevent.NotifyMessage, Message: "private"})
 	assert.Equal(t, rec, requireNotification(t, alpha).SessionID)
-	requireNoManagerNotification(t, beta)
+	assert.Equal(t, rec, requireNotification(t, beta).SessionID)
 }
 
 func TestPublishGate_OwnerlessRootReachesNoManager(t *testing.T) {
 	h := newHarness(t, harnessOptions{configure: withTestModels, clientFor: (&mockFactory{}).client})
 	mgr := h.mgr
-	alpha := mgr.bus.SubscribeManager("alpha")
+	alpha := mgr.bus.SubscribeManagerRoots()
 	rec := h.createRoot(nil)
 	mgr.NotifySession(rec, sessionevent.Notification{Type: sessionevent.NotifyMessage, Message: "unowned"})
 	requireNoManagerNotification(t, alpha)

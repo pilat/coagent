@@ -15,7 +15,7 @@ func TestChatOutputs_DisplayNameSurvivesKill(t *testing.T) {
 	chatTestOutput(t, store, root.ID, "answer")
 	for _, title := range []string{"", "chosen title"} {
 		if title != "" {
-			require.NoError(t, store.SetSessionTitle(ctx, "owner", root.ID, title))
+			require.NoError(t, store.SetSessionTitle(ctx, root.ID, title))
 		}
 		rows, err := store.ChatOutputs(ctx, root.ID, 0, 10)
 		require.NoError(t, err)

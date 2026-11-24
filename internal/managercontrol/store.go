@@ -9,7 +9,7 @@ import (
 // Store is the persistence view required by managercontrol.
 type Store interface { //nolint:interfacebloat // Manager reads and chat state share one persistence boundary.
 	GetSession(context.Context, int64) (*sessionstore.SessionRecord, error)
-	ReplacementChain(context.Context, int64, string) ([]int64, error)
+	ReplacementChain(context.Context, int64) ([]int64, error)
 	ListSessions(context.Context) ([]*sessionstore.SessionRecord, error)
 	GetOrCreateProject(context.Context, string) (int64, error)
 	GetProjectWorkDir(context.Context, int64) (string, error)
@@ -21,10 +21,10 @@ type Store interface { //nolint:interfacebloat // Manager reads and chat state s
 	AdvanceChat(context.Context, string, string, int64, int64) (bool, error)
 	BindChat(context.Context, string, string) error
 	SetChatFocus(context.Context, string, string, int64) error
-	SetSessionTitle(context.Context, string, int64, string) error
-	OrchestratorMode(context.Context, string, int64) (bool, error)
-	SetOrchestrator(context.Context, string, int64, bool) (bool, error)
+	SetSessionTitle(context.Context, int64, string) error
+	OrchestratorMode(context.Context, int64) (bool, error)
+	SetOrchestrator(context.Context, int64, bool) (bool, error)
 	ResetChatFocus(context.Context, string, string, int64) (bool, error)
 	ChatOutputs(context.Context, int64, int64, int) ([]sessionstore.ChatOutput, error)
-	ChatSessions(context.Context, string) ([]sessionstore.ChatSession, error)
+	ChatSessions(context.Context) ([]sessionstore.ChatSession, error)
 }

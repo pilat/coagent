@@ -213,7 +213,7 @@ for vulnerability reporting.
 ## Configuration and project context
 
 Configuration is a hand-edited `~/.coagent/config.yaml`, or a whole-document
-`/config` apply from a selected manager-owned root. The
+`/config` apply from a selected manager root. The
 underlying state is intentionally inspectable:
 
 - `~/.coagent/config.yaml` — providers, models, managers, marketplaces, and tool
@@ -412,8 +412,8 @@ Telegram commands operate on the selected session unless they name an ID:
 | --- | --- |
 | `/new [name]` | List recent managed projects, or create/open one and select a new session |
 | `/spawn <path>` | Start and select a session in an existing directory |
-| `/sessions` | Show up to 30 live owned sessions, newest activity first; mark the focus and report any overflow |
-| `/switch N` | Select a live owned session; repeat to see its last three messages again |
+| `/sessions` | Show up to 30 live sessions, newest activity first; mark the focus and report any overflow |
+| `/switch N` | Select a live session; repeat to see its last three messages again |
 | `/gwt <name>` | Create and select a worktree session from the selected session's repository |
 | `/kill [N]`, `/stop [N]` | Kill a session or stop its loop; an ID leaves focus unchanged |
 | `/model [N [effort]]` | List configured models or select one by its number |

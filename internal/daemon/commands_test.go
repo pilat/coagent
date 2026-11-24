@@ -17,7 +17,7 @@ import (
 	"github.com/pilat/coagent/internal/sessionstore"
 )
 
-func TestManagerBoundControllerRejectsEveryForeignSessionOperation(t *testing.T) {
+func TestControllerRejectsEverySessionOperationOnANonRoot(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t, harnessOptions{configure: withTestModels, clientFor: (&mockFactory{}).client})
 	mgr, store := h.mgr, h.store
@@ -25,7 +25,7 @@ func TestManagerBoundControllerRejectsEveryForeignSessionOperation(t *testing.T)
 	projectID := testProject(t, store, "/tmp/controller-owner-operations")
 	alphaRecord, err := mgr.store.CreateSession(ctx, projectID, "model", "", managerAttrs("alpha"))
 	require.NoError(t, err)
-	betaRecord, err := mgr.store.CreateSession(ctx, projectID, "model", "", managerAttrs("beta"))
+	betaID, err := store.CreateSubagentSession(ctx, projectID, alphaRecord.ID, alphaRecord.ID, "general", "model", "")
 	require.NoError(t, err)
 	controller := newTestController(mgr).ForManager("alpha")
 	sessions, err := controller.ListSessions(ctx)
@@ -38,25 +38,25 @@ func TestManagerBoundControllerRejectsEveryForeignSessionOperation(t *testing.T)
 	}{
 		{name: "send", call: func() error {
 			return controller.SendSessionMessage(ctx, controllerapi.SessionMessageData{
-				SessionID: betaRecord.ID, Message: "foreign",
+				SessionID: betaID, Message: "foreign",
 			})
 		}},
 		{name: "set model", call: func() error {
 			return controller.SetSessionModel(ctx, controllerapi.SessionSetModelData{
-				SessionID: betaRecord.ID, Model: "other",
+				SessionID: betaID, Model: "other",
 			})
 		}},
 		{name: "list skills", call: func() error {
-			_, listErr := controller.ListSkills(ctx, controllerapi.ConfigSkillsData{SessionID: betaRecord.ID})
+			_, listErr := controller.ListSkills(ctx, controllerapi.ConfigSkillsData{SessionID: betaID})
 			return listErr
 		}},
 	}
 	for _, operation := range operations {
 		t.Run(operation.name, func(t *testing.T) {
-			require.ErrorContains(t, operation.call(), "belongs to another manager")
+			require.ErrorContains(t, operation.call(), "is not a root session")
 		})
 	}
-	stored := h.session(betaRecord.ID)
+	stored := h.session(betaID)
 	assert.Nil(t, stored.KilledAt)
 	assert.Equal(t, "model", stored.Model)
 	assert.NotContains(t, stored.Attributes, "topic")
@@ -164,7 +164,7 @@ func TestManager_InputReceivedPubSub(t *testing.T) {
 	require.NoError(t, err)
 	sub := mgr.bus.Subscribe(id)
 	defer mgr.bus.Unsubscribe(id, sub)
-	mgr.bus.Publish(id, "", sessionevent.Notification{
+	mgr.bus.Publish(id, false, sessionevent.Notification{
 		Type:    sessionevent.NotifyInputReceived,
 		Message: "hello from agent",
 		Source:  "agent",
