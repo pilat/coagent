@@ -150,14 +150,17 @@ A named agent configuration — tool allowlist, prompt template, model override,
 _Avoid_: role, persona, mode (mode is a separate axis on the same config).
 
 **control socket**:
-`~/.coagent/daemon.sock`, mode 0600 — newline-delimited JSON-RPC 2.0, the daemon's status protocol (`internal/ctl`). It carries the read-only `status` method and nothing else: no mutations, no chat, no server pushes. A unix socket is not a network listener; the "no inbound listener" rule is about the network.
-The daemon begins accepting only after every startup op owner has registered, so a greeting is also a control-plane readiness boundary rather than a partially initialized view.
+`~/.coagent/daemon.sock`, mode 0600, served by `internal/localapi` with only
+`coagent.v1.DaemonService.GetStatus` and no token. It answers from the bind and
+reports starting (`Unavailable`) until the daemon is ready. A Unix socket is
+not a network listener; the "no inbound listener" rule is about the network.
 _Avoid_: RPC server, API server, IPC channel; local API (that is `coagent.v1` on the **API socket**).
 
 **local API**:
 `coagent.v1`, the daemon's public contract: the Protocol Buffers schema
 `api/coagent/v1/coagent.proto`, served with ConnectRPC on the **API socket** and
-over **in-process connections** by `internal/localapi`. It exposes the two durable
+over **in-process connections** by `internal/localapi`, with its one tokenless
+read, `DaemonService.GetStatus`, alone on the **control socket**. It exposes the two durable
 ledgers (keyed input into `session_inbox`, a tail of `session_outbox`), chat focus
 and cursor, session settings and discovery. **Wake hints** tell clients to re-read state
 ([ADR-0104](adr/0104-the-local-api-is-the-two-durable-ledgers.md),
@@ -178,7 +181,7 @@ _Avoid_: notification (the daemon-internal session event), push.
 **API socket**:
 `~/.coagent/api.sock`, mode 0600, bound only when `api.clients` is non-empty;
 every call carries a bearer token.
-_Avoid_: control socket (that is the status protocol).
+_Avoid_: control socket (the other, anonymous status listener).
 
 **API client**:
 One `api.clients` entry (`id`, `role`, `token_sha256`, optional `projects`) and the program holding its

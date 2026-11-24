@@ -149,7 +149,7 @@ deliberately narrow and explicit.
 What is enforced:
 
 - **No TCP listener.** Telegram is outbound-only. Local operations use same-user
-  Unix sockets created with mode `0600`: `~/.coagent/daemon.sock` for status and,
+  Unix sockets created with mode `0600`: `~/.coagent/daemon.sock` for the tokenless `coagent status` read and,
   when API clients are configured, `~/.coagent/api.sock` for the local API, where
   every call carries a bearer token whose SHA-256 is in `config.yaml`.
 - **Coagent-managed credentials are not injected into tool subprocesses.** The

@@ -6,6 +6,7 @@
 - **Amended by:** [ADR-0106](0106-one-operator-every-surface-reaches-every-root.md) — every client reaches every root
 - **Amended by:** [ADR-0107](0107-every-root-is-a-root.md)
 - **Amended by:** [ADR-0108](0108-an-app-acts-with-delegated-authority.md) — app authors are served and idempotency keys are per author
+- **Amended by:** [ADR-0109](0109-status-is-a-coagent-v1-call-on-the-control-socket.md) — daemon.sock serves coagent.v1 GetStatus
 
 ## Context
 

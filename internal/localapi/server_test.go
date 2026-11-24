@@ -5,7 +5,9 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"fmt"
+	"io"
 	"net"
+	"net/http"
 	"os"
 	"testing"
 	"time"
@@ -67,6 +69,44 @@ func TestServer_CloseRemovesSocket(t *testing.T) {
 	_, err = stream.Receive()
 	require.Error(t, err)
 	assert.Equal(t, connect.CodeUnavailable, connect.CodeOf(err))
+}
+
+func TestServer_CloseDropsASilentStatusClient(t *testing.T) {
+	f := newAPIFixture(t)
+	statusListener, statusSocket := apiListener(t)
+	listener, socket := apiListener(t)
+	srv := New(t.Context(), statusListener, StatusSource{})
+	require.NoError(t, srv.AttachAPI(listener, f.clients()))
+	srv.MarkReady()
+	accepted := make(chan struct{}, 1)
+	srv.status.ConnState = func(_ net.Conn, state http.ConnState) {
+		if state == http.StateNew {
+			accepted <- struct{}{}
+		}
+	}
+	h := &apiServer{srv: srv, socket: socket, statusSocket: statusSocket, done: make(chan error, 2)}
+	go func() { h.done <- srv.ServeStatus() }()
+	go func() { h.done <- srv.ServeAPI() }()
+	t.Cleanup(func() { h.close(t) })
+
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	var dialer net.Dialer
+	conn, err := dialer.DialContext(ctx, "unix", statusSocket)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = conn.Close() })
+	select {
+	case <-accepted:
+	case <-ctx.Done():
+		t.Fatal("status connection was not accepted")
+	}
+
+	started := time.Now()
+	h.close(t)
+	assert.Less(t, time.Since(started), time.Second)
+	require.NoError(t, conn.SetReadDeadline(time.Now().Add(time.Second)))
+	_, err = conn.Read(make([]byte, 1))
+	require.ErrorIs(t, err, io.EOF)
 }
 
 func TestServer_CloseDoesNotWaitForAStalledClient(t *testing.T) {

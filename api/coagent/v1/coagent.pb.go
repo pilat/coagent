@@ -924,6 +924,308 @@ func (x *SessionState) GetState() RuntimeState {
 	return RuntimeState_RUNTIME_STATE_UNSPECIFIED
 }
 
+type GetStatusRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetStatusRequest) Reset() {
+	*x = GetStatusRequest{}
+	mi := &file_coagent_v1_coagent_proto_msgTypes[14]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetStatusRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetStatusRequest) ProtoMessage() {}
+
+func (x *GetStatusRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_coagent_v1_coagent_proto_msgTypes[14]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetStatusRequest.ProtoReflect.Descriptor instead.
+func (*GetStatusRequest) Descriptor() ([]byte, []int) {
+	return file_coagent_v1_coagent_proto_rawDescGZIP(), []int{14}
+}
+
+type GetStatusResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	BinaryVersion string                 `protobuf:"bytes,1,opt,name=binary_version,json=binaryVersion,proto3" json:"binary_version,omitempty"`
+	// Names this run of the daemon: a restart reuses the pid, socket and binary.
+	BootId        string `protobuf:"bytes,2,opt,name=boot_id,json=bootId,proto3" json:"boot_id,omitempty"`
+	Pid           int64  `protobuf:"varint,3,opt,name=pid,proto3" json:"pid,omitempty"`
+	UptimeSeconds int64  `protobuf:"varint,4,opt,name=uptime_seconds,json=uptimeSeconds,proto3" json:"uptime_seconds,omitempty"`
+	ConfigPath    string `protobuf:"bytes,5,opt,name=config_path,json=configPath,proto3" json:"config_path,omitempty"`
+	// False before the operator has written a valid config; providers, models and managers are then empty.
+	ConfigPresent bool              `protobuf:"varint,6,opt,name=config_present,json=configPresent,proto3" json:"config_present,omitempty"`
+	Providers     []*ProviderStatus `protobuf:"bytes,7,rep,name=providers,proto3" json:"providers,omitempty"`
+	ModelCount    int64             `protobuf:"varint,8,opt,name=model_count,json=modelCount,proto3" json:"model_count,omitempty"`
+	DefaultModel  string            `protobuf:"bytes,9,opt,name=default_model,json=defaultModel,proto3" json:"default_model,omitempty"`
+	// Models their catalog no longer lists.
+	StaleModels []string `protobuf:"bytes,10,rep,name=stale_models,json=staleModels,proto3" json:"stale_models,omitempty"`
+	// "tavily", "searxng (<base_url>)", "native (openrouter)", "disabled", or empty when unconfigured.
+	Search        string           `protobuf:"bytes,11,opt,name=search,proto3" json:"search,omitempty"`
+	Managers      []*ManagerStatus `protobuf:"bytes,12,rep,name=managers,proto3" json:"managers,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetStatusResponse) Reset() {
+	*x = GetStatusResponse{}
+	mi := &file_coagent_v1_coagent_proto_msgTypes[15]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetStatusResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetStatusResponse) ProtoMessage() {}
+
+func (x *GetStatusResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_coagent_v1_coagent_proto_msgTypes[15]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetStatusResponse.ProtoReflect.Descriptor instead.
+func (*GetStatusResponse) Descriptor() ([]byte, []int) {
+	return file_coagent_v1_coagent_proto_rawDescGZIP(), []int{15}
+}
+
+func (x *GetStatusResponse) GetBinaryVersion() string {
+	if x != nil {
+		return x.BinaryVersion
+	}
+	return ""
+}
+
+func (x *GetStatusResponse) GetBootId() string {
+	if x != nil {
+		return x.BootId
+	}
+	return ""
+}
+
+func (x *GetStatusResponse) GetPid() int64 {
+	if x != nil {
+		return x.Pid
+	}
+	return 0
+}
+
+func (x *GetStatusResponse) GetUptimeSeconds() int64 {
+	if x != nil {
+		return x.UptimeSeconds
+	}
+	return 0
+}
+
+func (x *GetStatusResponse) GetConfigPath() string {
+	if x != nil {
+		return x.ConfigPath
+	}
+	return ""
+}
+
+func (x *GetStatusResponse) GetConfigPresent() bool {
+	if x != nil {
+		return x.ConfigPresent
+	}
+	return false
+}
+
+func (x *GetStatusResponse) GetProviders() []*ProviderStatus {
+	if x != nil {
+		return x.Providers
+	}
+	return nil
+}
+
+func (x *GetStatusResponse) GetModelCount() int64 {
+	if x != nil {
+		return x.ModelCount
+	}
+	return 0
+}
+
+func (x *GetStatusResponse) GetDefaultModel() string {
+	if x != nil {
+		return x.DefaultModel
+	}
+	return ""
+}
+
+func (x *GetStatusResponse) GetStaleModels() []string {
+	if x != nil {
+		return x.StaleModels
+	}
+	return nil
+}
+
+func (x *GetStatusResponse) GetSearch() string {
+	if x != nil {
+		return x.Search
+	}
+	return ""
+}
+
+func (x *GetStatusResponse) GetManagers() []*ManagerStatus {
+	if x != nil {
+		return x.Managers
+	}
+	return nil
+}
+
+// ProviderStatus carries no credential, not even a hint.
+type ProviderStatus struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	Driver        string                 `protobuf:"bytes,2,opt,name=driver,proto3" json:"driver,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ProviderStatus) Reset() {
+	*x = ProviderStatus{}
+	mi := &file_coagent_v1_coagent_proto_msgTypes[16]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ProviderStatus) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ProviderStatus) ProtoMessage() {}
+
+func (x *ProviderStatus) ProtoReflect() protoreflect.Message {
+	mi := &file_coagent_v1_coagent_proto_msgTypes[16]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ProviderStatus.ProtoReflect.Descriptor instead.
+func (*ProviderStatus) Descriptor() ([]byte, []int) {
+	return file_coagent_v1_coagent_proto_rawDescGZIP(), []int{16}
+}
+
+func (x *ProviderStatus) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *ProviderStatus) GetDriver() string {
+	if x != nil {
+		return x.Driver
+	}
+	return ""
+}
+
+type ManagerStatus struct {
+	state   protoimpl.MessageState `protogen:"open.v1"`
+	Id      string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	Driver  string                 `protobuf:"bytes,2,opt,name=driver,proto3" json:"driver,omitempty"`
+	Enabled bool                   `protobuf:"varint,3,opt,name=enabled,proto3" json:"enabled,omitempty"`
+	Running bool                   `protobuf:"varint,4,opt,name=running,proto3" json:"running,omitempty"`
+	// Why an enabled manager is not running, credential-redacted.
+	Error         string `protobuf:"bytes,5,opt,name=error,proto3" json:"error,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ManagerStatus) Reset() {
+	*x = ManagerStatus{}
+	mi := &file_coagent_v1_coagent_proto_msgTypes[17]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ManagerStatus) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ManagerStatus) ProtoMessage() {}
+
+func (x *ManagerStatus) ProtoReflect() protoreflect.Message {
+	mi := &file_coagent_v1_coagent_proto_msgTypes[17]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ManagerStatus.ProtoReflect.Descriptor instead.
+func (*ManagerStatus) Descriptor() ([]byte, []int) {
+	return file_coagent_v1_coagent_proto_rawDescGZIP(), []int{17}
+}
+
+func (x *ManagerStatus) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *ManagerStatus) GetDriver() string {
+	if x != nil {
+		return x.Driver
+	}
+	return ""
+}
+
+func (x *ManagerStatus) GetEnabled() bool {
+	if x != nil {
+		return x.Enabled
+	}
+	return false
+}
+
+func (x *ManagerStatus) GetRunning() bool {
+	if x != nil {
+		return x.Running
+	}
+	return false
+}
+
+func (x *ManagerStatus) GetError() string {
+	if x != nil {
+		return x.Error
+	}
+	return ""
+}
+
 type ListSessionsRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	unknownFields protoimpl.UnknownFields
@@ -932,7 +1234,7 @@ type ListSessionsRequest struct {
 
 func (x *ListSessionsRequest) Reset() {
 	*x = ListSessionsRequest{}
-	mi := &file_coagent_v1_coagent_proto_msgTypes[14]
+	mi := &file_coagent_v1_coagent_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -944,7 +1246,7 @@ func (x *ListSessionsRequest) String() string {
 func (*ListSessionsRequest) ProtoMessage() {}
 
 func (x *ListSessionsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_coagent_v1_coagent_proto_msgTypes[14]
+	mi := &file_coagent_v1_coagent_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -957,7 +1259,7 @@ func (x *ListSessionsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListSessionsRequest.ProtoReflect.Descriptor instead.
 func (*ListSessionsRequest) Descriptor() ([]byte, []int) {
-	return file_coagent_v1_coagent_proto_rawDescGZIP(), []int{14}
+	return file_coagent_v1_coagent_proto_rawDescGZIP(), []int{18}
 }
 
 type ListSessionsResponse struct {
@@ -969,7 +1271,7 @@ type ListSessionsResponse struct {
 
 func (x *ListSessionsResponse) Reset() {
 	*x = ListSessionsResponse{}
-	mi := &file_coagent_v1_coagent_proto_msgTypes[15]
+	mi := &file_coagent_v1_coagent_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -981,7 +1283,7 @@ func (x *ListSessionsResponse) String() string {
 func (*ListSessionsResponse) ProtoMessage() {}
 
 func (x *ListSessionsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_coagent_v1_coagent_proto_msgTypes[15]
+	mi := &file_coagent_v1_coagent_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -994,7 +1296,7 @@ func (x *ListSessionsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListSessionsResponse.ProtoReflect.Descriptor instead.
 func (*ListSessionsResponse) Descriptor() ([]byte, []int) {
-	return file_coagent_v1_coagent_proto_rawDescGZIP(), []int{15}
+	return file_coagent_v1_coagent_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *ListSessionsResponse) GetSessions() []*SessionSummary {
@@ -1017,7 +1319,7 @@ type SessionSummary struct {
 
 func (x *SessionSummary) Reset() {
 	*x = SessionSummary{}
-	mi := &file_coagent_v1_coagent_proto_msgTypes[16]
+	mi := &file_coagent_v1_coagent_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1029,7 +1331,7 @@ func (x *SessionSummary) String() string {
 func (*SessionSummary) ProtoMessage() {}
 
 func (x *SessionSummary) ProtoReflect() protoreflect.Message {
-	mi := &file_coagent_v1_coagent_proto_msgTypes[16]
+	mi := &file_coagent_v1_coagent_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1042,7 +1344,7 @@ func (x *SessionSummary) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SessionSummary.ProtoReflect.Descriptor instead.
 func (*SessionSummary) Descriptor() ([]byte, []int) {
-	return file_coagent_v1_coagent_proto_rawDescGZIP(), []int{16}
+	return file_coagent_v1_coagent_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *SessionSummary) GetId() int64 {
@@ -1074,7 +1376,7 @@ type ListSessionDetailsRequest struct {
 
 func (x *ListSessionDetailsRequest) Reset() {
 	*x = ListSessionDetailsRequest{}
-	mi := &file_coagent_v1_coagent_proto_msgTypes[17]
+	mi := &file_coagent_v1_coagent_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1086,7 +1388,7 @@ func (x *ListSessionDetailsRequest) String() string {
 func (*ListSessionDetailsRequest) ProtoMessage() {}
 
 func (x *ListSessionDetailsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_coagent_v1_coagent_proto_msgTypes[17]
+	mi := &file_coagent_v1_coagent_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1099,7 +1401,7 @@ func (x *ListSessionDetailsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListSessionDetailsRequest.ProtoReflect.Descriptor instead.
 func (*ListSessionDetailsRequest) Descriptor() ([]byte, []int) {
-	return file_coagent_v1_coagent_proto_rawDescGZIP(), []int{17}
+	return file_coagent_v1_coagent_proto_rawDescGZIP(), []int{21}
 }
 
 type ListSessionDetailsResponse struct {
@@ -1111,7 +1413,7 @@ type ListSessionDetailsResponse struct {
 
 func (x *ListSessionDetailsResponse) Reset() {
 	*x = ListSessionDetailsResponse{}
-	mi := &file_coagent_v1_coagent_proto_msgTypes[18]
+	mi := &file_coagent_v1_coagent_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1123,7 +1425,7 @@ func (x *ListSessionDetailsResponse) String() string {
 func (*ListSessionDetailsResponse) ProtoMessage() {}
 
 func (x *ListSessionDetailsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_coagent_v1_coagent_proto_msgTypes[18]
+	mi := &file_coagent_v1_coagent_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1136,7 +1438,7 @@ func (x *ListSessionDetailsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListSessionDetailsResponse.ProtoReflect.Descriptor instead.
 func (*ListSessionDetailsResponse) Descriptor() ([]byte, []int) {
-	return file_coagent_v1_coagent_proto_rawDescGZIP(), []int{18}
+	return file_coagent_v1_coagent_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *ListSessionDetailsResponse) GetSessions() []*SessionDetails {
@@ -1162,7 +1464,7 @@ type SessionDetails struct {
 
 func (x *SessionDetails) Reset() {
 	*x = SessionDetails{}
-	mi := &file_coagent_v1_coagent_proto_msgTypes[19]
+	mi := &file_coagent_v1_coagent_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1174,7 +1476,7 @@ func (x *SessionDetails) String() string {
 func (*SessionDetails) ProtoMessage() {}
 
 func (x *SessionDetails) ProtoReflect() protoreflect.Message {
-	mi := &file_coagent_v1_coagent_proto_msgTypes[19]
+	mi := &file_coagent_v1_coagent_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1187,7 +1489,7 @@ func (x *SessionDetails) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SessionDetails.ProtoReflect.Descriptor instead.
 func (*SessionDetails) Descriptor() ([]byte, []int) {
-	return file_coagent_v1_coagent_proto_rawDescGZIP(), []int{19}
+	return file_coagent_v1_coagent_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *SessionDetails) GetId() int64 {
@@ -1241,7 +1543,7 @@ type GetSessionKilledRequest struct {
 
 func (x *GetSessionKilledRequest) Reset() {
 	*x = GetSessionKilledRequest{}
-	mi := &file_coagent_v1_coagent_proto_msgTypes[20]
+	mi := &file_coagent_v1_coagent_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1253,7 +1555,7 @@ func (x *GetSessionKilledRequest) String() string {
 func (*GetSessionKilledRequest) ProtoMessage() {}
 
 func (x *GetSessionKilledRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_coagent_v1_coagent_proto_msgTypes[20]
+	mi := &file_coagent_v1_coagent_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1266,7 +1568,7 @@ func (x *GetSessionKilledRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetSessionKilledRequest.ProtoReflect.Descriptor instead.
 func (*GetSessionKilledRequest) Descriptor() ([]byte, []int) {
-	return file_coagent_v1_coagent_proto_rawDescGZIP(), []int{20}
+	return file_coagent_v1_coagent_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *GetSessionKilledRequest) GetSessionId() int64 {
@@ -1285,7 +1587,7 @@ type GetSessionKilledResponse struct {
 
 func (x *GetSessionKilledResponse) Reset() {
 	*x = GetSessionKilledResponse{}
-	mi := &file_coagent_v1_coagent_proto_msgTypes[21]
+	mi := &file_coagent_v1_coagent_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1297,7 +1599,7 @@ func (x *GetSessionKilledResponse) String() string {
 func (*GetSessionKilledResponse) ProtoMessage() {}
 
 func (x *GetSessionKilledResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_coagent_v1_coagent_proto_msgTypes[21]
+	mi := &file_coagent_v1_coagent_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1310,7 +1612,7 @@ func (x *GetSessionKilledResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetSessionKilledResponse.ProtoReflect.Descriptor instead.
 func (*GetSessionKilledResponse) Descriptor() ([]byte, []int) {
-	return file_coagent_v1_coagent_proto_rawDescGZIP(), []int{21}
+	return file_coagent_v1_coagent_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *GetSessionKilledResponse) GetKilled() bool {
@@ -1333,7 +1635,7 @@ type SetSessionModelRequest struct {
 
 func (x *SetSessionModelRequest) Reset() {
 	*x = SetSessionModelRequest{}
-	mi := &file_coagent_v1_coagent_proto_msgTypes[22]
+	mi := &file_coagent_v1_coagent_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1345,7 +1647,7 @@ func (x *SetSessionModelRequest) String() string {
 func (*SetSessionModelRequest) ProtoMessage() {}
 
 func (x *SetSessionModelRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_coagent_v1_coagent_proto_msgTypes[22]
+	mi := &file_coagent_v1_coagent_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1358,7 +1660,7 @@ func (x *SetSessionModelRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetSessionModelRequest.ProtoReflect.Descriptor instead.
 func (*SetSessionModelRequest) Descriptor() ([]byte, []int) {
-	return file_coagent_v1_coagent_proto_rawDescGZIP(), []int{22}
+	return file_coagent_v1_coagent_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *SetSessionModelRequest) GetSessionId() int64 {
@@ -1390,7 +1692,7 @@ type SetSessionModelResponse struct {
 
 func (x *SetSessionModelResponse) Reset() {
 	*x = SetSessionModelResponse{}
-	mi := &file_coagent_v1_coagent_proto_msgTypes[23]
+	mi := &file_coagent_v1_coagent_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1402,7 +1704,7 @@ func (x *SetSessionModelResponse) String() string {
 func (*SetSessionModelResponse) ProtoMessage() {}
 
 func (x *SetSessionModelResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_coagent_v1_coagent_proto_msgTypes[23]
+	mi := &file_coagent_v1_coagent_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1415,7 +1717,7 @@ func (x *SetSessionModelResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetSessionModelResponse.ProtoReflect.Descriptor instead.
 func (*SetSessionModelResponse) Descriptor() ([]byte, []int) {
-	return file_coagent_v1_coagent_proto_rawDescGZIP(), []int{23}
+	return file_coagent_v1_coagent_proto_rawDescGZIP(), []int{27}
 }
 
 type SetSessionTitleRequest struct {
@@ -1429,7 +1731,7 @@ type SetSessionTitleRequest struct {
 
 func (x *SetSessionTitleRequest) Reset() {
 	*x = SetSessionTitleRequest{}
-	mi := &file_coagent_v1_coagent_proto_msgTypes[24]
+	mi := &file_coagent_v1_coagent_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1441,7 +1743,7 @@ func (x *SetSessionTitleRequest) String() string {
 func (*SetSessionTitleRequest) ProtoMessage() {}
 
 func (x *SetSessionTitleRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_coagent_v1_coagent_proto_msgTypes[24]
+	mi := &file_coagent_v1_coagent_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1454,7 +1756,7 @@ func (x *SetSessionTitleRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetSessionTitleRequest.ProtoReflect.Descriptor instead.
 func (*SetSessionTitleRequest) Descriptor() ([]byte, []int) {
-	return file_coagent_v1_coagent_proto_rawDescGZIP(), []int{24}
+	return file_coagent_v1_coagent_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *SetSessionTitleRequest) GetSessionId() int64 {
@@ -1479,7 +1781,7 @@ type SetSessionTitleResponse struct {
 
 func (x *SetSessionTitleResponse) Reset() {
 	*x = SetSessionTitleResponse{}
-	mi := &file_coagent_v1_coagent_proto_msgTypes[25]
+	mi := &file_coagent_v1_coagent_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1491,7 +1793,7 @@ func (x *SetSessionTitleResponse) String() string {
 func (*SetSessionTitleResponse) ProtoMessage() {}
 
 func (x *SetSessionTitleResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_coagent_v1_coagent_proto_msgTypes[25]
+	mi := &file_coagent_v1_coagent_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1504,7 +1806,7 @@ func (x *SetSessionTitleResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetSessionTitleResponse.ProtoReflect.Descriptor instead.
 func (*SetSessionTitleResponse) Descriptor() ([]byte, []int) {
-	return file_coagent_v1_coagent_proto_rawDescGZIP(), []int{25}
+	return file_coagent_v1_coagent_proto_rawDescGZIP(), []int{29}
 }
 
 type GetOrchestratorModeRequest struct {
@@ -1516,7 +1818,7 @@ type GetOrchestratorModeRequest struct {
 
 func (x *GetOrchestratorModeRequest) Reset() {
 	*x = GetOrchestratorModeRequest{}
-	mi := &file_coagent_v1_coagent_proto_msgTypes[26]
+	mi := &file_coagent_v1_coagent_proto_msgTypes[30]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1528,7 +1830,7 @@ func (x *GetOrchestratorModeRequest) String() string {
 func (*GetOrchestratorModeRequest) ProtoMessage() {}
 
 func (x *GetOrchestratorModeRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_coagent_v1_coagent_proto_msgTypes[26]
+	mi := &file_coagent_v1_coagent_proto_msgTypes[30]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1541,7 +1843,7 @@ func (x *GetOrchestratorModeRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetOrchestratorModeRequest.ProtoReflect.Descriptor instead.
 func (*GetOrchestratorModeRequest) Descriptor() ([]byte, []int) {
-	return file_coagent_v1_coagent_proto_rawDescGZIP(), []int{26}
+	return file_coagent_v1_coagent_proto_rawDescGZIP(), []int{30}
 }
 
 func (x *GetOrchestratorModeRequest) GetSessionId() int64 {
@@ -1560,7 +1862,7 @@ type GetOrchestratorModeResponse struct {
 
 func (x *GetOrchestratorModeResponse) Reset() {
 	*x = GetOrchestratorModeResponse{}
-	mi := &file_coagent_v1_coagent_proto_msgTypes[27]
+	mi := &file_coagent_v1_coagent_proto_msgTypes[31]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1572,7 +1874,7 @@ func (x *GetOrchestratorModeResponse) String() string {
 func (*GetOrchestratorModeResponse) ProtoMessage() {}
 
 func (x *GetOrchestratorModeResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_coagent_v1_coagent_proto_msgTypes[27]
+	mi := &file_coagent_v1_coagent_proto_msgTypes[31]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1585,7 +1887,7 @@ func (x *GetOrchestratorModeResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetOrchestratorModeResponse.ProtoReflect.Descriptor instead.
 func (*GetOrchestratorModeResponse) Descriptor() ([]byte, []int) {
-	return file_coagent_v1_coagent_proto_rawDescGZIP(), []int{27}
+	return file_coagent_v1_coagent_proto_rawDescGZIP(), []int{31}
 }
 
 func (x *GetOrchestratorModeResponse) GetOn() bool {
@@ -1605,7 +1907,7 @@ type SetOrchestratorModeRequest struct {
 
 func (x *SetOrchestratorModeRequest) Reset() {
 	*x = SetOrchestratorModeRequest{}
-	mi := &file_coagent_v1_coagent_proto_msgTypes[28]
+	mi := &file_coagent_v1_coagent_proto_msgTypes[32]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1617,7 +1919,7 @@ func (x *SetOrchestratorModeRequest) String() string {
 func (*SetOrchestratorModeRequest) ProtoMessage() {}
 
 func (x *SetOrchestratorModeRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_coagent_v1_coagent_proto_msgTypes[28]
+	mi := &file_coagent_v1_coagent_proto_msgTypes[32]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1630,7 +1932,7 @@ func (x *SetOrchestratorModeRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetOrchestratorModeRequest.ProtoReflect.Descriptor instead.
 func (*SetOrchestratorModeRequest) Descriptor() ([]byte, []int) {
-	return file_coagent_v1_coagent_proto_rawDescGZIP(), []int{28}
+	return file_coagent_v1_coagent_proto_rawDescGZIP(), []int{32}
 }
 
 func (x *SetOrchestratorModeRequest) GetSessionId() int64 {
@@ -1657,7 +1959,7 @@ type SetOrchestratorModeResponse struct {
 
 func (x *SetOrchestratorModeResponse) Reset() {
 	*x = SetOrchestratorModeResponse{}
-	mi := &file_coagent_v1_coagent_proto_msgTypes[29]
+	mi := &file_coagent_v1_coagent_proto_msgTypes[33]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1669,7 +1971,7 @@ func (x *SetOrchestratorModeResponse) String() string {
 func (*SetOrchestratorModeResponse) ProtoMessage() {}
 
 func (x *SetOrchestratorModeResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_coagent_v1_coagent_proto_msgTypes[29]
+	mi := &file_coagent_v1_coagent_proto_msgTypes[33]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1682,7 +1984,7 @@ func (x *SetOrchestratorModeResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetOrchestratorModeResponse.ProtoReflect.Descriptor instead.
 func (*SetOrchestratorModeResponse) Descriptor() ([]byte, []int) {
-	return file_coagent_v1_coagent_proto_rawDescGZIP(), []int{29}
+	return file_coagent_v1_coagent_proto_rawDescGZIP(), []int{33}
 }
 
 func (x *SetOrchestratorModeResponse) GetChanged() bool {
@@ -1704,7 +2006,7 @@ type ListOutputRequest struct {
 
 func (x *ListOutputRequest) Reset() {
 	*x = ListOutputRequest{}
-	mi := &file_coagent_v1_coagent_proto_msgTypes[30]
+	mi := &file_coagent_v1_coagent_proto_msgTypes[34]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1716,7 +2018,7 @@ func (x *ListOutputRequest) String() string {
 func (*ListOutputRequest) ProtoMessage() {}
 
 func (x *ListOutputRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_coagent_v1_coagent_proto_msgTypes[30]
+	mi := &file_coagent_v1_coagent_proto_msgTypes[34]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1729,7 +2031,7 @@ func (x *ListOutputRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListOutputRequest.ProtoReflect.Descriptor instead.
 func (*ListOutputRequest) Descriptor() ([]byte, []int) {
-	return file_coagent_v1_coagent_proto_rawDescGZIP(), []int{30}
+	return file_coagent_v1_coagent_proto_rawDescGZIP(), []int{34}
 }
 
 func (x *ListOutputRequest) GetSessionId() int64 {
@@ -1762,7 +2064,7 @@ type ListOutputResponse struct {
 
 func (x *ListOutputResponse) Reset() {
 	*x = ListOutputResponse{}
-	mi := &file_coagent_v1_coagent_proto_msgTypes[31]
+	mi := &file_coagent_v1_coagent_proto_msgTypes[35]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1774,7 +2076,7 @@ func (x *ListOutputResponse) String() string {
 func (*ListOutputResponse) ProtoMessage() {}
 
 func (x *ListOutputResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_coagent_v1_coagent_proto_msgTypes[31]
+	mi := &file_coagent_v1_coagent_proto_msgTypes[35]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1787,7 +2089,7 @@ func (x *ListOutputResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListOutputResponse.ProtoReflect.Descriptor instead.
 func (*ListOutputResponse) Descriptor() ([]byte, []int) {
-	return file_coagent_v1_coagent_proto_rawDescGZIP(), []int{31}
+	return file_coagent_v1_coagent_proto_rawDescGZIP(), []int{35}
 }
 
 func (x *ListOutputResponse) GetRows() []*OutputRow {
@@ -1808,7 +2110,7 @@ type ReadEntryRequest struct {
 
 func (x *ReadEntryRequest) Reset() {
 	*x = ReadEntryRequest{}
-	mi := &file_coagent_v1_coagent_proto_msgTypes[32]
+	mi := &file_coagent_v1_coagent_proto_msgTypes[36]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1820,7 +2122,7 @@ func (x *ReadEntryRequest) String() string {
 func (*ReadEntryRequest) ProtoMessage() {}
 
 func (x *ReadEntryRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_coagent_v1_coagent_proto_msgTypes[32]
+	mi := &file_coagent_v1_coagent_proto_msgTypes[36]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1833,7 +2135,7 @@ func (x *ReadEntryRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReadEntryRequest.ProtoReflect.Descriptor instead.
 func (*ReadEntryRequest) Descriptor() ([]byte, []int) {
-	return file_coagent_v1_coagent_proto_rawDescGZIP(), []int{32}
+	return file_coagent_v1_coagent_proto_rawDescGZIP(), []int{36}
 }
 
 func (x *ReadEntryRequest) GetSessionId() int64 {
@@ -1862,7 +2164,7 @@ type ReadEntryResponse struct {
 
 func (x *ReadEntryResponse) Reset() {
 	*x = ReadEntryResponse{}
-	mi := &file_coagent_v1_coagent_proto_msgTypes[33]
+	mi := &file_coagent_v1_coagent_proto_msgTypes[37]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1874,7 +2176,7 @@ func (x *ReadEntryResponse) String() string {
 func (*ReadEntryResponse) ProtoMessage() {}
 
 func (x *ReadEntryResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_coagent_v1_coagent_proto_msgTypes[33]
+	mi := &file_coagent_v1_coagent_proto_msgTypes[37]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1887,7 +2189,7 @@ func (x *ReadEntryResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReadEntryResponse.ProtoReflect.Descriptor instead.
 func (*ReadEntryResponse) Descriptor() ([]byte, []int) {
-	return file_coagent_v1_coagent_proto_rawDescGZIP(), []int{33}
+	return file_coagent_v1_coagent_proto_rawDescGZIP(), []int{37}
 }
 
 func (x *ReadEntryResponse) GetRows() []*OutputRow {
@@ -1912,7 +2214,7 @@ type StreamSessionEventsRequest struct {
 
 func (x *StreamSessionEventsRequest) Reset() {
 	*x = StreamSessionEventsRequest{}
-	mi := &file_coagent_v1_coagent_proto_msgTypes[34]
+	mi := &file_coagent_v1_coagent_proto_msgTypes[38]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1924,7 +2226,7 @@ func (x *StreamSessionEventsRequest) String() string {
 func (*StreamSessionEventsRequest) ProtoMessage() {}
 
 func (x *StreamSessionEventsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_coagent_v1_coagent_proto_msgTypes[34]
+	mi := &file_coagent_v1_coagent_proto_msgTypes[38]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1937,7 +2239,7 @@ func (x *StreamSessionEventsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StreamSessionEventsRequest.ProtoReflect.Descriptor instead.
 func (*StreamSessionEventsRequest) Descriptor() ([]byte, []int) {
-	return file_coagent_v1_coagent_proto_rawDescGZIP(), []int{34}
+	return file_coagent_v1_coagent_proto_rawDescGZIP(), []int{38}
 }
 
 type StreamSessionEventsResponse struct {
@@ -1951,7 +2253,7 @@ type StreamSessionEventsResponse struct {
 
 func (x *StreamSessionEventsResponse) Reset() {
 	*x = StreamSessionEventsResponse{}
-	mi := &file_coagent_v1_coagent_proto_msgTypes[35]
+	mi := &file_coagent_v1_coagent_proto_msgTypes[39]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1963,7 +2265,7 @@ func (x *StreamSessionEventsResponse) String() string {
 func (*StreamSessionEventsResponse) ProtoMessage() {}
 
 func (x *StreamSessionEventsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_coagent_v1_coagent_proto_msgTypes[35]
+	mi := &file_coagent_v1_coagent_proto_msgTypes[39]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1976,7 +2278,7 @@ func (x *StreamSessionEventsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StreamSessionEventsResponse.ProtoReflect.Descriptor instead.
 func (*StreamSessionEventsResponse) Descriptor() ([]byte, []int) {
-	return file_coagent_v1_coagent_proto_rawDescGZIP(), []int{35}
+	return file_coagent_v1_coagent_proto_rawDescGZIP(), []int{39}
 }
 
 func (x *StreamSessionEventsResponse) GetSessionId() int64 {
@@ -2002,7 +2304,7 @@ type BindChatRequest struct {
 
 func (x *BindChatRequest) Reset() {
 	*x = BindChatRequest{}
-	mi := &file_coagent_v1_coagent_proto_msgTypes[36]
+	mi := &file_coagent_v1_coagent_proto_msgTypes[40]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2014,7 +2316,7 @@ func (x *BindChatRequest) String() string {
 func (*BindChatRequest) ProtoMessage() {}
 
 func (x *BindChatRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_coagent_v1_coagent_proto_msgTypes[36]
+	mi := &file_coagent_v1_coagent_proto_msgTypes[40]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2027,7 +2329,7 @@ func (x *BindChatRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BindChatRequest.ProtoReflect.Descriptor instead.
 func (*BindChatRequest) Descriptor() ([]byte, []int) {
-	return file_coagent_v1_coagent_proto_rawDescGZIP(), []int{36}
+	return file_coagent_v1_coagent_proto_rawDescGZIP(), []int{40}
 }
 
 func (x *BindChatRequest) GetChatId() string {
@@ -2045,7 +2347,7 @@ type BindChatResponse struct {
 
 func (x *BindChatResponse) Reset() {
 	*x = BindChatResponse{}
-	mi := &file_coagent_v1_coagent_proto_msgTypes[37]
+	mi := &file_coagent_v1_coagent_proto_msgTypes[41]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2057,7 +2359,7 @@ func (x *BindChatResponse) String() string {
 func (*BindChatResponse) ProtoMessage() {}
 
 func (x *BindChatResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_coagent_v1_coagent_proto_msgTypes[37]
+	mi := &file_coagent_v1_coagent_proto_msgTypes[41]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2070,7 +2372,7 @@ func (x *BindChatResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BindChatResponse.ProtoReflect.Descriptor instead.
 func (*BindChatResponse) Descriptor() ([]byte, []int) {
-	return file_coagent_v1_coagent_proto_rawDescGZIP(), []int{37}
+	return file_coagent_v1_coagent_proto_rawDescGZIP(), []int{41}
 }
 
 type GetChatFocusRequest struct {
@@ -2082,7 +2384,7 @@ type GetChatFocusRequest struct {
 
 func (x *GetChatFocusRequest) Reset() {
 	*x = GetChatFocusRequest{}
-	mi := &file_coagent_v1_coagent_proto_msgTypes[38]
+	mi := &file_coagent_v1_coagent_proto_msgTypes[42]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2094,7 +2396,7 @@ func (x *GetChatFocusRequest) String() string {
 func (*GetChatFocusRequest) ProtoMessage() {}
 
 func (x *GetChatFocusRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_coagent_v1_coagent_proto_msgTypes[38]
+	mi := &file_coagent_v1_coagent_proto_msgTypes[42]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2107,7 +2409,7 @@ func (x *GetChatFocusRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetChatFocusRequest.ProtoReflect.Descriptor instead.
 func (*GetChatFocusRequest) Descriptor() ([]byte, []int) {
-	return file_coagent_v1_coagent_proto_rawDescGZIP(), []int{38}
+	return file_coagent_v1_coagent_proto_rawDescGZIP(), []int{42}
 }
 
 func (x *GetChatFocusRequest) GetChatId() string {
@@ -2127,7 +2429,7 @@ type GetChatFocusResponse struct {
 
 func (x *GetChatFocusResponse) Reset() {
 	*x = GetChatFocusResponse{}
-	mi := &file_coagent_v1_coagent_proto_msgTypes[39]
+	mi := &file_coagent_v1_coagent_proto_msgTypes[43]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2139,7 +2441,7 @@ func (x *GetChatFocusResponse) String() string {
 func (*GetChatFocusResponse) ProtoMessage() {}
 
 func (x *GetChatFocusResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_coagent_v1_coagent_proto_msgTypes[39]
+	mi := &file_coagent_v1_coagent_proto_msgTypes[43]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2152,7 +2454,7 @@ func (x *GetChatFocusResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetChatFocusResponse.ProtoReflect.Descriptor instead.
 func (*GetChatFocusResponse) Descriptor() ([]byte, []int) {
-	return file_coagent_v1_coagent_proto_rawDescGZIP(), []int{39}
+	return file_coagent_v1_coagent_proto_rawDescGZIP(), []int{43}
 }
 
 func (x *GetChatFocusResponse) GetSessionId() int64 {
@@ -2171,7 +2473,7 @@ type GetChatCursorRequest struct {
 
 func (x *GetChatCursorRequest) Reset() {
 	*x = GetChatCursorRequest{}
-	mi := &file_coagent_v1_coagent_proto_msgTypes[40]
+	mi := &file_coagent_v1_coagent_proto_msgTypes[44]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2183,7 +2485,7 @@ func (x *GetChatCursorRequest) String() string {
 func (*GetChatCursorRequest) ProtoMessage() {}
 
 func (x *GetChatCursorRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_coagent_v1_coagent_proto_msgTypes[40]
+	mi := &file_coagent_v1_coagent_proto_msgTypes[44]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2196,7 +2498,7 @@ func (x *GetChatCursorRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetChatCursorRequest.ProtoReflect.Descriptor instead.
 func (*GetChatCursorRequest) Descriptor() ([]byte, []int) {
-	return file_coagent_v1_coagent_proto_rawDescGZIP(), []int{40}
+	return file_coagent_v1_coagent_proto_rawDescGZIP(), []int{44}
 }
 
 func (x *GetChatCursorRequest) GetChatId() string {
@@ -2219,7 +2521,7 @@ type GetChatCursorResponse struct {
 
 func (x *GetChatCursorResponse) Reset() {
 	*x = GetChatCursorResponse{}
-	mi := &file_coagent_v1_coagent_proto_msgTypes[41]
+	mi := &file_coagent_v1_coagent_proto_msgTypes[45]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2231,7 +2533,7 @@ func (x *GetChatCursorResponse) String() string {
 func (*GetChatCursorResponse) ProtoMessage() {}
 
 func (x *GetChatCursorResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_coagent_v1_coagent_proto_msgTypes[41]
+	mi := &file_coagent_v1_coagent_proto_msgTypes[45]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2244,7 +2546,7 @@ func (x *GetChatCursorResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetChatCursorResponse.ProtoReflect.Descriptor instead.
 func (*GetChatCursorResponse) Descriptor() ([]byte, []int) {
-	return file_coagent_v1_coagent_proto_rawDescGZIP(), []int{41}
+	return file_coagent_v1_coagent_proto_rawDescGZIP(), []int{45}
 }
 
 func (x *GetChatCursorResponse) GetSessionId() int64 {
@@ -2280,7 +2582,7 @@ type EnterChatRequest struct {
 
 func (x *EnterChatRequest) Reset() {
 	*x = EnterChatRequest{}
-	mi := &file_coagent_v1_coagent_proto_msgTypes[42]
+	mi := &file_coagent_v1_coagent_proto_msgTypes[46]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2292,7 +2594,7 @@ func (x *EnterChatRequest) String() string {
 func (*EnterChatRequest) ProtoMessage() {}
 
 func (x *EnterChatRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_coagent_v1_coagent_proto_msgTypes[42]
+	mi := &file_coagent_v1_coagent_proto_msgTypes[46]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2305,7 +2607,7 @@ func (x *EnterChatRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EnterChatRequest.ProtoReflect.Descriptor instead.
 func (*EnterChatRequest) Descriptor() ([]byte, []int) {
-	return file_coagent_v1_coagent_proto_rawDescGZIP(), []int{42}
+	return file_coagent_v1_coagent_proto_rawDescGZIP(), []int{46}
 }
 
 func (x *EnterChatRequest) GetChatId() string {
@@ -2339,7 +2641,7 @@ type EnterChatResponse struct {
 
 func (x *EnterChatResponse) Reset() {
 	*x = EnterChatResponse{}
-	mi := &file_coagent_v1_coagent_proto_msgTypes[43]
+	mi := &file_coagent_v1_coagent_proto_msgTypes[47]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2351,7 +2653,7 @@ func (x *EnterChatResponse) String() string {
 func (*EnterChatResponse) ProtoMessage() {}
 
 func (x *EnterChatResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_coagent_v1_coagent_proto_msgTypes[43]
+	mi := &file_coagent_v1_coagent_proto_msgTypes[47]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2364,7 +2666,7 @@ func (x *EnterChatResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EnterChatResponse.ProtoReflect.Descriptor instead.
 func (*EnterChatResponse) Descriptor() ([]byte, []int) {
-	return file_coagent_v1_coagent_proto_rawDescGZIP(), []int{43}
+	return file_coagent_v1_coagent_proto_rawDescGZIP(), []int{47}
 }
 
 func (x *EnterChatResponse) GetEntered() bool {
@@ -2385,7 +2687,7 @@ type AdvanceChatRequest struct {
 
 func (x *AdvanceChatRequest) Reset() {
 	*x = AdvanceChatRequest{}
-	mi := &file_coagent_v1_coagent_proto_msgTypes[44]
+	mi := &file_coagent_v1_coagent_proto_msgTypes[48]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2397,7 +2699,7 @@ func (x *AdvanceChatRequest) String() string {
 func (*AdvanceChatRequest) ProtoMessage() {}
 
 func (x *AdvanceChatRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_coagent_v1_coagent_proto_msgTypes[44]
+	mi := &file_coagent_v1_coagent_proto_msgTypes[48]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2410,7 +2712,7 @@ func (x *AdvanceChatRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AdvanceChatRequest.ProtoReflect.Descriptor instead.
 func (*AdvanceChatRequest) Descriptor() ([]byte, []int) {
-	return file_coagent_v1_coagent_proto_rawDescGZIP(), []int{44}
+	return file_coagent_v1_coagent_proto_rawDescGZIP(), []int{48}
 }
 
 func (x *AdvanceChatRequest) GetChatId() string {
@@ -2444,7 +2746,7 @@ type AdvanceChatResponse struct {
 
 func (x *AdvanceChatResponse) Reset() {
 	*x = AdvanceChatResponse{}
-	mi := &file_coagent_v1_coagent_proto_msgTypes[45]
+	mi := &file_coagent_v1_coagent_proto_msgTypes[49]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2456,7 +2758,7 @@ func (x *AdvanceChatResponse) String() string {
 func (*AdvanceChatResponse) ProtoMessage() {}
 
 func (x *AdvanceChatResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_coagent_v1_coagent_proto_msgTypes[45]
+	mi := &file_coagent_v1_coagent_proto_msgTypes[49]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2469,7 +2771,7 @@ func (x *AdvanceChatResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AdvanceChatResponse.ProtoReflect.Descriptor instead.
 func (*AdvanceChatResponse) Descriptor() ([]byte, []int) {
-	return file_coagent_v1_coagent_proto_rawDescGZIP(), []int{45}
+	return file_coagent_v1_coagent_proto_rawDescGZIP(), []int{49}
 }
 
 func (x *AdvanceChatResponse) GetAdvanced() bool {
@@ -2489,7 +2791,7 @@ type SetChatFocusRequest struct {
 
 func (x *SetChatFocusRequest) Reset() {
 	*x = SetChatFocusRequest{}
-	mi := &file_coagent_v1_coagent_proto_msgTypes[46]
+	mi := &file_coagent_v1_coagent_proto_msgTypes[50]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2501,7 +2803,7 @@ func (x *SetChatFocusRequest) String() string {
 func (*SetChatFocusRequest) ProtoMessage() {}
 
 func (x *SetChatFocusRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_coagent_v1_coagent_proto_msgTypes[46]
+	mi := &file_coagent_v1_coagent_proto_msgTypes[50]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2514,7 +2816,7 @@ func (x *SetChatFocusRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetChatFocusRequest.ProtoReflect.Descriptor instead.
 func (*SetChatFocusRequest) Descriptor() ([]byte, []int) {
-	return file_coagent_v1_coagent_proto_rawDescGZIP(), []int{46}
+	return file_coagent_v1_coagent_proto_rawDescGZIP(), []int{50}
 }
 
 func (x *SetChatFocusRequest) GetChatId() string {
@@ -2539,7 +2841,7 @@ type SetChatFocusResponse struct {
 
 func (x *SetChatFocusResponse) Reset() {
 	*x = SetChatFocusResponse{}
-	mi := &file_coagent_v1_coagent_proto_msgTypes[47]
+	mi := &file_coagent_v1_coagent_proto_msgTypes[51]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2551,7 +2853,7 @@ func (x *SetChatFocusResponse) String() string {
 func (*SetChatFocusResponse) ProtoMessage() {}
 
 func (x *SetChatFocusResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_coagent_v1_coagent_proto_msgTypes[47]
+	mi := &file_coagent_v1_coagent_proto_msgTypes[51]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2564,7 +2866,7 @@ func (x *SetChatFocusResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetChatFocusResponse.ProtoReflect.Descriptor instead.
 func (*SetChatFocusResponse) Descriptor() ([]byte, []int) {
-	return file_coagent_v1_coagent_proto_rawDescGZIP(), []int{47}
+	return file_coagent_v1_coagent_proto_rawDescGZIP(), []int{51}
 }
 
 type ResetChatFocusRequest struct {
@@ -2577,7 +2879,7 @@ type ResetChatFocusRequest struct {
 
 func (x *ResetChatFocusRequest) Reset() {
 	*x = ResetChatFocusRequest{}
-	mi := &file_coagent_v1_coagent_proto_msgTypes[48]
+	mi := &file_coagent_v1_coagent_proto_msgTypes[52]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2589,7 +2891,7 @@ func (x *ResetChatFocusRequest) String() string {
 func (*ResetChatFocusRequest) ProtoMessage() {}
 
 func (x *ResetChatFocusRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_coagent_v1_coagent_proto_msgTypes[48]
+	mi := &file_coagent_v1_coagent_proto_msgTypes[52]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2602,7 +2904,7 @@ func (x *ResetChatFocusRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResetChatFocusRequest.ProtoReflect.Descriptor instead.
 func (*ResetChatFocusRequest) Descriptor() ([]byte, []int) {
-	return file_coagent_v1_coagent_proto_rawDescGZIP(), []int{48}
+	return file_coagent_v1_coagent_proto_rawDescGZIP(), []int{52}
 }
 
 func (x *ResetChatFocusRequest) GetChatId() string {
@@ -2629,7 +2931,7 @@ type ResetChatFocusResponse struct {
 
 func (x *ResetChatFocusResponse) Reset() {
 	*x = ResetChatFocusResponse{}
-	mi := &file_coagent_v1_coagent_proto_msgTypes[49]
+	mi := &file_coagent_v1_coagent_proto_msgTypes[53]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2641,7 +2943,7 @@ func (x *ResetChatFocusResponse) String() string {
 func (*ResetChatFocusResponse) ProtoMessage() {}
 
 func (x *ResetChatFocusResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_coagent_v1_coagent_proto_msgTypes[49]
+	mi := &file_coagent_v1_coagent_proto_msgTypes[53]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2654,7 +2956,7 @@ func (x *ResetChatFocusResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResetChatFocusResponse.ProtoReflect.Descriptor instead.
 func (*ResetChatFocusResponse) Descriptor() ([]byte, []int) {
-	return file_coagent_v1_coagent_proto_rawDescGZIP(), []int{49}
+	return file_coagent_v1_coagent_proto_rawDescGZIP(), []int{53}
 }
 
 func (x *ResetChatFocusResponse) GetCleared() bool {
@@ -2672,7 +2974,7 @@ type ListModelsRequest struct {
 
 func (x *ListModelsRequest) Reset() {
 	*x = ListModelsRequest{}
-	mi := &file_coagent_v1_coagent_proto_msgTypes[50]
+	mi := &file_coagent_v1_coagent_proto_msgTypes[54]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2684,7 +2986,7 @@ func (x *ListModelsRequest) String() string {
 func (*ListModelsRequest) ProtoMessage() {}
 
 func (x *ListModelsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_coagent_v1_coagent_proto_msgTypes[50]
+	mi := &file_coagent_v1_coagent_proto_msgTypes[54]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2697,7 +2999,7 @@ func (x *ListModelsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListModelsRequest.ProtoReflect.Descriptor instead.
 func (*ListModelsRequest) Descriptor() ([]byte, []int) {
-	return file_coagent_v1_coagent_proto_rawDescGZIP(), []int{50}
+	return file_coagent_v1_coagent_proto_rawDescGZIP(), []int{54}
 }
 
 type ListModelsResponse struct {
@@ -2709,7 +3011,7 @@ type ListModelsResponse struct {
 
 func (x *ListModelsResponse) Reset() {
 	*x = ListModelsResponse{}
-	mi := &file_coagent_v1_coagent_proto_msgTypes[51]
+	mi := &file_coagent_v1_coagent_proto_msgTypes[55]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2721,7 +3023,7 @@ func (x *ListModelsResponse) String() string {
 func (*ListModelsResponse) ProtoMessage() {}
 
 func (x *ListModelsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_coagent_v1_coagent_proto_msgTypes[51]
+	mi := &file_coagent_v1_coagent_proto_msgTypes[55]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2734,7 +3036,7 @@ func (x *ListModelsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListModelsResponse.ProtoReflect.Descriptor instead.
 func (*ListModelsResponse) Descriptor() ([]byte, []int) {
-	return file_coagent_v1_coagent_proto_rawDescGZIP(), []int{51}
+	return file_coagent_v1_coagent_proto_rawDescGZIP(), []int{55}
 }
 
 func (x *ListModelsResponse) GetModels() []*Model {
@@ -2764,7 +3066,7 @@ type Model struct {
 
 func (x *Model) Reset() {
 	*x = Model{}
-	mi := &file_coagent_v1_coagent_proto_msgTypes[52]
+	mi := &file_coagent_v1_coagent_proto_msgTypes[56]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2776,7 +3078,7 @@ func (x *Model) String() string {
 func (*Model) ProtoMessage() {}
 
 func (x *Model) ProtoReflect() protoreflect.Message {
-	mi := &file_coagent_v1_coagent_proto_msgTypes[52]
+	mi := &file_coagent_v1_coagent_proto_msgTypes[56]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2789,7 +3091,7 @@ func (x *Model) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Model.ProtoReflect.Descriptor instead.
 func (*Model) Descriptor() ([]byte, []int) {
-	return file_coagent_v1_coagent_proto_rawDescGZIP(), []int{52}
+	return file_coagent_v1_coagent_proto_rawDescGZIP(), []int{56}
 }
 
 func (x *Model) GetId() string {
@@ -2857,7 +3159,7 @@ type ListSkillsRequest struct {
 
 func (x *ListSkillsRequest) Reset() {
 	*x = ListSkillsRequest{}
-	mi := &file_coagent_v1_coagent_proto_msgTypes[53]
+	mi := &file_coagent_v1_coagent_proto_msgTypes[57]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2869,7 +3171,7 @@ func (x *ListSkillsRequest) String() string {
 func (*ListSkillsRequest) ProtoMessage() {}
 
 func (x *ListSkillsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_coagent_v1_coagent_proto_msgTypes[53]
+	mi := &file_coagent_v1_coagent_proto_msgTypes[57]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2882,7 +3184,7 @@ func (x *ListSkillsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListSkillsRequest.ProtoReflect.Descriptor instead.
 func (*ListSkillsRequest) Descriptor() ([]byte, []int) {
-	return file_coagent_v1_coagent_proto_rawDescGZIP(), []int{53}
+	return file_coagent_v1_coagent_proto_rawDescGZIP(), []int{57}
 }
 
 func (x *ListSkillsRequest) GetSessionId() int64 {
@@ -2901,7 +3203,7 @@ type ListSkillsResponse struct {
 
 func (x *ListSkillsResponse) Reset() {
 	*x = ListSkillsResponse{}
-	mi := &file_coagent_v1_coagent_proto_msgTypes[54]
+	mi := &file_coagent_v1_coagent_proto_msgTypes[58]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2913,7 +3215,7 @@ func (x *ListSkillsResponse) String() string {
 func (*ListSkillsResponse) ProtoMessage() {}
 
 func (x *ListSkillsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_coagent_v1_coagent_proto_msgTypes[54]
+	mi := &file_coagent_v1_coagent_proto_msgTypes[58]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2926,7 +3228,7 @@ func (x *ListSkillsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListSkillsResponse.ProtoReflect.Descriptor instead.
 func (*ListSkillsResponse) Descriptor() ([]byte, []int) {
-	return file_coagent_v1_coagent_proto_rawDescGZIP(), []int{54}
+	return file_coagent_v1_coagent_proto_rawDescGZIP(), []int{58}
 }
 
 func (x *ListSkillsResponse) GetSkills() []*Skill {
@@ -2946,7 +3248,7 @@ type Skill struct {
 
 func (x *Skill) Reset() {
 	*x = Skill{}
-	mi := &file_coagent_v1_coagent_proto_msgTypes[55]
+	mi := &file_coagent_v1_coagent_proto_msgTypes[59]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2958,7 +3260,7 @@ func (x *Skill) String() string {
 func (*Skill) ProtoMessage() {}
 
 func (x *Skill) ProtoReflect() protoreflect.Message {
-	mi := &file_coagent_v1_coagent_proto_msgTypes[55]
+	mi := &file_coagent_v1_coagent_proto_msgTypes[59]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2971,7 +3273,7 @@ func (x *Skill) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Skill.ProtoReflect.Descriptor instead.
 func (*Skill) Descriptor() ([]byte, []int) {
-	return file_coagent_v1_coagent_proto_rawDescGZIP(), []int{55}
+	return file_coagent_v1_coagent_proto_rawDescGZIP(), []int{59}
 }
 
 func (x *Skill) GetName() string {
@@ -2996,7 +3298,7 @@ type ListProjectsRequest struct {
 
 func (x *ListProjectsRequest) Reset() {
 	*x = ListProjectsRequest{}
-	mi := &file_coagent_v1_coagent_proto_msgTypes[56]
+	mi := &file_coagent_v1_coagent_proto_msgTypes[60]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3008,7 +3310,7 @@ func (x *ListProjectsRequest) String() string {
 func (*ListProjectsRequest) ProtoMessage() {}
 
 func (x *ListProjectsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_coagent_v1_coagent_proto_msgTypes[56]
+	mi := &file_coagent_v1_coagent_proto_msgTypes[60]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3021,7 +3323,7 @@ func (x *ListProjectsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListProjectsRequest.ProtoReflect.Descriptor instead.
 func (*ListProjectsRequest) Descriptor() ([]byte, []int) {
-	return file_coagent_v1_coagent_proto_rawDescGZIP(), []int{56}
+	return file_coagent_v1_coagent_proto_rawDescGZIP(), []int{60}
 }
 
 type ListProjectsResponse struct {
@@ -3033,7 +3335,7 @@ type ListProjectsResponse struct {
 
 func (x *ListProjectsResponse) Reset() {
 	*x = ListProjectsResponse{}
-	mi := &file_coagent_v1_coagent_proto_msgTypes[57]
+	mi := &file_coagent_v1_coagent_proto_msgTypes[61]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3045,7 +3347,7 @@ func (x *ListProjectsResponse) String() string {
 func (*ListProjectsResponse) ProtoMessage() {}
 
 func (x *ListProjectsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_coagent_v1_coagent_proto_msgTypes[57]
+	mi := &file_coagent_v1_coagent_proto_msgTypes[61]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3058,7 +3360,7 @@ func (x *ListProjectsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListProjectsResponse.ProtoReflect.Descriptor instead.
 func (*ListProjectsResponse) Descriptor() ([]byte, []int) {
-	return file_coagent_v1_coagent_proto_rawDescGZIP(), []int{57}
+	return file_coagent_v1_coagent_proto_rawDescGZIP(), []int{61}
 }
 
 func (x *ListProjectsResponse) GetProjects() []*Project {
@@ -3079,7 +3381,7 @@ type Project struct {
 
 func (x *Project) Reset() {
 	*x = Project{}
-	mi := &file_coagent_v1_coagent_proto_msgTypes[58]
+	mi := &file_coagent_v1_coagent_proto_msgTypes[62]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3091,7 +3393,7 @@ func (x *Project) String() string {
 func (*Project) ProtoMessage() {}
 
 func (x *Project) ProtoReflect() protoreflect.Message {
-	mi := &file_coagent_v1_coagent_proto_msgTypes[58]
+	mi := &file_coagent_v1_coagent_proto_msgTypes[62]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3104,7 +3406,7 @@ func (x *Project) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Project.ProtoReflect.Descriptor instead.
 func (*Project) Descriptor() ([]byte, []int) {
-	return file_coagent_v1_coagent_proto_rawDescGZIP(), []int{58}
+	return file_coagent_v1_coagent_proto_rawDescGZIP(), []int{62}
 }
 
 func (x *Project) GetName() string {
@@ -3129,7 +3431,7 @@ type ListSpawnFavoritesRequest struct {
 
 func (x *ListSpawnFavoritesRequest) Reset() {
 	*x = ListSpawnFavoritesRequest{}
-	mi := &file_coagent_v1_coagent_proto_msgTypes[59]
+	mi := &file_coagent_v1_coagent_proto_msgTypes[63]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3141,7 +3443,7 @@ func (x *ListSpawnFavoritesRequest) String() string {
 func (*ListSpawnFavoritesRequest) ProtoMessage() {}
 
 func (x *ListSpawnFavoritesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_coagent_v1_coagent_proto_msgTypes[59]
+	mi := &file_coagent_v1_coagent_proto_msgTypes[63]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3154,7 +3456,7 @@ func (x *ListSpawnFavoritesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListSpawnFavoritesRequest.ProtoReflect.Descriptor instead.
 func (*ListSpawnFavoritesRequest) Descriptor() ([]byte, []int) {
-	return file_coagent_v1_coagent_proto_rawDescGZIP(), []int{59}
+	return file_coagent_v1_coagent_proto_rawDescGZIP(), []int{63}
 }
 
 type ListSpawnFavoritesResponse struct {
@@ -3166,7 +3468,7 @@ type ListSpawnFavoritesResponse struct {
 
 func (x *ListSpawnFavoritesResponse) Reset() {
 	*x = ListSpawnFavoritesResponse{}
-	mi := &file_coagent_v1_coagent_proto_msgTypes[60]
+	mi := &file_coagent_v1_coagent_proto_msgTypes[64]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3178,7 +3480,7 @@ func (x *ListSpawnFavoritesResponse) String() string {
 func (*ListSpawnFavoritesResponse) ProtoMessage() {}
 
 func (x *ListSpawnFavoritesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_coagent_v1_coagent_proto_msgTypes[60]
+	mi := &file_coagent_v1_coagent_proto_msgTypes[64]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3191,7 +3493,7 @@ func (x *ListSpawnFavoritesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListSpawnFavoritesResponse.ProtoReflect.Descriptor instead.
 func (*ListSpawnFavoritesResponse) Descriptor() ([]byte, []int) {
-	return file_coagent_v1_coagent_proto_rawDescGZIP(), []int{60}
+	return file_coagent_v1_coagent_proto_rawDescGZIP(), []int{64}
 }
 
 func (x *ListSpawnFavoritesResponse) GetPaths() []string {
@@ -3210,7 +3512,7 @@ type CreateProjectRequest struct {
 
 func (x *CreateProjectRequest) Reset() {
 	*x = CreateProjectRequest{}
-	mi := &file_coagent_v1_coagent_proto_msgTypes[61]
+	mi := &file_coagent_v1_coagent_proto_msgTypes[65]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3222,7 +3524,7 @@ func (x *CreateProjectRequest) String() string {
 func (*CreateProjectRequest) ProtoMessage() {}
 
 func (x *CreateProjectRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_coagent_v1_coagent_proto_msgTypes[61]
+	mi := &file_coagent_v1_coagent_proto_msgTypes[65]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3235,7 +3537,7 @@ func (x *CreateProjectRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateProjectRequest.ProtoReflect.Descriptor instead.
 func (*CreateProjectRequest) Descriptor() ([]byte, []int) {
-	return file_coagent_v1_coagent_proto_rawDescGZIP(), []int{61}
+	return file_coagent_v1_coagent_proto_rawDescGZIP(), []int{65}
 }
 
 func (x *CreateProjectRequest) GetName() string {
@@ -3255,7 +3557,7 @@ type CreateProjectResponse struct {
 
 func (x *CreateProjectResponse) Reset() {
 	*x = CreateProjectResponse{}
-	mi := &file_coagent_v1_coagent_proto_msgTypes[62]
+	mi := &file_coagent_v1_coagent_proto_msgTypes[66]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3267,7 +3569,7 @@ func (x *CreateProjectResponse) String() string {
 func (*CreateProjectResponse) ProtoMessage() {}
 
 func (x *CreateProjectResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_coagent_v1_coagent_proto_msgTypes[62]
+	mi := &file_coagent_v1_coagent_proto_msgTypes[66]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3280,7 +3582,7 @@ func (x *CreateProjectResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateProjectResponse.ProtoReflect.Descriptor instead.
 func (*CreateProjectResponse) Descriptor() ([]byte, []int) {
-	return file_coagent_v1_coagent_proto_rawDescGZIP(), []int{62}
+	return file_coagent_v1_coagent_proto_rawDescGZIP(), []int{66}
 }
 
 func (x *CreateProjectResponse) GetPath() string {
@@ -3346,7 +3648,33 @@ const file_coagent_v1_coagent_proto_rawDesc = "" +
 	"\fSessionState\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\x03R\tsessionId\x12.\n" +
-	"\x05state\x18\x02 \x01(\x0e2\x18.coagent.v1.RuntimeStateR\x05state\"\x15\n" +
+	"\x05state\x18\x02 \x01(\x0e2\x18.coagent.v1.RuntimeStateR\x05state\"\x12\n" +
+	"\x10GetStatusRequest\"\xc6\x03\n" +
+	"\x11GetStatusResponse\x12%\n" +
+	"\x0ebinary_version\x18\x01 \x01(\tR\rbinaryVersion\x12\x17\n" +
+	"\aboot_id\x18\x02 \x01(\tR\x06bootId\x12\x10\n" +
+	"\x03pid\x18\x03 \x01(\x03R\x03pid\x12%\n" +
+	"\x0euptime_seconds\x18\x04 \x01(\x03R\ruptimeSeconds\x12\x1f\n" +
+	"\vconfig_path\x18\x05 \x01(\tR\n" +
+	"configPath\x12%\n" +
+	"\x0econfig_present\x18\x06 \x01(\bR\rconfigPresent\x128\n" +
+	"\tproviders\x18\a \x03(\v2\x1a.coagent.v1.ProviderStatusR\tproviders\x12\x1f\n" +
+	"\vmodel_count\x18\b \x01(\x03R\n" +
+	"modelCount\x12#\n" +
+	"\rdefault_model\x18\t \x01(\tR\fdefaultModel\x12!\n" +
+	"\fstale_models\x18\n" +
+	" \x03(\tR\vstaleModels\x12\x16\n" +
+	"\x06search\x18\v \x01(\tR\x06search\x125\n" +
+	"\bmanagers\x18\f \x03(\v2\x19.coagent.v1.ManagerStatusR\bmanagers\"<\n" +
+	"\x0eProviderStatus\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12\x16\n" +
+	"\x06driver\x18\x02 \x01(\tR\x06driver\"\x81\x01\n" +
+	"\rManagerStatus\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12\x16\n" +
+	"\x06driver\x18\x02 \x01(\tR\x06driver\x12\x18\n" +
+	"\aenabled\x18\x03 \x01(\bR\aenabled\x12\x18\n" +
+	"\arunning\x18\x04 \x01(\bR\arunning\x12\x14\n" +
+	"\x05error\x18\x05 \x01(\tR\x05error\"\x15\n" +
 	"\x13ListSessionsRequest\"N\n" +
 	"\x14ListSessionsResponse\x126\n" +
 	"\bsessions\x18\x01 \x03(\v2\x1a.coagent.v1.SessionSummaryR\bsessions\"R\n" +
@@ -3534,7 +3862,9 @@ const file_coagent_v1_coagent_proto_rawDesc = "" +
 	"ListSkills\x12\x1d.coagent.v1.ListSkillsRequest\x1a\x1e.coagent.v1.ListSkillsResponse\x12Q\n" +
 	"\fListProjects\x12\x1f.coagent.v1.ListProjectsRequest\x1a .coagent.v1.ListProjectsResponse\x12c\n" +
 	"\x12ListSpawnFavorites\x12%.coagent.v1.ListSpawnFavoritesRequest\x1a&.coagent.v1.ListSpawnFavoritesResponse\x12T\n" +
-	"\rCreateProject\x12 .coagent.v1.CreateProjectRequest\x1a!.coagent.v1.CreateProjectResponseB3Z1github.com/pilat/coagent/api/coagent/v1;coagentv1b\x06proto3"
+	"\rCreateProject\x12 .coagent.v1.CreateProjectRequest\x1a!.coagent.v1.CreateProjectResponse2Y\n" +
+	"\rDaemonService\x12H\n" +
+	"\tGetStatus\x12\x1c.coagent.v1.GetStatusRequest\x1a\x1d.coagent.v1.GetStatusResponseB3Z1github.com/pilat/coagent/api/coagent/v1;coagentv1b\x06proto3"
 
 var (
 	file_coagent_v1_coagent_proto_rawDescOnce sync.Once
@@ -3549,7 +3879,7 @@ func file_coagent_v1_coagent_proto_rawDescGZIP() []byte {
 }
 
 var file_coagent_v1_coagent_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
-var file_coagent_v1_coagent_proto_msgTypes = make([]protoimpl.MessageInfo, 63)
+var file_coagent_v1_coagent_proto_msgTypes = make([]protoimpl.MessageInfo, 67)
 var file_coagent_v1_coagent_proto_goTypes = []any{
 	(OutputType)(0),                     // 0: coagent.v1.OutputType
 	(RuntimeState)(0),                   // 1: coagent.v1.RuntimeState
@@ -3568,132 +3898,140 @@ var file_coagent_v1_coagent_proto_goTypes = []any{
 	(*TailOutputResponse)(nil),          // 14: coagent.v1.TailOutputResponse
 	(*OutputRow)(nil),                   // 15: coagent.v1.OutputRow
 	(*SessionState)(nil),                // 16: coagent.v1.SessionState
-	(*ListSessionsRequest)(nil),         // 17: coagent.v1.ListSessionsRequest
-	(*ListSessionsResponse)(nil),        // 18: coagent.v1.ListSessionsResponse
-	(*SessionSummary)(nil),              // 19: coagent.v1.SessionSummary
-	(*ListSessionDetailsRequest)(nil),   // 20: coagent.v1.ListSessionDetailsRequest
-	(*ListSessionDetailsResponse)(nil),  // 21: coagent.v1.ListSessionDetailsResponse
-	(*SessionDetails)(nil),              // 22: coagent.v1.SessionDetails
-	(*GetSessionKilledRequest)(nil),     // 23: coagent.v1.GetSessionKilledRequest
-	(*GetSessionKilledResponse)(nil),    // 24: coagent.v1.GetSessionKilledResponse
-	(*SetSessionModelRequest)(nil),      // 25: coagent.v1.SetSessionModelRequest
-	(*SetSessionModelResponse)(nil),     // 26: coagent.v1.SetSessionModelResponse
-	(*SetSessionTitleRequest)(nil),      // 27: coagent.v1.SetSessionTitleRequest
-	(*SetSessionTitleResponse)(nil),     // 28: coagent.v1.SetSessionTitleResponse
-	(*GetOrchestratorModeRequest)(nil),  // 29: coagent.v1.GetOrchestratorModeRequest
-	(*GetOrchestratorModeResponse)(nil), // 30: coagent.v1.GetOrchestratorModeResponse
-	(*SetOrchestratorModeRequest)(nil),  // 31: coagent.v1.SetOrchestratorModeRequest
-	(*SetOrchestratorModeResponse)(nil), // 32: coagent.v1.SetOrchestratorModeResponse
-	(*ListOutputRequest)(nil),           // 33: coagent.v1.ListOutputRequest
-	(*ListOutputResponse)(nil),          // 34: coagent.v1.ListOutputResponse
-	(*ReadEntryRequest)(nil),            // 35: coagent.v1.ReadEntryRequest
-	(*ReadEntryResponse)(nil),           // 36: coagent.v1.ReadEntryResponse
-	(*StreamSessionEventsRequest)(nil),  // 37: coagent.v1.StreamSessionEventsRequest
-	(*StreamSessionEventsResponse)(nil), // 38: coagent.v1.StreamSessionEventsResponse
-	(*BindChatRequest)(nil),             // 39: coagent.v1.BindChatRequest
-	(*BindChatResponse)(nil),            // 40: coagent.v1.BindChatResponse
-	(*GetChatFocusRequest)(nil),         // 41: coagent.v1.GetChatFocusRequest
-	(*GetChatFocusResponse)(nil),        // 42: coagent.v1.GetChatFocusResponse
-	(*GetChatCursorRequest)(nil),        // 43: coagent.v1.GetChatCursorRequest
-	(*GetChatCursorResponse)(nil),       // 44: coagent.v1.GetChatCursorResponse
-	(*EnterChatRequest)(nil),            // 45: coagent.v1.EnterChatRequest
-	(*EnterChatResponse)(nil),           // 46: coagent.v1.EnterChatResponse
-	(*AdvanceChatRequest)(nil),          // 47: coagent.v1.AdvanceChatRequest
-	(*AdvanceChatResponse)(nil),         // 48: coagent.v1.AdvanceChatResponse
-	(*SetChatFocusRequest)(nil),         // 49: coagent.v1.SetChatFocusRequest
-	(*SetChatFocusResponse)(nil),        // 50: coagent.v1.SetChatFocusResponse
-	(*ResetChatFocusRequest)(nil),       // 51: coagent.v1.ResetChatFocusRequest
-	(*ResetChatFocusResponse)(nil),      // 52: coagent.v1.ResetChatFocusResponse
-	(*ListModelsRequest)(nil),           // 53: coagent.v1.ListModelsRequest
-	(*ListModelsResponse)(nil),          // 54: coagent.v1.ListModelsResponse
-	(*Model)(nil),                       // 55: coagent.v1.Model
-	(*ListSkillsRequest)(nil),           // 56: coagent.v1.ListSkillsRequest
-	(*ListSkillsResponse)(nil),          // 57: coagent.v1.ListSkillsResponse
-	(*Skill)(nil),                       // 58: coagent.v1.Skill
-	(*ListProjectsRequest)(nil),         // 59: coagent.v1.ListProjectsRequest
-	(*ListProjectsResponse)(nil),        // 60: coagent.v1.ListProjectsResponse
-	(*Project)(nil),                     // 61: coagent.v1.Project
-	(*ListSpawnFavoritesRequest)(nil),   // 62: coagent.v1.ListSpawnFavoritesRequest
-	(*ListSpawnFavoritesResponse)(nil),  // 63: coagent.v1.ListSpawnFavoritesResponse
-	(*CreateProjectRequest)(nil),        // 64: coagent.v1.CreateProjectRequest
-	(*CreateProjectResponse)(nil),       // 65: coagent.v1.CreateProjectResponse
-	(*timestamppb.Timestamp)(nil),       // 66: google.protobuf.Timestamp
+	(*GetStatusRequest)(nil),            // 17: coagent.v1.GetStatusRequest
+	(*GetStatusResponse)(nil),           // 18: coagent.v1.GetStatusResponse
+	(*ProviderStatus)(nil),              // 19: coagent.v1.ProviderStatus
+	(*ManagerStatus)(nil),               // 20: coagent.v1.ManagerStatus
+	(*ListSessionsRequest)(nil),         // 21: coagent.v1.ListSessionsRequest
+	(*ListSessionsResponse)(nil),        // 22: coagent.v1.ListSessionsResponse
+	(*SessionSummary)(nil),              // 23: coagent.v1.SessionSummary
+	(*ListSessionDetailsRequest)(nil),   // 24: coagent.v1.ListSessionDetailsRequest
+	(*ListSessionDetailsResponse)(nil),  // 25: coagent.v1.ListSessionDetailsResponse
+	(*SessionDetails)(nil),              // 26: coagent.v1.SessionDetails
+	(*GetSessionKilledRequest)(nil),     // 27: coagent.v1.GetSessionKilledRequest
+	(*GetSessionKilledResponse)(nil),    // 28: coagent.v1.GetSessionKilledResponse
+	(*SetSessionModelRequest)(nil),      // 29: coagent.v1.SetSessionModelRequest
+	(*SetSessionModelResponse)(nil),     // 30: coagent.v1.SetSessionModelResponse
+	(*SetSessionTitleRequest)(nil),      // 31: coagent.v1.SetSessionTitleRequest
+	(*SetSessionTitleResponse)(nil),     // 32: coagent.v1.SetSessionTitleResponse
+	(*GetOrchestratorModeRequest)(nil),  // 33: coagent.v1.GetOrchestratorModeRequest
+	(*GetOrchestratorModeResponse)(nil), // 34: coagent.v1.GetOrchestratorModeResponse
+	(*SetOrchestratorModeRequest)(nil),  // 35: coagent.v1.SetOrchestratorModeRequest
+	(*SetOrchestratorModeResponse)(nil), // 36: coagent.v1.SetOrchestratorModeResponse
+	(*ListOutputRequest)(nil),           // 37: coagent.v1.ListOutputRequest
+	(*ListOutputResponse)(nil),          // 38: coagent.v1.ListOutputResponse
+	(*ReadEntryRequest)(nil),            // 39: coagent.v1.ReadEntryRequest
+	(*ReadEntryResponse)(nil),           // 40: coagent.v1.ReadEntryResponse
+	(*StreamSessionEventsRequest)(nil),  // 41: coagent.v1.StreamSessionEventsRequest
+	(*StreamSessionEventsResponse)(nil), // 42: coagent.v1.StreamSessionEventsResponse
+	(*BindChatRequest)(nil),             // 43: coagent.v1.BindChatRequest
+	(*BindChatResponse)(nil),            // 44: coagent.v1.BindChatResponse
+	(*GetChatFocusRequest)(nil),         // 45: coagent.v1.GetChatFocusRequest
+	(*GetChatFocusResponse)(nil),        // 46: coagent.v1.GetChatFocusResponse
+	(*GetChatCursorRequest)(nil),        // 47: coagent.v1.GetChatCursorRequest
+	(*GetChatCursorResponse)(nil),       // 48: coagent.v1.GetChatCursorResponse
+	(*EnterChatRequest)(nil),            // 49: coagent.v1.EnterChatRequest
+	(*EnterChatResponse)(nil),           // 50: coagent.v1.EnterChatResponse
+	(*AdvanceChatRequest)(nil),          // 51: coagent.v1.AdvanceChatRequest
+	(*AdvanceChatResponse)(nil),         // 52: coagent.v1.AdvanceChatResponse
+	(*SetChatFocusRequest)(nil),         // 53: coagent.v1.SetChatFocusRequest
+	(*SetChatFocusResponse)(nil),        // 54: coagent.v1.SetChatFocusResponse
+	(*ResetChatFocusRequest)(nil),       // 55: coagent.v1.ResetChatFocusRequest
+	(*ResetChatFocusResponse)(nil),      // 56: coagent.v1.ResetChatFocusResponse
+	(*ListModelsRequest)(nil),           // 57: coagent.v1.ListModelsRequest
+	(*ListModelsResponse)(nil),          // 58: coagent.v1.ListModelsResponse
+	(*Model)(nil),                       // 59: coagent.v1.Model
+	(*ListSkillsRequest)(nil),           // 60: coagent.v1.ListSkillsRequest
+	(*ListSkillsResponse)(nil),          // 61: coagent.v1.ListSkillsResponse
+	(*Skill)(nil),                       // 62: coagent.v1.Skill
+	(*ListProjectsRequest)(nil),         // 63: coagent.v1.ListProjectsRequest
+	(*ListProjectsResponse)(nil),        // 64: coagent.v1.ListProjectsResponse
+	(*Project)(nil),                     // 65: coagent.v1.Project
+	(*ListSpawnFavoritesRequest)(nil),   // 66: coagent.v1.ListSpawnFavoritesRequest
+	(*ListSpawnFavoritesResponse)(nil),  // 67: coagent.v1.ListSpawnFavoritesResponse
+	(*CreateProjectRequest)(nil),        // 68: coagent.v1.CreateProjectRequest
+	(*CreateProjectResponse)(nil),       // 69: coagent.v1.CreateProjectResponse
+	(*timestamppb.Timestamp)(nil),       // 70: google.protobuf.Timestamp
 }
 var file_coagent_v1_coagent_proto_depIdxs = []int32{
 	15, // 0: coagent.v1.TailOutputResponse.output:type_name -> coagent.v1.OutputRow
 	16, // 1: coagent.v1.TailOutputResponse.state:type_name -> coagent.v1.SessionState
 	0,  // 2: coagent.v1.OutputRow.type:type_name -> coagent.v1.OutputType
 	1,  // 3: coagent.v1.SessionState.state:type_name -> coagent.v1.RuntimeState
-	19, // 4: coagent.v1.ListSessionsResponse.sessions:type_name -> coagent.v1.SessionSummary
-	22, // 5: coagent.v1.ListSessionDetailsResponse.sessions:type_name -> coagent.v1.SessionDetails
-	15, // 6: coagent.v1.ListOutputResponse.rows:type_name -> coagent.v1.OutputRow
-	15, // 7: coagent.v1.ReadEntryResponse.rows:type_name -> coagent.v1.OutputRow
-	2,  // 8: coagent.v1.StreamSessionEventsResponse.type:type_name -> coagent.v1.SessionEventType
-	55, // 9: coagent.v1.ListModelsResponse.models:type_name -> coagent.v1.Model
-	58, // 10: coagent.v1.ListSkillsResponse.skills:type_name -> coagent.v1.Skill
-	61, // 11: coagent.v1.ListProjectsResponse.projects:type_name -> coagent.v1.Project
-	66, // 12: coagent.v1.Project.last_activity:type_name -> google.protobuf.Timestamp
-	3,  // 13: coagent.v1.SessionService.CreateSession:input_type -> coagent.v1.CreateSessionRequest
-	5,  // 14: coagent.v1.SessionService.SendInput:input_type -> coagent.v1.SendInputRequest
-	7,  // 15: coagent.v1.SessionService.StopSession:input_type -> coagent.v1.StopSessionRequest
-	9,  // 16: coagent.v1.SessionService.KillSession:input_type -> coagent.v1.KillSessionRequest
-	11, // 17: coagent.v1.SessionService.GetTurnOutcome:input_type -> coagent.v1.GetTurnOutcomeRequest
-	17, // 18: coagent.v1.SessionService.ListSessions:input_type -> coagent.v1.ListSessionsRequest
-	20, // 19: coagent.v1.SessionService.ListSessionDetails:input_type -> coagent.v1.ListSessionDetailsRequest
-	23, // 20: coagent.v1.SessionService.GetSessionKilled:input_type -> coagent.v1.GetSessionKilledRequest
-	25, // 21: coagent.v1.SessionService.SetSessionModel:input_type -> coagent.v1.SetSessionModelRequest
-	27, // 22: coagent.v1.SessionService.SetSessionTitle:input_type -> coagent.v1.SetSessionTitleRequest
-	29, // 23: coagent.v1.SessionService.GetOrchestratorMode:input_type -> coagent.v1.GetOrchestratorModeRequest
-	31, // 24: coagent.v1.SessionService.SetOrchestratorMode:input_type -> coagent.v1.SetOrchestratorModeRequest
-	13, // 25: coagent.v1.OutputService.TailOutput:input_type -> coagent.v1.TailOutputRequest
-	33, // 26: coagent.v1.OutputService.ListOutput:input_type -> coagent.v1.ListOutputRequest
-	35, // 27: coagent.v1.OutputService.ReadEntry:input_type -> coagent.v1.ReadEntryRequest
-	37, // 28: coagent.v1.OutputService.StreamSessionEvents:input_type -> coagent.v1.StreamSessionEventsRequest
-	39, // 29: coagent.v1.ChatService.BindChat:input_type -> coagent.v1.BindChatRequest
-	41, // 30: coagent.v1.ChatService.GetChatFocus:input_type -> coagent.v1.GetChatFocusRequest
-	43, // 31: coagent.v1.ChatService.GetChatCursor:input_type -> coagent.v1.GetChatCursorRequest
-	45, // 32: coagent.v1.ChatService.EnterChat:input_type -> coagent.v1.EnterChatRequest
-	47, // 33: coagent.v1.ChatService.AdvanceChat:input_type -> coagent.v1.AdvanceChatRequest
-	49, // 34: coagent.v1.ChatService.SetChatFocus:input_type -> coagent.v1.SetChatFocusRequest
-	51, // 35: coagent.v1.ChatService.ResetChatFocus:input_type -> coagent.v1.ResetChatFocusRequest
-	53, // 36: coagent.v1.DiscoveryService.ListModels:input_type -> coagent.v1.ListModelsRequest
-	56, // 37: coagent.v1.DiscoveryService.ListSkills:input_type -> coagent.v1.ListSkillsRequest
-	59, // 38: coagent.v1.DiscoveryService.ListProjects:input_type -> coagent.v1.ListProjectsRequest
-	62, // 39: coagent.v1.DiscoveryService.ListSpawnFavorites:input_type -> coagent.v1.ListSpawnFavoritesRequest
-	64, // 40: coagent.v1.DiscoveryService.CreateProject:input_type -> coagent.v1.CreateProjectRequest
-	4,  // 41: coagent.v1.SessionService.CreateSession:output_type -> coagent.v1.CreateSessionResponse
-	6,  // 42: coagent.v1.SessionService.SendInput:output_type -> coagent.v1.SendInputResponse
-	8,  // 43: coagent.v1.SessionService.StopSession:output_type -> coagent.v1.StopSessionResponse
-	10, // 44: coagent.v1.SessionService.KillSession:output_type -> coagent.v1.KillSessionResponse
-	12, // 45: coagent.v1.SessionService.GetTurnOutcome:output_type -> coagent.v1.GetTurnOutcomeResponse
-	18, // 46: coagent.v1.SessionService.ListSessions:output_type -> coagent.v1.ListSessionsResponse
-	21, // 47: coagent.v1.SessionService.ListSessionDetails:output_type -> coagent.v1.ListSessionDetailsResponse
-	24, // 48: coagent.v1.SessionService.GetSessionKilled:output_type -> coagent.v1.GetSessionKilledResponse
-	26, // 49: coagent.v1.SessionService.SetSessionModel:output_type -> coagent.v1.SetSessionModelResponse
-	28, // 50: coagent.v1.SessionService.SetSessionTitle:output_type -> coagent.v1.SetSessionTitleResponse
-	30, // 51: coagent.v1.SessionService.GetOrchestratorMode:output_type -> coagent.v1.GetOrchestratorModeResponse
-	32, // 52: coagent.v1.SessionService.SetOrchestratorMode:output_type -> coagent.v1.SetOrchestratorModeResponse
-	14, // 53: coagent.v1.OutputService.TailOutput:output_type -> coagent.v1.TailOutputResponse
-	34, // 54: coagent.v1.OutputService.ListOutput:output_type -> coagent.v1.ListOutputResponse
-	36, // 55: coagent.v1.OutputService.ReadEntry:output_type -> coagent.v1.ReadEntryResponse
-	38, // 56: coagent.v1.OutputService.StreamSessionEvents:output_type -> coagent.v1.StreamSessionEventsResponse
-	40, // 57: coagent.v1.ChatService.BindChat:output_type -> coagent.v1.BindChatResponse
-	42, // 58: coagent.v1.ChatService.GetChatFocus:output_type -> coagent.v1.GetChatFocusResponse
-	44, // 59: coagent.v1.ChatService.GetChatCursor:output_type -> coagent.v1.GetChatCursorResponse
-	46, // 60: coagent.v1.ChatService.EnterChat:output_type -> coagent.v1.EnterChatResponse
-	48, // 61: coagent.v1.ChatService.AdvanceChat:output_type -> coagent.v1.AdvanceChatResponse
-	50, // 62: coagent.v1.ChatService.SetChatFocus:output_type -> coagent.v1.SetChatFocusResponse
-	52, // 63: coagent.v1.ChatService.ResetChatFocus:output_type -> coagent.v1.ResetChatFocusResponse
-	54, // 64: coagent.v1.DiscoveryService.ListModels:output_type -> coagent.v1.ListModelsResponse
-	57, // 65: coagent.v1.DiscoveryService.ListSkills:output_type -> coagent.v1.ListSkillsResponse
-	60, // 66: coagent.v1.DiscoveryService.ListProjects:output_type -> coagent.v1.ListProjectsResponse
-	63, // 67: coagent.v1.DiscoveryService.ListSpawnFavorites:output_type -> coagent.v1.ListSpawnFavoritesResponse
-	65, // 68: coagent.v1.DiscoveryService.CreateProject:output_type -> coagent.v1.CreateProjectResponse
-	41, // [41:69] is the sub-list for method output_type
-	13, // [13:41] is the sub-list for method input_type
-	13, // [13:13] is the sub-list for extension type_name
-	13, // [13:13] is the sub-list for extension extendee
-	0,  // [0:13] is the sub-list for field type_name
+	19, // 4: coagent.v1.GetStatusResponse.providers:type_name -> coagent.v1.ProviderStatus
+	20, // 5: coagent.v1.GetStatusResponse.managers:type_name -> coagent.v1.ManagerStatus
+	23, // 6: coagent.v1.ListSessionsResponse.sessions:type_name -> coagent.v1.SessionSummary
+	26, // 7: coagent.v1.ListSessionDetailsResponse.sessions:type_name -> coagent.v1.SessionDetails
+	15, // 8: coagent.v1.ListOutputResponse.rows:type_name -> coagent.v1.OutputRow
+	15, // 9: coagent.v1.ReadEntryResponse.rows:type_name -> coagent.v1.OutputRow
+	2,  // 10: coagent.v1.StreamSessionEventsResponse.type:type_name -> coagent.v1.SessionEventType
+	59, // 11: coagent.v1.ListModelsResponse.models:type_name -> coagent.v1.Model
+	62, // 12: coagent.v1.ListSkillsResponse.skills:type_name -> coagent.v1.Skill
+	65, // 13: coagent.v1.ListProjectsResponse.projects:type_name -> coagent.v1.Project
+	70, // 14: coagent.v1.Project.last_activity:type_name -> google.protobuf.Timestamp
+	3,  // 15: coagent.v1.SessionService.CreateSession:input_type -> coagent.v1.CreateSessionRequest
+	5,  // 16: coagent.v1.SessionService.SendInput:input_type -> coagent.v1.SendInputRequest
+	7,  // 17: coagent.v1.SessionService.StopSession:input_type -> coagent.v1.StopSessionRequest
+	9,  // 18: coagent.v1.SessionService.KillSession:input_type -> coagent.v1.KillSessionRequest
+	11, // 19: coagent.v1.SessionService.GetTurnOutcome:input_type -> coagent.v1.GetTurnOutcomeRequest
+	21, // 20: coagent.v1.SessionService.ListSessions:input_type -> coagent.v1.ListSessionsRequest
+	24, // 21: coagent.v1.SessionService.ListSessionDetails:input_type -> coagent.v1.ListSessionDetailsRequest
+	27, // 22: coagent.v1.SessionService.GetSessionKilled:input_type -> coagent.v1.GetSessionKilledRequest
+	29, // 23: coagent.v1.SessionService.SetSessionModel:input_type -> coagent.v1.SetSessionModelRequest
+	31, // 24: coagent.v1.SessionService.SetSessionTitle:input_type -> coagent.v1.SetSessionTitleRequest
+	33, // 25: coagent.v1.SessionService.GetOrchestratorMode:input_type -> coagent.v1.GetOrchestratorModeRequest
+	35, // 26: coagent.v1.SessionService.SetOrchestratorMode:input_type -> coagent.v1.SetOrchestratorModeRequest
+	13, // 27: coagent.v1.OutputService.TailOutput:input_type -> coagent.v1.TailOutputRequest
+	37, // 28: coagent.v1.OutputService.ListOutput:input_type -> coagent.v1.ListOutputRequest
+	39, // 29: coagent.v1.OutputService.ReadEntry:input_type -> coagent.v1.ReadEntryRequest
+	41, // 30: coagent.v1.OutputService.StreamSessionEvents:input_type -> coagent.v1.StreamSessionEventsRequest
+	43, // 31: coagent.v1.ChatService.BindChat:input_type -> coagent.v1.BindChatRequest
+	45, // 32: coagent.v1.ChatService.GetChatFocus:input_type -> coagent.v1.GetChatFocusRequest
+	47, // 33: coagent.v1.ChatService.GetChatCursor:input_type -> coagent.v1.GetChatCursorRequest
+	49, // 34: coagent.v1.ChatService.EnterChat:input_type -> coagent.v1.EnterChatRequest
+	51, // 35: coagent.v1.ChatService.AdvanceChat:input_type -> coagent.v1.AdvanceChatRequest
+	53, // 36: coagent.v1.ChatService.SetChatFocus:input_type -> coagent.v1.SetChatFocusRequest
+	55, // 37: coagent.v1.ChatService.ResetChatFocus:input_type -> coagent.v1.ResetChatFocusRequest
+	57, // 38: coagent.v1.DiscoveryService.ListModels:input_type -> coagent.v1.ListModelsRequest
+	60, // 39: coagent.v1.DiscoveryService.ListSkills:input_type -> coagent.v1.ListSkillsRequest
+	63, // 40: coagent.v1.DiscoveryService.ListProjects:input_type -> coagent.v1.ListProjectsRequest
+	66, // 41: coagent.v1.DiscoveryService.ListSpawnFavorites:input_type -> coagent.v1.ListSpawnFavoritesRequest
+	68, // 42: coagent.v1.DiscoveryService.CreateProject:input_type -> coagent.v1.CreateProjectRequest
+	17, // 43: coagent.v1.DaemonService.GetStatus:input_type -> coagent.v1.GetStatusRequest
+	4,  // 44: coagent.v1.SessionService.CreateSession:output_type -> coagent.v1.CreateSessionResponse
+	6,  // 45: coagent.v1.SessionService.SendInput:output_type -> coagent.v1.SendInputResponse
+	8,  // 46: coagent.v1.SessionService.StopSession:output_type -> coagent.v1.StopSessionResponse
+	10, // 47: coagent.v1.SessionService.KillSession:output_type -> coagent.v1.KillSessionResponse
+	12, // 48: coagent.v1.SessionService.GetTurnOutcome:output_type -> coagent.v1.GetTurnOutcomeResponse
+	22, // 49: coagent.v1.SessionService.ListSessions:output_type -> coagent.v1.ListSessionsResponse
+	25, // 50: coagent.v1.SessionService.ListSessionDetails:output_type -> coagent.v1.ListSessionDetailsResponse
+	28, // 51: coagent.v1.SessionService.GetSessionKilled:output_type -> coagent.v1.GetSessionKilledResponse
+	30, // 52: coagent.v1.SessionService.SetSessionModel:output_type -> coagent.v1.SetSessionModelResponse
+	32, // 53: coagent.v1.SessionService.SetSessionTitle:output_type -> coagent.v1.SetSessionTitleResponse
+	34, // 54: coagent.v1.SessionService.GetOrchestratorMode:output_type -> coagent.v1.GetOrchestratorModeResponse
+	36, // 55: coagent.v1.SessionService.SetOrchestratorMode:output_type -> coagent.v1.SetOrchestratorModeResponse
+	14, // 56: coagent.v1.OutputService.TailOutput:output_type -> coagent.v1.TailOutputResponse
+	38, // 57: coagent.v1.OutputService.ListOutput:output_type -> coagent.v1.ListOutputResponse
+	40, // 58: coagent.v1.OutputService.ReadEntry:output_type -> coagent.v1.ReadEntryResponse
+	42, // 59: coagent.v1.OutputService.StreamSessionEvents:output_type -> coagent.v1.StreamSessionEventsResponse
+	44, // 60: coagent.v1.ChatService.BindChat:output_type -> coagent.v1.BindChatResponse
+	46, // 61: coagent.v1.ChatService.GetChatFocus:output_type -> coagent.v1.GetChatFocusResponse
+	48, // 62: coagent.v1.ChatService.GetChatCursor:output_type -> coagent.v1.GetChatCursorResponse
+	50, // 63: coagent.v1.ChatService.EnterChat:output_type -> coagent.v1.EnterChatResponse
+	52, // 64: coagent.v1.ChatService.AdvanceChat:output_type -> coagent.v1.AdvanceChatResponse
+	54, // 65: coagent.v1.ChatService.SetChatFocus:output_type -> coagent.v1.SetChatFocusResponse
+	56, // 66: coagent.v1.ChatService.ResetChatFocus:output_type -> coagent.v1.ResetChatFocusResponse
+	58, // 67: coagent.v1.DiscoveryService.ListModels:output_type -> coagent.v1.ListModelsResponse
+	61, // 68: coagent.v1.DiscoveryService.ListSkills:output_type -> coagent.v1.ListSkillsResponse
+	64, // 69: coagent.v1.DiscoveryService.ListProjects:output_type -> coagent.v1.ListProjectsResponse
+	67, // 70: coagent.v1.DiscoveryService.ListSpawnFavorites:output_type -> coagent.v1.ListSpawnFavoritesResponse
+	69, // 71: coagent.v1.DiscoveryService.CreateProject:output_type -> coagent.v1.CreateProjectResponse
+	18, // 72: coagent.v1.DaemonService.GetStatus:output_type -> coagent.v1.GetStatusResponse
+	44, // [44:73] is the sub-list for method output_type
+	15, // [15:44] is the sub-list for method input_type
+	15, // [15:15] is the sub-list for extension type_name
+	15, // [15:15] is the sub-list for extension extendee
+	0,  // [0:15] is the sub-list for field type_name
 }
 
 func init() { file_coagent_v1_coagent_proto_init() }
@@ -3711,9 +4049,9 @@ func file_coagent_v1_coagent_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_coagent_v1_coagent_proto_rawDesc), len(file_coagent_v1_coagent_proto_rawDesc)),
 			NumEnums:      3,
-			NumMessages:   63,
+			NumMessages:   67,
 			NumExtensions: 0,
-			NumServices:   4,
+			NumServices:   5,
 		},
 		GoTypes:           file_coagent_v1_coagent_proto_goTypes,
 		DependencyIndexes: file_coagent_v1_coagent_proto_depIdxs,

@@ -1,0 +1,10 @@
+running · pid 41337 · up 2h14m · v1.1.0
+version skew · daemon v1.1.0 ≠ cli v1.2.0 — restart the daemon on the new binary
+config  /home/operator/.coagent/config.yaml
+provider fallback (openrouter)
+provider work (anthropic)
+models  3 · default none
+model lost (stale catalog)
+manager main (telegram) · running
+manager retry (telegram) · not running · unauthorized
+manager off (telegram) · disabled

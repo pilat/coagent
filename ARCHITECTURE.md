@@ -25,15 +25,16 @@ state, session lifecycle and admission. It backs the private controller contract
 implemented by `managercontrol` behind the local API server. Domain packages own
 their ledgers; the daemon owns runner capacity counters and quotas. It accepts no
 network listener.
-It listens on two same-user Unix sockets: the control socket, serving the
-read-only status protocol used by `coagent status`, and, when API clients are
-configured, the API socket, serving the `coagent.v1` local API
-([ADR-0104](docs/adr/0104-the-local-api-is-the-two-durable-ledgers.md)).
+It listens on two same-user Unix sockets through `internal/localapi`: the control
+socket serves only tokenless `coagent.v1` `DaemonService.GetStatus` behind
+`coagent status`; when API clients are configured, the API socket serves the
+authenticated session, output, chat and discovery services
+([ADR-0109](docs/adr/0109-status-is-a-coagent-v1-call-on-the-control-socket.md)).
 
 ```
 Telegram manager ── coagent.v1 in process ── localapi ── controller ──> daemon
 API client ── coagent.v1 on api.sock ── localapi ── controller ───────┤
-coagent status ── status-only control socket ─────────────────────────┤
+coagent status ── coagent.v1 GetStatus on daemon.sock ── localapi
                  SQLite <── session lifecycle <── per-task session ───┤
           config, loader, tools, schedules, subagents ────────────────┘
 ```
@@ -47,7 +48,7 @@ The daemon coordinates work that crosses sessions, survives a process restart,
 or needs global admission decisions; the owning domain package retains each
 ledger. Built-in managers call `coagent.v1` over an in-process connection; only the
 local API server programs against the private controller contract. The `coagent.v1`
-local API is the daemon's one public contract; managers and the status protocol are
+local API is the daemon's one public contract; managers and the status CLI are
 product surfaces, and none of them is a plugin API.
 
 The composition root is `cmd/coagent`. It constructs dependencies explicitly,
@@ -73,7 +74,6 @@ does not imply a tier except where it expresses an implementation variant.
 - `internal/configapply` — activation-gated config read/edit tools, serialized commit claim and restart trigger.
 - `internal/configops` — guarded whole-document configuration staging, backups and the boot-rollback marker.
 - `internal/controllerapi` — private author-bound controller contract behind the local API server and shared DTO vocabulary.
-- `internal/ctl` — status-only local control socket, status operation registry and client; owns the same-user Unix socket bind the API socket reuses.
 - `internal/daemon` — runner and tree lifecycle, admission, boot recovery, commands and session-event composition.
 - `internal/git` — Git operations used by repository-facing features.
 - `internal/humanize` — presentation-only formatting helpers (human-readable sizes); stdlib only.
@@ -83,7 +83,7 @@ does not imply a tier except where it expresses an implementation variant.
 - `internal/llm/llmtest` — test-support oracle for provider transcript validity; imported only by tests, never by a binary.
 - `internal/llmwire` — provider-neutral message, response and tool wire vocabulary.
 - `internal/loader` — project context, skills, subagent definitions and marketplace loading.
-- `internal/localapi` — the full `coagent.v1` surface on the API socket and in process, with author authentication and dispatch through the bound controller capability.
+- `internal/localapi` — authenticated session, output, chat and discovery services on the API socket and in process, dispatched through the bound controller capability; `DaemonService.GetStatus` alone on the anonymous control socket; owns both socket binds.
 - `internal/logger` — structured logging and registered-secret redaction.
 - `internal/lsp` — language-server process client for code-intelligence tools.
 - `internal/managers` — manager lifecycle coordinator, opening each manager's in-process connection.
@@ -273,9 +273,9 @@ session's policy. Model metadata belongs to catalogs and drivers.
 
 The executable resolves configuration and coagent-home paths, opens and
 migrates SQLite, builds durable stores and daemon services, starts pooled
-resources and managers, then marks the daemon ready. The control socket is
-bound early so local callers can distinguish starting from absent, but it answers
-startup status until every operation owner is registered. A manager startup
+resources and managers, then marks the daemon ready. The local API server binds
+and serves the control socket before managers start; `GetStatus` answers
+`Unavailable` until manager startup finishes. A manager startup
 failure is isolated to that manager: the daemon remains up while the operator
 repairs configuration by hand.
 When API clients are configured, the API socket is bound after the daemon has
@@ -901,11 +901,13 @@ is the same authority that session's other processes already have.
 
 ### Local control boundary
 
-The control socket is a mode-0600, same-user Unix socket; it is not a network
-API and no inbound network listener is opened. It uses newline-delimited
-JSON-RPC with a greeting/readiness distinction and carries the read-only
-`status` method only: no chat, pushes, configuration mutations, secrets, or
-restart operation ([ADR-0060](docs/adr/0060-telegram-service-topics-own-daemon-management.md)).
+The control socket is a mode-0600, same-user Unix socket with no network listener.
+One `localapi.Server` owns two `connect.Server`/`http.Server` pairs, one per socket.
+The anonymous mux registers only `coagent.v1.DaemonService.GetStatus`; other
+procedures are `Unimplemented`, even while starting. The token middleware has no
+exemption ([ADR-0109](docs/adr/0109-status-is-a-coagent-v1-call-on-the-control-socket.md)).
+Both listeners bound header reads with `ReadHeaderTimeout`; stopping closes status
+connections at once and drains the API listener within `closeGrace`.
 
 Service installation registers the Linux systemd unit while running
 the daemon as the login user from a user-owned binary. Lifecycle verbs are
@@ -914,7 +916,7 @@ in-process lifecycle signal that never crosses the socket.
 
 The API socket `~/.coagent/api.sock` is a second mode-0600 same-user Unix socket.
 Only the single-instance lock holder binds it, and only when `api.clients` is
-non-empty. It serves the full `coagent.v1` surface with ConnectRPC over HTTP/1.1.
+non-empty. It serves the four session, output, chat and discovery services with ConnectRPC over HTTP/1.1.
 Every call carries `Authorization: Bearer <token>`. The daemon keeps only each client's
 SHA-256 token hash from `config.yaml`. The server checks the token in front of
 the RPC layer on every request to the socket, compares in constant time, and
@@ -1345,9 +1347,8 @@ stopped reading rather than waiting on it. Runtime state rides along as best
 effort. Reconnecting is the same call with the `session_id` and id of the last
 row received.
 
-Control owns socket framing, greeting/readiness behavior, `status` registration
-and single-instance coordination. The socket carries responses only, so a slow
-or unread client is disconnected rather than allowed to stall the daemon.
+Local API owns both socket binds and readiness; the composition root holds the
+single-instance lock.
 Release builder owns reproducible archive layout and checksum generation; the
 release workflow supplies clean tagged source and platform binaries. Official
 artifacts target Linux on amd64 and arm64, include a license and sorted

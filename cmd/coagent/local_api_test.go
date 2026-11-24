@@ -54,7 +54,8 @@ func TestStartLocalAPI_BindsOnlyKnownRoles(t *testing.T) {
 					require.NoError(t, stop.fn(context.Background()))
 				}
 			})
-			startLocalAPI(ctx, a, cfg, factory)
+			_, err = startLocalAPI(ctx, a, cfg, factory, nil)
+			require.NoError(t, err)
 			switch role {
 			case config.APIRoleOperator:
 				assert.Equal(t, []string{"client"}, factory.managers)
@@ -74,15 +75,30 @@ func TestStartLocalAPI_BindsOnlyKnownRoles(t *testing.T) {
 	}
 }
 
-func TestStartLocalAPI_WithoutClientsBindsNothing(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	for _, unified := range []*config.UnifiedConfig{nil, {}} {
-		a := &app{}
-		startLocalAPI(t.Context(), a, &config.Config{UnifiedConfig: unified}, nil)
-		_, err := os.Stat(filepath.Join(home, coagenthome.DirName, coagenthome.APISocketFileName))
-		require.ErrorIs(t, err, os.ErrNotExist)
-		assert.Empty(t, a.stops)
+func TestStartLocalAPI_WithoutClientsBindsOnlyTheStatusSocket(t *testing.T) {
+	for name, unified := range map[string]*config.UnifiedConfig{"nil": nil, "empty": {}} {
+		t.Run(name, func(t *testing.T) {
+			home, err := os.MkdirTemp("/tmp", "api-none")
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, os.RemoveAll(home)) })
+			t.Setenv("HOME", home)
+			a := &app{}
+			t.Cleanup(func() {
+				for _, stop := range a.stops {
+					require.NoError(t, stop.fn(context.Background()))
+				}
+			})
+			srv, err := startLocalAPI(t.Context(), a, &config.Config{UnifiedConfig: unified}, nil, nil)
+			require.NoError(t, err)
+			srv.MarkReady()
+			statusSocket := filepath.Join(home, coagenthome.DirName, coagenthome.SocketFileName)
+			_, connected, err := fetchStatus(t.Context(), statusSocket)
+			require.NoError(t, err)
+			assert.True(t, connected)
+			_, err = os.Stat(filepath.Join(home, coagenthome.DirName, coagenthome.APISocketFileName))
+			require.ErrorIs(t, err, os.ErrNotExist)
+			assert.Equal(t, []string{"localapi"}, stopNames(a))
+		})
 	}
 }
 
@@ -101,8 +117,18 @@ func TestStartLocalAPI_BindFailureLeavesTheDaemonRunning(t *testing.T) {
 		}}},
 	}}
 	a := &app{}
-	require.NotPanics(t, func() { startLocalAPI(t.Context(), a, cfg, nil) })
-	assert.Empty(t, a.stops)
+	t.Cleanup(func() {
+		for _, stop := range a.stops {
+			require.NoError(t, stop.fn(context.Background()))
+		}
+	})
+	srv, err := startLocalAPI(t.Context(), a, cfg, nil, nil)
+	require.NoError(t, err)
+	srv.MarkReady()
+	_, connected, err := fetchStatus(t.Context(), filepath.Join(home, coagenthome.DirName, coagenthome.SocketFileName))
+	require.NoError(t, err)
+	assert.True(t, connected)
+	assert.Equal(t, []string{"localapi"}, stopNames(a))
 	content, err := os.ReadFile(filepath.Join(socket, "occupied"))
 	require.NoError(t, err)
 	assert.Equal(t, "keep", string(content))
