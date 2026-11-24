@@ -13,7 +13,7 @@ import (
 func TestReadWatch_PagesAndPositions(t *testing.T) {
 	t.Run("classifies kinds", func(t *testing.T) {
 		store, _, project := newTestStore(t)
-		root, _, err := store.CreateManagerRoot(t.Context(), ManagerRootCreate{
+		root, _, err := store.CreateRoot(t.Context(), RootCreate{
 			ProjectID: project, Model: "model", Attributes: map[string]any{},
 			Name: "test", WorkDir: "/project",
 		})

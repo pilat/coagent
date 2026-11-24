@@ -25,7 +25,7 @@ func TestWatchSignals_UnreadOutcomeConsumesNewArm(t *testing.T) {
 				_, err = store.MarkSessionKilledWithOutput(t.Context(), target, 0)
 				require.NoError(t, err)
 			case "cleared":
-				replacement, _, err := store.ReplaceManagerRoot(t.Context(), target, "test", "/project")
+				replacement, _, err := store.ReplaceRoot(t.Context(), target, "test", "/project")
 				require.NoError(t, err)
 				target = replacement.ID
 				chain = append(chain, target)

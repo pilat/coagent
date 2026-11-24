@@ -12,9 +12,9 @@ import (
 func TestReplacementChain(t *testing.T) {
 	store, _, project := newTestStore(t)
 	first := chatTestRoot(t, store, project)
-	second, _, err := store.ReplaceManagerRoot(t.Context(), first.ID, "test", "/project")
+	second, _, err := store.ReplaceRoot(t.Context(), first.ID, "test", "/project")
 	require.NoError(t, err)
-	third, _, err := store.ReplaceManagerRoot(t.Context(), second.ID, "test", "/project")
+	third, _, err := store.ReplaceRoot(t.Context(), second.ID, "test", "/project")
 	require.NoError(t, err)
 	for _, id := range []int64{first.ID, second.ID, third.ID} {
 		chain, err := store.ReplacementChain(t.Context(), id)
@@ -47,7 +47,7 @@ func TestReplacementChain(t *testing.T) {
 	t.Run("predecessor load errors are returned", func(t *testing.T) {
 		store, db, project := newTestStore(t)
 		first := chatTestRoot(t, store, project)
-		second, _, err := store.ReplaceManagerRoot(t.Context(), first.ID, "test", "/project")
+		second, _, err := store.ReplaceRoot(t.Context(), first.ID, "test", "/project")
 		require.NoError(t, err)
 		_, err = db.ExecContext(t.Context(), `UPDATE sessions SET created_at = 'invalid' WHERE id = ?`, first.ID)
 		require.NoError(t, err)
@@ -58,7 +58,7 @@ func TestReplacementChain(t *testing.T) {
 	t.Run("invalid or missing predecessor stops", func(t *testing.T) {
 		store, db, project := newTestStore(t)
 		first := chatTestRoot(t, store, project)
-		second, _, err := store.ReplaceManagerRoot(t.Context(), first.ID, "test", "/project")
+		second, _, err := store.ReplaceRoot(t.Context(), first.ID, "test", "/project")
 		require.NoError(t, err)
 		for _, id := range []any{nil, 0, -1, "invalid", 1.5, 999999} {
 			_, err = db.ExecContext(t.Context(), `UPDATE session_outbox
@@ -84,7 +84,7 @@ func TestResolveReplacement_StatusFidelity(t *testing.T) {
 					root := chatTestRoot(t, store, project)
 					want := root.ID
 					if replaced {
-						replacement, _, err := store.ReplaceManagerRoot(t.Context(), root.ID, "test", "/project")
+						replacement, _, err := store.ReplaceRoot(t.Context(), root.ID, "test", "/project")
 						require.NoError(t, err)
 						if status == SessionStatusTerminating || killed {
 							want = replacement.ID

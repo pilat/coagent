@@ -31,16 +31,16 @@ type Store interface { //nolint:interfacebloat // Lifecycle commands share atomi
 	HasAcceptedInput(context.Context, int64) (bool, error)
 	ListSessionsWithRecoverableInput(context.Context) ([]int64, error)
 	EnqueueOutput(ctx context.Context, draft sessionstore.OutputDraft) (*sessionstore.OutputCommit, error)
-	CreateManagerRoot(
+	CreateRoot(
 		ctx context.Context,
-		create sessionstore.ManagerRootCreate,
+		create sessionstore.RootCreate,
 	) (*sessionstore.SessionRecord, *sessionstore.OutputCommit, error)
-	ReplaceManagerRoot(
+	ReplaceRoot(
 		ctx context.Context,
 		oldSessionID int64,
 		name, workDir string,
 	) (*sessionstore.SessionRecord, *sessionstore.OutputCommit, error)
-	ReplaceManagerRootForInput(
+	ReplaceRootForInput(
 		ctx context.Context,
 		oldSessionID, inputID int64,
 		name, workDir string,

@@ -364,9 +364,9 @@ func (s *Service) clearLocked(ctx context.Context, sessionID, inputID int64) (in
 	var newRec *sessionstore.SessionRecord
 
 	if inputID > 0 {
-		newRec, _, err = s.store.ReplaceManagerRootForInput(ctx, sessionID, inputID, projectName, workDir)
+		newRec, _, err = s.store.ReplaceRootForInput(ctx, sessionID, inputID, projectName, workDir)
 	} else {
-		newRec, _, err = s.store.ReplaceManagerRoot(ctx, sessionID, projectName, workDir)
+		newRec, _, err = s.store.ReplaceRoot(ctx, sessionID, projectName, workDir)
 	}
 
 	if err != nil {

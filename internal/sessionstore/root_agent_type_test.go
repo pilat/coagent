@@ -12,11 +12,11 @@ import (
 
 // The sessions.agent_type schema default is 'general' — a subagent type. A root
 // session must carry its own type in the row, not inherit that default.
-func TestCreateManagerRootPersistsTheRootAgentType(t *testing.T) {
+func TestCreateRootPersistsTheRootAgentType(t *testing.T) {
 	ctx := context.Background()
 	store, db, projectID := newTestStore(t)
 
-	rec, _, err := store.CreateManagerRoot(ctx, ManagerRootCreate{
+	rec, _, err := store.CreateRoot(ctx, RootCreate{
 		ProjectID: projectID, Model: "model-a", ReasoningLevel: "medium",
 		Name: "test", WorkDir: "/project",
 	})

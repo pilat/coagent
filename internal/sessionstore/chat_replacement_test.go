@@ -12,7 +12,7 @@ func TestChatFocus_ClearTransfersEveryChatAtomically(t *testing.T) {
 
 	ctx := t.Context()
 	store, db, project := newTestStore(t)
-	old, _, err := store.CreateManagerRoot(ctx, ManagerRootCreate{
+	old, _, err := store.CreateRoot(ctx, RootCreate{
 		ProjectID: project, Model: "model", Attributes: map[string]any{},
 		Name: "test", WorkDir: "/project",
 	})
@@ -31,7 +31,7 @@ func TestChatFocus_ClearTransfersEveryChatAtomically(t *testing.T) {
 	require.NoError(t, err)
 	input, err := enqueueInput(ctx, store, old.ID, InputSourceUser, "/clear")
 	require.NoError(t, err)
-	_, _, err = store.ReplaceManagerRootForInput(ctx, old.ID, input.ID, "test", "/project")
+	_, _, err = store.ReplaceRootForInput(ctx, old.ID, input.ID, "test", "/project")
 	require.ErrorContains(t, err, "interrupted focus transfer")
 	record, err := store.GetSession(ctx, old.ID)
 	require.NoError(t, err)
@@ -45,7 +45,7 @@ func TestChatFocus_ClearTransfersEveryChatAtomically(t *testing.T) {
 	assert.Equal(t, 1, count, "replacement and clear outputs also roll back")
 	_, err = db.ExecContext(ctx, `DROP TRIGGER fail_focus_transfer`)
 	require.NoError(t, err)
-	replacement, _, err := store.ReplaceManagerRootForInput(ctx, old.ID, input.ID, "test", "/project")
+	replacement, _, err := store.ReplaceRootForInput(ctx, old.ID, input.ID, "test", "/project")
 	require.NoError(t, err)
 	assertChatFocusRows(t, store, replacement.ID)
 	for _, chat := range []string{"one", "two"} {

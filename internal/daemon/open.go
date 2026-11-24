@@ -99,7 +99,7 @@ func (s *Service) openSession(
 	return sess, cleanup, nil
 }
 
-// Subagents do not copy manager root attributes, so confinement follows the durable root.
+// Subagents do not copy root attributes, so confinement follows the durable root.
 func (s *Service) sessionRepoRoot(ctx context.Context, rec *sessionstore.SessionRecord) (string, error) {
 	if rec.RootID == 0 {
 		repoRoot, _ := rec.Attributes["repo_root"].(string)

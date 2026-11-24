@@ -72,7 +72,7 @@ func TestChatOutputs_OrderedBatchesIncludeLifecycleRows(t *testing.T) {
 
 	ctx := t.Context()
 	store, _, project := newTestStore(t)
-	root, opened, err := store.CreateManagerRoot(ctx, ManagerRootCreate{
+	root, opened, err := store.CreateRoot(ctx, RootCreate{
 		ProjectID: project, Model: "model", Attributes: map[string]any{},
 		Name: "test", WorkDir: "/project",
 	})

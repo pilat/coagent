@@ -52,13 +52,13 @@ func TestSetOrchestrator(t *testing.T) {
 	}
 }
 
-func TestReplaceManagerRootKeepsOrchestratorMode(t *testing.T) {
+func TestReplaceRootKeepsOrchestratorMode(t *testing.T) {
 	store, _, project := newTestStore(t)
 	root := chatTestRoot(t, store, project)
 	require.NoError(t, store.SetSessionTitle(t.Context(), root.ID, "old title"))
 	_, err := store.SetOrchestrator(t.Context(), root.ID, true)
 	require.NoError(t, err)
-	replacement, _, err := store.ReplaceManagerRoot(t.Context(), root.ID, "test", "/project")
+	replacement, _, err := store.ReplaceRoot(t.Context(), root.ID, "test", "/project")
 	require.NoError(t, err)
 	assert.True(t, controllerapi.OrchestratorMode(replacement.Attributes))
 	assert.NotContains(t, replacement.Attributes, TitleAttribute)

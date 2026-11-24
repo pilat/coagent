@@ -134,7 +134,7 @@ func TestWatchSignals_FireArmRead(t *testing.T) {
 		cursor := watchTestOutput(t, store, target, "", "old")
 		signalTestArm(t, store, watcher, target, true)
 		signalTestArm(t, store, target, watcher, false)
-		replacement, _, err := store.ReplaceManagerRoot(t.Context(), target, "test", "/project")
+		replacement, _, err := store.ReplaceRoot(t.Context(), target, "test", "/project")
 		require.NoError(t, err)
 		assert.Equal(t, WatchState{Subscribed: true}, signalTestState(t, store, watcher, replacement.ID))
 		assert.True(t, signalTestState(t, store, target, watcher).Armed)

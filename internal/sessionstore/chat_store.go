@@ -20,7 +20,7 @@ type ChatOutput struct {
 	Content   string
 }
 
-// ChatSession describes a live manager root.
+// ChatSession describes a live root.
 type ChatSession struct {
 	ID        int64
 	Name      string

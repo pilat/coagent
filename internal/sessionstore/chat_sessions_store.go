@@ -13,7 +13,7 @@ type chatSessionActivity struct {
 	ChatSession
 }
 
-// ChatSessions lists live manager roots by their last output or conversational input.
+// ChatSessions lists live roots by their last output or conversational input.
 func (s *Store) ChatSessions(ctx context.Context) ([]ChatSession, error) {
 	rows, err := s.db.QueryContext(ctx, `WITH roots AS (
 		SELECT s.id, p.name,

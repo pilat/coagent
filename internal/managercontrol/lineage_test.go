@@ -14,7 +14,7 @@ func TestLineage_EveryControllerFollowsAReplacement(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
 	factory, store, project, _ := newChatControl(t)
-	root, _, err := store.CreateManagerRoot(ctx, sessionstore.ManagerRootCreate{
+	root, _, err := store.CreateRoot(ctx, sessionstore.RootCreate{
 		ProjectID: project, Model: "model", Name: "test", WorkDir: "/project",
 		Attributes: map[string]any{},
 	})
@@ -23,7 +23,7 @@ func TestLineage_EveryControllerFollowsAReplacement(t *testing.T) {
 	next, err := alpha.Successor(ctx, root.ID)
 	require.NoError(t, err)
 	assert.Zero(t, next)
-	replacement, _, err := store.ReplaceManagerRoot(ctx, root.ID, "test", "/project")
+	replacement, _, err := store.ReplaceRoot(ctx, root.ID, "test", "/project")
 	require.NoError(t, err)
 	next, err = alpha.Successor(ctx, root.ID)
 	require.NoError(t, err)

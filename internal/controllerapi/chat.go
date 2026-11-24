@@ -30,7 +30,7 @@ type ChatOutput struct {
 	Content   string `json:"content"`
 }
 
-// ChatSessionInfo describes a live manager root.
+// ChatSessionInfo describes a live root.
 type ChatSessionInfo struct {
 	ID        int64  `json:"id"`
 	Name      string `json:"name"`

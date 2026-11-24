@@ -45,12 +45,12 @@ func TestChatSessions_LiveOwnedRootsInActivityOrder(t *testing.T) {
 
 	ctx := t.Context()
 	store, db, project := newTestStore(t)
-	old, _, err := store.CreateManagerRoot(ctx, ManagerRootCreate{
+	old, _, err := store.CreateRoot(ctx, RootCreate{
 		ProjectID: project, Model: "model", Attributes: map[string]any{},
 		Name: "test", WorkDir: "/project",
 	})
 	require.NoError(t, err)
-	root, _, err := store.ReplaceManagerRoot(ctx, old.ID, "test", "/project")
+	root, _, err := store.ReplaceRoot(ctx, old.ID, "test", "/project")
 	require.NoError(t, err)
 	chatTestOutput(t, store, root.ID, "first answer")
 	chatTestOutput(t, store, root.ID, "latest answer\nsecond line")

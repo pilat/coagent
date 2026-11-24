@@ -143,7 +143,7 @@ func TestScopedAppRefusesSendToAnOrchestrator(t *testing.T) {
 	}
 	require.EqualError(t, send(app, on), fmt.Sprintf(
 		"orchestrator mode is on for session #%d; a project-scoped app cannot send to it", on))
-	next, _, err := f.store.ReplaceManagerRoot(t.Context(), off, "p", f.p)
+	next, _, err := f.store.ReplaceRoot(t.Context(), off, "p", f.p)
 	require.NoError(t, err)
 	_, err = f.store.SetOrchestrator(t.Context(), next.ID, true)
 	require.NoError(t, err)
