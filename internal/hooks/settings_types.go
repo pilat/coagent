@@ -11,11 +11,10 @@ type handler struct {
 	match       matcher
 }
 
-// Input-only lowercase tags retain camelCase matching under the local JSON tag rule.
 type settingsFile struct {
 	Path            string                    `json:"-"`
 	Hooks           map[string][]matcherGroup `json:"hooks"`
-	DisableAllHooks *bool                     `json:"disableallhooks"`
+	DisableAllHooks *bool                     `json:"disableAllHooks"`
 }
 
 type matcherGroup struct {
@@ -31,8 +30,8 @@ type handlerConfig struct {
 	Shell       string    `json:"shell"`
 	If          *string   `json:"if"`
 	Async       bool      `json:"async"`
-	AsyncRewake bool      `json:"asyncrewake"`
-	OnFailure   string    `json:"onfailure"`
+	AsyncRewake bool      `json:"asyncRewake"`
+	OnFailure   string    `json:"onFailure"`
 }
 
 type handlerKey struct {

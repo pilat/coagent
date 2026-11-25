@@ -59,7 +59,7 @@ lines internal/configops 518
 lines internal/controllerapi 337
 lines internal/daemon 5789
 lines internal/git 868
-lines internal/hooks 989
+lines internal/hooks 987
 lines internal/humanize 24
 lines internal/id 17
 lines internal/install 478
@@ -99,7 +99,7 @@ lines internal/shellenv 975
 lines internal/subagent 1616
 lines internal/todo 226
 lines internal/tool 901
-lines internal/tool/builtin 7701
+lines internal/tool/builtin 7711
 lines internal/transcript 30
 lines internal/version 8
 lines internal/worktree 206

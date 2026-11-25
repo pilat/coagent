@@ -66,6 +66,10 @@ func (t *applyPatchTool) fileHookCalls(file patchFile) ([]tool.HookCall, error) 
 		return nil, err
 	}
 
+	if err := rejectNonRegularAccess(t.access, path); err != nil {
+		return nil, err
+	}
+
 	_, err = readAccessFile(t.access, path)
 	if errors.Is(err, os.ErrNotExist) {
 		return t.newFileHookCall(path, file.Hunks)

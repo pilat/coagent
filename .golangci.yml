@@ -364,6 +364,9 @@ linters:
       # SKILL.md frontmatter keys are kebab-case for Claude Code compatibility.
       - linters: [tagliatelle]
         path: internal/loader/types\.go
+      # Claude Code's hook wire keys use camelCase.
+      - linters: [tagliatelle]
+        path: ^internal/(hooks/(decision|settings)_types|tool/builtin/bash_hooks)\.go$
 
 formatters:
   enable:
