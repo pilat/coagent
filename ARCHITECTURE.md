@@ -77,6 +77,7 @@ does not imply a tier except where it expresses an implementation variant.
 - `internal/controllerapi` — private author-bound controller contract behind the local API server and shared DTO vocabulary.
 - `internal/daemon` — runner and tree lifecycle, admission, boot recovery, commands and session-event composition.
 - `internal/git` — Git operations used by repository-facing features.
+- `internal/hooks` — operator command hooks from settings files: matching, confined execution, Claude Code payloads and decisions around tool calls and a root's stop.
 - `internal/humanize` — presentation-only formatting helpers (human-readable sizes); stdlib only.
 - `internal/id` — local identity generation utilities.
 - `internal/install` — Linux systemd service installation and lifecycle integration. Refuses non-Linux hosts before target resolution.
@@ -257,6 +258,9 @@ marketplace content is loadable instruction/definition data, not executable
 code with privileged integration rights. New managers and drivers are source
 contributions governed by the internal dependency graph.
 
+Operator hooks in `.claude/settings.json` follow the Claude Code command-hook
+contract; settings-file commands are an operator surface, not a plugin API.
+
 Every session with `parent_id = 0` is a root, with an output log, titles,
 episodes and the chat, config and orchestrator surfaces. Every manager and operator controller
 reaches every root; an app's reach follows its project scope and delegated authority.
@@ -348,7 +352,7 @@ execution. The first `length` appends one recovery input directly after its reje
 `length` or unknown finish commits a terminal error. Compaction model calls
 retain their separate no-retry contract.
 
-A no-tool `stop` completes the current activation immediately only when the
+A no-tool `stop` reaches the publication boundary immediately only when the
 exact session owns a durable background wake source: an advertised running
 process, an undelivered non-blocking child link in `spawned`, `running`,
 `completed` or `error`, or pending process/subagent inbox input. Without a
@@ -357,7 +361,10 @@ host-authored completion nudge and keeps the session active. A direct non-empty 
 confirms and publishes the candidate's text, not the confirming ack. A tool
 call invalidates that candidate, but the durable nudge generation remains:
 the next non-empty no-tool stop in the same model-input generation publishes
-its own text and finishes without another nudge. Genuine model-bound input
+its own text and finishes without another completion nudge. A root's Stop hook
+may first continue either publication path, at most eight times per activation,
+clearing the candidate and sharing the nudge marker. Tool calls and human input
+do not reset that cap. Genuine model-bound input
 advances the generation and restores the one-nudge allowance
 ([ADR-0060](docs/adr/0060-wake-aware-model-completion-check.md), amended by
 [ADR-0061](docs/adr/0061-completion-check-publishes-the-candidate-answer.md) and
@@ -373,7 +380,7 @@ assistant message, iteration, completion state, empty streak, budget verdict,
 nudge and optional manager output in one SQLite step transaction.
 
 A no-tool `stop` with a wake source completes the current activation even
-while a background process or subagent remains. A subagent that still owns a
+while a background process or subagent remains, unless a root's Stop hook continues it. A subagent that still owns a
 live advertised process first receives one background-exit nudge, sharing the
 one-nudge-per-generation marker, and its later yield is not a result
 ([ADR-0071](docs/adr/0071-subagent-result-waits-for-its-own-background-work.md)).
@@ -616,6 +623,13 @@ so a crash cannot separate a persisted failure from its decided skips; a typed
 failure bit rides the durable row (legacy rows read false). The `batch`
 fallback runs its admissible nested calls through the same executor and the
 same validation, marking its combined result failed when any nested call did.
+The shared executor's `invoke` runs operator hooks around dispatched calls,
+including nested batch calls; a refusal is a typed failure.
+It captures each tool's hook projection once before execution for both events;
+empty or failed projections retain the source tool's native identity.
+Committed hook feedback follows truncation and the untrusted frame, deduplicated
+in first-occurrence order and bounded to 10,000 Unicode characters per row,
+including the truncation marker.
 
 ### Pending external calls: producer ledger and exact result
 
@@ -820,6 +834,12 @@ Operator rules are `config.yaml` data validated before a candidate replaces the
 live file; repository content, MCP registration, model output and shell
 variables grant nothing.
 
+Hook commands use the session's confinement runner and shell environment;
+project hook settings are read through project-confined file access. The global
+`~/.coagent/settings.json` is read-only under the implicit defaults, except for
+a project rooted at home or the coagent home, or an operator rule granting writes
+to that file or its parent. Disabling confinement also permits global-file edits.
+
 Compilation resolves declared anchors to canonical absolute paths, rejects
 duplicate canonical project keys and traversal
 components, and folds project identity and the ordered rule list into one policy
@@ -992,6 +1012,14 @@ exposed by several sections, enrichment uses the first match and emits an
 ambiguity warning. MCP server definitions live in SQLite, with project scope
 overriding a global entry of the same name.
 
+Activation assembly snapshots operator hooks from `~/.coagent/settings.json`,
+`<workDir>/.claude/settings.json` and `<workDir>/.claude/settings.local.json`,
+merging handlers in that order. Global `disableAllHooks: true` disables all hooks;
+project/local values govern only project handlers, with local taking precedence.
+An effective disable logs its file path. `~/.claude/settings.json` is never read;
+a project rooted at the user home skips both project files with a debug log.
+Settings edits reach the next activation; project settings cannot disable global guards.
+
 Project context is discovered from supported CLAUDE/AGENTS and coagent locations;
 skills and subagent definitions can come from project, global or marketplace
 sources. A missing subagent `tools` declaration inherits the inventory, whereas
@@ -1093,6 +1121,16 @@ holds the same grants as its rooted file access, so direct mutations, reads and
 process launches cannot disagree about declared authority. A suspending tool may
 not be batched with ordinary synchronous tools because its result is delivered
 after the loop exits.
+
+`internal/hooks` owns settings, matching, payloads and decisions through the
+`tool.CallHooks` and `session.StopHook` seams, with no session implementation dependency.
+It owns per-handler timeouts, parallel event dispatch and ordered result combination.
+Project settings are read through project-confined access; global settings are
+trusted host input, fixed for the activation. Hook projections are captured before
+execution, keeping PreToolUse and PostToolUse identities consistent after mutation.
+The stack owns confined process launch, process-group cancellation, bounded stream
+capture and descriptor release;
+the hook package receives only a run-to-completion launch function.
 
 The core recognises tools by declared traits, not tool ID ([ADR-0083](docs/adr/0083-core-recognises-tools-by-declared-traits.md)).
 A live-call property is an optional tool interface; the tool stack declares the browser

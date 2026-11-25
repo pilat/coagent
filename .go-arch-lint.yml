@@ -34,6 +34,7 @@ components:
   logger:         { in: internal/logger }
   llmwire:        { in: internal/llmwire }
   humanize:       { in: internal/humanize }
+  hooks:          { in: internal/hooks }
   safefile:       { in: internal/safefile }
   sessionevent:   { in: internal/sessionevent }
   sessionbus:     { in: internal/sessionbus }
@@ -164,6 +165,8 @@ deps:
   # Shared protocols are small, but not globally importable by fiat.
   tool:
     mayDependOn: [llmwire]
+  hooks:
+    mayDependOn: [coagenthome, config, logger, safefile, tool]
 
   # External model catalogs — the drivers' source of model metadata.
   catalog:
@@ -189,7 +192,7 @@ deps:
   session:
     mayDependOn: [llm, llmwire, loader, logger, sessionevent, sessionprompt, sessionstore, tool, transcript]
   sessionbuild:
-    mayDependOn: [backgroundprocess, builtin, catalog, config, git, llm, loader, logger, mcp, mcpstore, memory, registry, session, sessionprompt, sessionstore, todo, tool]
+    mayDependOn: [backgroundprocess, builtin, catalog, config, git, hooks, llm, loader, logger, mcp, mcpstore, memory, registry, session, sessionprompt, sessionstore, todo, tool]
   sessionprompt:
     mayDependOn: [git, llmwire, loader, logger, memory, todo, tool]
   registry:

@@ -32,6 +32,10 @@ func (s *Session) modelStep(ctx context.Context, r *runState) error {
 			return s.commitProjectionFailure(ctx, r, c, err)
 		}
 	} else if err := s.prepareAcceptedAttempt(ctx, r, &c, response); err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+
 		return s.commitProjectionFailure(ctx, r, c, err)
 	}
 
@@ -177,9 +181,7 @@ func (s *Session) prepareAcceptedAttempt(
 		}
 	}
 
-	s.prepareStopResponse(r, c, response, state, wake)
-
-	return nil
+	return s.prepareStopResponse(ctx, r, c, response, state, wake)
 }
 
 func (s *Session) commitModelAttempt(ctx context.Context, r *runState, c sessionstore.Commit) error {
@@ -288,23 +290,21 @@ func (s *Session) prepareToolResponse(
 }
 
 func (s *Session) prepareStopResponse(
+	ctx context.Context,
 	r *runState,
 	c *sessionstore.Commit,
 	response *llmwire.Response,
 	state *sessionstore.CompletionCheckState,
 	wake bool,
-) {
+) error {
 	if wake {
-		s.finalParts(c, response.Text)
-		r.result.Final = response.Text
-		r.terminal = true
-
-		return
+		_, err := s.publishStop(ctx, r, c, response.Text, state)
+		return err
 	}
 
 	if strings.TrimSpace(response.Text) == "" || response.FinishType == llmwire.FinishToolCalls {
 		prepareEmptyStop(r, c, state)
-		return
+		return nil
 	}
 
 	candidate := durableCandidateID(state)
@@ -315,12 +315,7 @@ func (s *Session) prepareStopResponse(
 			hostUserMessage(sessionprompt.RenderCompletionNudge(s.prompt.Todos.List())),
 		}
 
-		return
-	}
-
-	if candidate != 0 {
-		c.State.Candidate = &sessionstore.CandidateChange{Expected: candidate, NextRef: -1}
-		c.State.ConfirmedAnswerID = &candidate
+		return nil
 	}
 
 	text := response.Text
@@ -328,9 +323,17 @@ func (s *Session) prepareStopResponse(
 		text = state.CandidateText
 	}
 
-	s.finalParts(c, text)
-	r.result.Final = text
-	r.terminal = true
+	published, err := s.publishStop(ctx, r, c, text, state)
+	if err != nil {
+		return err
+	}
+
+	if published && candidate != 0 {
+		c.State.Candidate = &sessionstore.CandidateChange{Expected: candidate, NextRef: -1}
+		c.State.ConfirmedAnswerID = &candidate
+	}
+
+	return nil
 }
 
 func prepareEmptyStop(r *runState, c *sessionstore.Commit, state *sessionstore.CompletionCheckState) {

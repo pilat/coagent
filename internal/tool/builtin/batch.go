@@ -9,7 +9,6 @@ import (
 
 	"go.uber.org/zap"
 
-	"github.com/pilat/coagent/internal/llmwire"
 	"github.com/pilat/coagent/internal/logger"
 	"github.com/pilat/coagent/internal/tool"
 )
@@ -193,15 +192,11 @@ func (t *BatchTool) validateCalls(calls []BatchCall) error {
 func (t *BatchTool) formatResult(calls []tool.Call, report tool.Report) *tool.Result {
 	var output strings.Builder
 
-	direct := make([]string, 0)
-
+	result := &tool.Result{
+		DirectMessages: make([]string, 0),
+	}
 	successCount := 0
-
 	errorCount := 0
-
-	var images []llmwire.ImageRef
-
-	untrusted := false
 
 	for _, r := range report.Results {
 		call := calls[r.Index]
@@ -211,23 +206,10 @@ func (t *BatchTool) formatResult(calls []tool.Call, report tool.Report) *tool.Re
 		switch r.Outcome {
 		case tool.OutcomeExecuted, tool.OutcomeFailed:
 			if r.Result != nil {
-				result := r.Result
-
-				if result.Title != "" {
-					fmt.Fprintf(&output, "[%s]\n", result.Title)
-				}
-
-				output.WriteString(result.Output)
-				output.WriteString("\n")
-
-				untrusted = untrusted || result.Untrusted
-
 				// Typed failures keep the attachments their real result carried
 				// (same contract as the native path); skipped/cancelled children
 				// fabricate none because they never produce a result at all.
-				images = append(images, result.Images...)
-
-				direct = append(direct, result.DirectMessages...)
+				mergeBatchResult(&output, result, r.Result)
 
 				if r.Outcome == tool.OutcomeExecuted {
 					successCount++
@@ -239,7 +221,7 @@ func (t *BatchTool) formatResult(calls []tool.Call, report tool.Report) *tool.Re
 			}
 
 			_, declared := call.Tool.(tool.UntrustedSource)
-			untrusted = untrusted || declared
+			result.Untrusted = result.Untrusted || declared
 
 			fmt.Fprintf(&output, "Error: %v\n", r.Err)
 
@@ -265,17 +247,28 @@ func (t *BatchTool) formatResult(calls []tool.Call, report tool.Report) *tool.Re
 		output.WriteString("\n")
 	}
 
-	return &tool.Result{
-		Title:     fmt.Sprintf("Batch: %d/%d succeeded", successCount, len(calls)),
-		Output:    strings.TrimSpace(output.String()),
-		IsError:   errorCount > 0,
-		Untrusted: untrusted,
-		Metadata: map[string]any{
-			metaKeyTotal: len(calls),
-			"success":    successCount,
-			"errors":     errorCount,
-		},
-		Images:         images,
-		DirectMessages: direct,
+	result.Title = fmt.Sprintf("Batch: %d/%d succeeded", successCount, len(calls))
+	result.Output = strings.TrimSpace(output.String())
+	result.IsError = errorCount > 0
+	result.Metadata = map[string]any{
+		metaKeyTotal: len(calls),
+		"success":    successCount,
+		"errors":     errorCount,
 	}
+
+	return result
+}
+
+func mergeBatchResult(output *strings.Builder, combined, nested *tool.Result) {
+	if nested.Title != "" {
+		fmt.Fprintf(output, "[%s]\n", nested.Title)
+	}
+
+	output.WriteString(nested.Output)
+	output.WriteString("\n")
+
+	combined.Untrusted = combined.Untrusted || nested.Untrusted
+	combined.Images = append(combined.Images, nested.Images...)
+	combined.DirectMessages = append(combined.DirectMessages, nested.DirectMessages...)
+	combined.HookFeedback = append(combined.HookFeedback, nested.HookFeedback...)
 }

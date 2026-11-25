@@ -48,6 +48,7 @@ Limits:
 
 var (
 	_ tool.Tool           = (*grepTool)(nil)
+	_ tool.HookNamed      = (*grepTool)(nil)
 	_ tool.TrailDeclarer  = (*grepTool)(nil)
 	_ tool.PromptDeclarer = (*grepTool)(nil)
 )
@@ -80,6 +81,8 @@ func newGrepToolWithAccess(workDir string, access *safefile.Access) *grepTool {
 func (t *grepTool) ID() string          { return "grep" }
 func (t *grepTool) ParallelSafe() bool  { return true }
 func (t *grepTool) Description() string { return grepDescription }
+
+func (t *grepTool) HookName() tool.HookName { return tool.HookName{Name: "Grep"} }
 
 func (t *grepTool) TrailArgument() tool.TrailArgument {
 	return tool.TrailArgument{Param: patternParam}

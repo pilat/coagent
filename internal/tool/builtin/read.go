@@ -37,6 +37,7 @@ Read the ranges needed for the current question. Group independent reads in one 
 
 var (
 	_ tool.Tool           = (*readTool)(nil)
+	_ tool.HookNamed      = (*readTool)(nil)
 	_ tool.TrailDeclarer  = (*readTool)(nil)
 	_ tool.PromptDeclarer = (*readTool)(nil)
 )
@@ -60,6 +61,8 @@ func newReadToolWithAccess(workDir string, access *safefile.Access, tracker File
 func (t *readTool) ID() string          { return "read" }
 func (t *readTool) ParallelSafe() bool  { return true }
 func (t *readTool) Description() string { return readDescription }
+
+func (t *readTool) HookName() tool.HookName { return tool.HookName{Name: "Read"} }
 
 func (t *readTool) TrailArgument() tool.TrailArgument {
 	return tool.TrailArgument{Param: filePathParam, Path: true}

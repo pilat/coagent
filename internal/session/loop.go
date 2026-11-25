@@ -49,15 +49,16 @@ type RunResult struct {
 }
 
 type runState struct {
-	result             RunResult
-	iterations         int
-	terminal           bool
-	terminalState      bool
-	handledControl     bool
-	boundaryAgain      bool
-	backgroundInserted bool
-	compactionFailures int
-	autoCompactionOff  bool
+	result                RunResult
+	iterations            int
+	terminal              bool
+	terminalState         bool
+	handledControl        bool
+	boundaryAgain         bool
+	backgroundInserted    bool
+	compactionFailures    int
+	autoCompactionOff     bool
+	stopHookContinuations int
 }
 
 // Context reports the live projection without exposing progress-runtime policy.

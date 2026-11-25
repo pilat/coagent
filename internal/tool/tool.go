@@ -143,7 +143,8 @@ type Result struct {
 	// Untrusted marks externally sourced content (web, search, MCP) as evidence
 	// rather than authority. Execution-time only: never serialized, never
 	// persisted, so the durable transcript schema stays untouched.
-	Untrusted bool `json:"-"`
+	Untrusted    bool     `json:"-"`
+	HookFeedback []string `json:"-"`
 }
 
 // ActivationIndex returns the exact command owner map for a registry. Duplicate
