@@ -14,6 +14,7 @@ const (
 	DirName = ".coagent"
 
 	ConfigFileName       = "config.yaml"
+	SettingsFileName     = "settings.json"
 	SecretsFileName      = "secrets"
 	SocketFileName       = "daemon.sock"
 	APISocketFileName    = "api.sock"

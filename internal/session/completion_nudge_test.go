@@ -17,7 +17,17 @@ func TestPrepareStopResponseAfterNudge(t *testing.T) {
 
 	final := agent.newCommit()
 	finalRun := &runState{}
-	agent.prepareStopResponse(finalRun, &final, &llmwire.Response{Text: "complete answer"}, state, false)
+	require.NoError(
+		t,
+		agent.prepareStopResponse(
+			t.Context(),
+			finalRun,
+			&final,
+			&llmwire.Response{Text: "complete answer"},
+			state,
+			false,
+		),
+	)
 	assert.True(t, finalRun.terminal)
 	assert.Equal(t, "complete answer", finalRun.result.Final)
 	assert.Empty(t, final.Unfired.Messages)
@@ -27,7 +37,7 @@ func TestPrepareStopResponseAfterNudge(t *testing.T) {
 
 	empty := agent.newCommit()
 	emptyRun := &runState{}
-	agent.prepareStopResponse(emptyRun, &empty, &llmwire.Response{}, state, false)
+	require.NoError(t, agent.prepareStopResponse(t.Context(), emptyRun, &empty, &llmwire.Response{}, state, false))
 	assert.False(t, emptyRun.terminal)
 	require.Len(t, empty.Unfired.Messages, 1)
 	assert.Contains(t, empty.Unfired.Messages[0].Content, "empty response")
@@ -35,7 +45,10 @@ func TestPrepareStopResponseAfterNudge(t *testing.T) {
 
 	wake := agent.newCommit()
 	wakeRun := &runState{}
-	agent.prepareStopResponse(wakeRun, &wake, &llmwire.Response{Text: "waiting"}, state, true)
+	require.NoError(
+		t,
+		agent.prepareStopResponse(t.Context(), wakeRun, &wake, &llmwire.Response{Text: "waiting"}, state, true),
+	)
 	assert.True(t, wakeRun.terminal)
 	assert.Empty(t, wake.Unfired.Messages)
 	require.Len(t, wake.Unfired.Outputs, 1)
@@ -48,7 +61,10 @@ func TestFinalPartsWithBackgroundWake(t *testing.T) {
 		step := agent.newCommit()
 		run := &runState{}
 		state := &sessionstore.CompletionCheckState{NudgedThisGeneration: true}
-		agent.prepareStopResponse(run, &step, &llmwire.Response{Text: "answer"}, state, yield)
+		require.NoError(
+			t,
+			agent.prepareStopResponse(t.Context(), run, &step, &llmwire.Response{Text: "answer"}, state, yield),
+		)
 		require.Len(t, step.Unfired.Outputs, 1)
 		assert.True(t, step.Unfired.Outputs[0].ReleasesInput)
 		assert.Equal(t, sessionstore.OutputMessage, step.Unfired.Outputs[0].Type)

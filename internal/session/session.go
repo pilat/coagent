@@ -36,6 +36,8 @@ type Input struct {
 	Client                   llm.Client
 	Loader                   *loader.Service
 	Registry                 *tool.Registry
+	CallHooks                tool.CallHooks
+	StopHook                 StopHook
 	Frames                   tool.FrameRule
 	Prompt                   *sessionprompt.Builder
 	Store                    Store
@@ -59,6 +61,8 @@ type Session struct {
 	llmClient         llm.Client
 	loader            *loader.Service
 	registry          *tool.Registry
+	callHooks         tool.CallHooks
+	stopHook          StopHook
 	activationIndex   map[string]string
 	currentActivation *tool.ActivationGrant
 	agentsMD          string
@@ -143,6 +147,8 @@ func New(ctx context.Context, in Input) (*Session, error) {
 		llmClient:                in.Client,
 		loader:                   in.Loader,
 		registry:                 in.Registry,
+		callHooks:                in.CallHooks,
+		stopHook:                 in.StopHook,
 		prompt:                   in.Prompt,
 		agentsMD:                 in.OpeningContext,
 		store:                    in.Store,

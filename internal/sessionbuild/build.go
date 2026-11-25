@@ -151,7 +151,7 @@ func build(
 		frames = stack.Frames()
 	}
 
-	sess, err := session.New(ctx, session.Input{
+	input := session.Input{
 		Record:                   in.Record,
 		Client:                   client,
 		Loader:                   in.Loader,
@@ -170,7 +170,13 @@ func build(
 		BackgroundSnapshot:       sessionprompt.BuildActiveBackgroundSection(in.ActiveProcesses, in.ActiveSubagents),
 		CompactionDeferAnnounced: in.CompactionDeferAnnounced,
 		ImageAuthorizer:          imageAuthorizer,
-	})
+	}
+	if loaded := loadHooks(ctx, in, stack); loaded != nil {
+		input.CallHooks = loaded
+		input.StopHook = loaded
+	}
+
+	sess, err := session.New(ctx, input)
 	if err != nil {
 		cleanup()
 		return nil, nil, fmt.Errorf("build: %w", err)

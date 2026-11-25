@@ -36,7 +36,10 @@ Examples:
 Editing a file also counts as having read it for a later write.`
 
 var (
+	editHookName = tool.HookName{Name: "Edit"}
+
 	_ tool.Tool           = (*editTool)(nil)
+	_ tool.HookNamed      = (*editTool)(nil)
 	_ tool.TrailDeclarer  = (*editTool)(nil)
 	_ tool.PromptDeclarer = (*editTool)(nil)
 )
@@ -69,6 +72,8 @@ func newEditToolWithAccess(
 func (t *editTool) ID() string          { return "edit" }
 func (t *editTool) ParallelSafe() bool  { return false }
 func (t *editTool) Description() string { return editDescription }
+
+func (t *editTool) HookName() tool.HookName { return editHookName }
 
 func (t *editTool) TrailArgument() tool.TrailArgument {
 	return tool.TrailArgument{Param: filePathParam, Path: true}

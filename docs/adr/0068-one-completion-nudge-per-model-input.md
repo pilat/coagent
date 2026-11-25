@@ -4,6 +4,7 @@
 - **Date:** 2026-10-05
 - **Amends:** [ADR-0060](0060-wake-aware-model-completion-check.md)
 - **Amended by:** [ADR-0071](0071-subagent-result-waits-for-its-own-background-work.md) — the subagent background-exit nudge shares this one-nudge-per-generation marker
+- **Amended by:** [ADR-0111](0111-operator-hooks-follow-the-claude-code-command-contract.md) — a root's Stop hook may block publication up to eight times per activation, sharing the nudge marker
 
 ## Context
 

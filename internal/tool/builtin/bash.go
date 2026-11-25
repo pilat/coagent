@@ -32,6 +32,7 @@ const (
 
 var (
 	_ tool.Tool           = (*bashTool)(nil)
+	_ tool.HookNamed      = (*bashTool)(nil)
 	_ tool.TrailDeclarer  = (*bashTool)(nil)
 	_ tool.PromptDeclarer = (*bashTool)(nil)
 )
@@ -76,6 +77,13 @@ func newBashToolWithAccess(
 func (t *bashTool) ID() string          { return "bash" }
 func (t *bashTool) ParallelSafe() bool  { return false }
 func (t *bashTool) Description() string { return bashDescription + backgroundDescriptionSuffix }
+
+func (t *bashTool) HookName() tool.HookName {
+	return tool.HookName{
+		Name:    "Bash",
+		Aliases: []string{"shell"},
+	}
+}
 
 func (t *bashTool) TrailArgument() tool.TrailArgument {
 	return tool.TrailArgument{Param: "command"}

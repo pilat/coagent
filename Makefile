@@ -24,6 +24,7 @@ CI_ONLY_TEST_PACKAGES := $(addprefix $(MODULE_PATH)/,\
 	cmd/coagent \
 	internal/daemon \
 	internal/git \
+	internal/hooks \
 	internal/lsp \
 	internal/managers/telegram \
 	internal/mcpstore \

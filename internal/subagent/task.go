@@ -43,6 +43,7 @@ type taskTool struct {
 
 var (
 	_ tool.Tool              = (*taskTool)(nil)
+	_ tool.HookNamed         = (*taskTool)(nil)
 	_ tool.FrameAvailability = (*taskTool)(nil)
 )
 
@@ -68,6 +69,13 @@ func NewTaskTool(
 }
 
 func (t *taskTool) ID() string { return tool.IDTask }
+
+func (t *taskTool) HookName() tool.HookName {
+	return tool.HookName{
+		Name:    "Agent",
+		Aliases: []string{"Task", "spawn_agent", "subagent"},
+	}
+}
 
 // Foreground scatter/gather depends on sibling task calls running together.
 func (t *taskTool) ParallelSafe() bool { return true }

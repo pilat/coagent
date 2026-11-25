@@ -33,6 +33,8 @@ type (
 		ID        string
 		Arguments json.RawMessage
 		Err       error
+		// Post-call hooks must retain the file shape seen before execution.
+		Projection []HookCall
 	}
 
 	CallResult struct {
@@ -212,67 +214,6 @@ func countOutcomes(report *Report, start, end int) bool {
 	}
 
 	return blocked
-}
-
-//nolint:nonamedreturns // Recovery returns the failure written by the deferred panic handler.
-func invoke(ctx context.Context, call Call, index int, overlap, maxOverlap *atomic.Int32) (out CallResult) {
-	current := overlap.Add(1)
-
-	for {
-		seen := maxOverlap.Load()
-		if current <= seen || maxOverlap.CompareAndSwap(seen, current) {
-			break
-		}
-	}
-
-	defer overlap.Add(-1)
-
-	out.Index = index
-
-	defer func() {
-		if recovered := recover(); recovered != nil {
-			out.Outcome = OutcomeFailed
-			out.Err = fmt.Errorf("panic in tool %s: %v", call.Name, recovered)
-			out.Result = nil
-		}
-	}()
-
-	out.Outcome = OutcomeFailed
-	if call.Err != nil {
-		out.Err = call.Err
-		return out
-	}
-
-	if call.Tool == nil {
-		out.Err = fmt.Errorf("unknown tool: %s", call.Name)
-		return out
-	}
-
-	if call.ID != "" {
-		ctx = WithCallID(ctx, call.ID)
-	}
-
-	result, err := call.Tool.Execute(ctx, call.Arguments)
-	if err != nil {
-		out.Err = fmt.Errorf("execute tool %s: %w", call.Name, err)
-		if errors.Is(err, ErrSuspend) {
-			out.Outcome = OutcomeSuspended
-		}
-
-		return out
-	}
-
-	if result == nil {
-		out.Err = fmt.Errorf("execute tool %s: tool returned nil result", call.Name)
-		return out
-	}
-
-	out.Result = result
-	if !result.IsError {
-		out.Outcome = OutcomeExecuted
-	}
-
-	return out
 }
 
 func markRange(report *Report, start, end int, outcome Outcome) {

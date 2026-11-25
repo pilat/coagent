@@ -286,8 +286,20 @@ A tool whose Execute may run concurrently with its siblings in one assistant res
 _Avoid_: thread-safe (an implementation property, not the declared scheduling policy), batch-able.
 
 **tool trait**:
-A property the core consults instead of a tool's ID, declared by the tool as an optional interface (`tool.UntrustedSource`, `tool.SkillLoader`, `tool.TrailDeclarer`, `tool.PromptDeclarer`) or, where stored rows must be classified after their tool is gone, by the tool stack as an ID rule (the **frame rule**) ([ADR-0083](adr/0083-core-recognises-tools-by-declared-traits.md), [ADR-0085](adr/0085-core-names-no-extensible-tool-by-literal.md)).
+A property the core consults instead of a tool's ID, declared by the tool as an optional interface (`tool.UntrustedSource`, `tool.SkillLoader`, `tool.TrailDeclarer`, `tool.PromptDeclarer`, `tool.HookNamed`, `tool.HookProjector`, `tool.HookResponder`) or, where stored rows must be classified after their tool is gone, by the tool stack as an ID rule (the **frame rule**) ([ADR-0083](adr/0083-core-recognises-tools-by-declared-traits.md), [ADR-0085](adr/0085-core-names-no-extensible-tool-by-literal.md)).
 _Avoid_: tool kind.
+
+**operator hook**:
+A command from a settings file run around a tool call or a root's stop, following the Claude Code command-hook contract. The handlers loaded when an activation starts stay fixed for that activation ([ADR-0111](adr/0111-operator-hooks-follow-the-claude-code-command-contract.md)).
+_Avoid_: plugin hook, MCP profile.
+
+**hook name**:
+The `tool.HookName` trait: the Claude Code name and other agents' spellings a tool shows to operator hooks. An alias never shadows another tool's native ID.
+_Avoid_: tool alias table.
+
+**hook projection**:
+The `tool.HookProjector` trait: one call shown to hooks as several, currently `apply_patch` as per-hunk Edit and per-new-file Write calls. It is captured once before execution, so both hook events see the same calls.
+_Avoid_: whole-file edit (existing-file hooks receive each hunk), tool expansion (the original call still executes once).
 
 **frame rule** (`tool.FrameRule`):
 The tool stack's ID rule naming which tool calls return whole **browser frame**s and what truncation budget a frame gets. It answers for stored rows whose tool is no longer registered. An agent type opts in with `FrameSession`; such a **frame session** sees the rule's tools plus only the built-ins its type grants, and every other type never sees the rule's tools. Today the built-in browser surface declares the only rule and `browser` is the only frame session.
@@ -646,6 +658,8 @@ invalidates the check; an empty response remains subject to loop detection.
 At most one nudge is issued per model-input generation: once the model continued
 with tools after it, its next text stop is final and published as-is
 ([ADR-0068](adr/0068-one-completion-nudge-per-model-input.md)).
+A root's Stop hook may block publication using the same nudge marker, bounded at
+eight continuations per activation ([ADR-0111](adr/0111-operator-hooks-follow-the-claude-code-command-contract.md)).
 _Avoid_: stop marker, magic acknowledgement, final-answer tool.
 
 **background-exit nudge**:

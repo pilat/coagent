@@ -31,6 +31,7 @@ type toolCallResultItem struct {
 	untrusted      bool
 	images         []llmwire.ImageRef
 	directMessages []string
+	hookFeedback   []string
 	outcome        tool.Outcome
 	// err keeps the raw execution error for logging only.
 	err error
@@ -88,6 +89,10 @@ func failedItem(index int, tc llmwire.ToolCall, declared tool.Tool, err error, c
 func executeToolCallsInternal(ctx context.Context, agent *Session, toolCalls []llmwire.ToolCall) []toolCallResultItem {
 	log := logger.Ctx(ctx).Named("session.toolexec")
 	contextWindow := agent.contextWindow()
+
+	if agent.callHooks != nil {
+		ctx = tool.WithCallHooks(ctx, agent.callHooks)
+	}
 
 	results := make([]toolCallResultItem, len(toolCalls))
 
@@ -246,6 +251,7 @@ func mapExecutorReport(
 				index: i, toolCall: tc, content: formatToolResult(r.Result, agent.contextWindow(), frameLimit),
 				untrusted: r.Result.Untrusted, images: r.Result.Images,
 				directMessages: r.Result.DirectMessages, outcome: r.Outcome,
+				hookFeedback: r.Result.HookFeedback,
 			}
 			if r.Outcome == tool.OutcomeFailed {
 				log.Warn("tool_typed_failure", zap.String("name", tc.Name))
@@ -356,6 +362,8 @@ func recordToolResults(
 		if i == warnIdx {
 			content = prependLoopWarning(ctx, agent, postAction, r.toolCall.Name, content)
 		}
+
+		content = appendHookFeedback(content, r.hookFeedback)
 
 		message, err := storedMessage(
 			&llmwire.Message{

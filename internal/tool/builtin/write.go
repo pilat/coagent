@@ -30,7 +30,10 @@ Usage:
 - Use for creating new files; prefer Edit tool for modifying existing files`
 
 var (
+	writeHookName = tool.HookName{Name: "Write"}
+
 	_ tool.Tool           = (*writeTool)(nil)
+	_ tool.HookNamed      = (*writeTool)(nil)
 	_ tool.TrailDeclarer  = (*writeTool)(nil)
 	_ tool.PromptDeclarer = (*writeTool)(nil)
 )
@@ -61,6 +64,8 @@ func newWriteToolWithAccess(
 func (t *writeTool) ID() string          { return "write" }
 func (t *writeTool) ParallelSafe() bool  { return false }
 func (t *writeTool) Description() string { return writeDescription }
+
+func (t *writeTool) HookName() tool.HookName { return writeHookName }
 
 func (t *writeTool) TrailArgument() tool.TrailArgument {
 	return tool.TrailArgument{Param: filePathParam, Path: true}

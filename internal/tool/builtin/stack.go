@@ -56,6 +56,8 @@ type Stack struct {
 	closeOnce sync.Once
 	closeErr  error
 	runner    bashsandbox.Runner
+	provider  shellenv.Provider
+	workDir   string
 	access    *safefile.Access
 	sessionID int64
 	web       []*http.Transport
@@ -184,6 +186,8 @@ func BuildStack(ctx context.Context, cfg StackConfig) (*Stack, error) {
 		Registry: registry, lspMgr: lspMgr, mcpSvc: mcpSvc, runner: bashRunner, access: access,
 		resources: resources, web: webTransports, frames: frames,
 		sessionID: cfg.SessionID,
+		provider:  provider,
+		workDir:   cfg.WorkDir,
 	}, nil
 }
 
