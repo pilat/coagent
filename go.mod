@@ -4,13 +4,13 @@ go 1.27.1
 
 require (
 	connectrpc.com/connect/v2 v2.0.2
-	github.com/anthropics/anthropic-sdk-go/v2 v2.9.0
-	github.com/bmatcuk/doublestar/v4 v4.10.4
+	github.com/anthropics/anthropic-sdk-go/v2 v2.15.0
+	github.com/bmatcuk/doublestar/v4 v4.10.7
 	github.com/caarlos0/env/v11 v11.4.2
 	github.com/joho/godotenv v1.5.1
-	github.com/mark3labs/mcp-go v1.5.0
-	github.com/moby/moby/api v1.56.1
-	github.com/pressly/goose/v3 v3.30.0
+	github.com/mark3labs/mcp-go v1.6.0
+	github.com/moby/moby/api v1.57.0
+	github.com/pressly/goose/v3 v3.30.2
 	github.com/robfig/cron/v3 v3.0.1
 	github.com/stretchr/testify v1.12.1
 	github.com/testcontainers/testcontainers-go v0.45.0
@@ -19,7 +19,7 @@ require (
 	golang.org/x/sys v0.50.0
 	google.golang.org/protobuf v1.36.12
 	gopkg.in/yaml.v3 v3.0.1
-	modernc.org/sqlite v1.62.0
+	modernc.org/sqlite v1.63.0
 	mvdan.cc/sh/v3 v3.14.1
 )
 
@@ -53,7 +53,7 @@ require (
 	github.com/lufia/plan9stats v0.0.0-20260330125221-c963978e514e // indirect
 	github.com/magiconair/properties v1.18.12 // indirect
 	github.com/mattn/go-isatty v0.0.24 // indirect
-	github.com/mfridman/interpolate v0.0.2 // indirect
+	github.com/mfridman/interpolate v0.2.0 // indirect
 	github.com/moby/docker-image-spec v1.3.1 // indirect
 	github.com/moby/go-archive v0.3.3 // indirect
 	github.com/moby/moby/client v0.6.2 // indirect
@@ -69,7 +69,6 @@ require (
 	github.com/power-devops/perfstat v0.0.0-20240221224432-82ca36839d55 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2 // indirect
-	github.com/sethvargo/go-retry v0.5.0 // indirect
 	github.com/shirou/gopsutil/v4 v4.26.6 // indirect
 	github.com/sirupsen/logrus v1.10.2 // indirect
 	github.com/spf13/cast v1.7.1 // indirect
