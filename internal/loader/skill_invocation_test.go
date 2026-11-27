@@ -69,3 +69,55 @@ func TestResolveModelInvocableSkillRejectsAmbiguousMatches(t *testing.T) {
 	assert.Contains(t, err.Error(), "alpha:review")
 	assert.Contains(t, err.Error(), "beta:review")
 }
+
+func TestResolveModelInvocableSkill_PrefersOtherOriginsOverMCPOnBareNames(t *testing.T) {
+	marketplace := &Skill{Name: "pilat:review"}
+	disk := &Skill{Name: "project:review"}
+	docs := &Skill{Name: "docs:review", Origin: &SkillOrigin{Server: "docs"}}
+	tools := &Skill{Name: "tools:review", Origin: &SkillOrigin{Server: "tools"}}
+
+	for _, tc := range []struct {
+		name   string
+		skills []*Skill
+		want   string
+	}{
+		{
+			name:   "one other origin wins",
+			skills: []*Skill{docs, marketplace},
+			want:   "pilat:review",
+		},
+		{
+			name:   "one other origin wins over two MCP origins",
+			skills: []*Skill{docs, marketplace, tools},
+			want:   "pilat:review",
+		},
+		{
+			name:   "two other origins stay ambiguous",
+			skills: []*Skill{marketplace, docs, disk},
+		},
+		{
+			name:   "one MCP origin resolves",
+			skills: []*Skill{docs},
+			want:   "docs:review",
+		},
+		{
+			name:   "two MCP origins stay ambiguous",
+			skills: []*Skill{docs, tools},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			skill, err := ResolveModelInvocableSkill(staticSkillCatalog{skills: tc.skills}, "ReViEw")
+			if tc.want == "" {
+				require.ErrorContains(t, err, "skill unavailable: ReViEw")
+				assert.Nil(t, skill)
+
+				return
+			}
+
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, skill.Name)
+		})
+	}
+}

@@ -192,7 +192,7 @@ func TestPrepareUserMessageExpandsDirectSkillInvocation(t *testing.T) {
 	s := newTestAgent()
 	s.loader = ldr
 
-	result, err := s.PrepareUserMessage("/skill review current diff")
+	result, err := s.PrepareUserMessage(t.Context(), "/skill review current diff")
 	require.NoError(t, err)
 	assert.Contains(t, result, "<skill>\n<name>review</name>")
 	assert.Contains(t, result, "Review current diff carefully.")
@@ -205,6 +205,6 @@ func TestPrepareUserMessageRejectsNonUserInvocableSkill(t *testing.T) {
 
 	s := newTestAgent()
 	s.loader = ldr
-	_, err := s.PrepareUserMessage("/skill hidden")
+	_, err := s.PrepareUserMessage(t.Context(), "/skill hidden")
 	require.ErrorContains(t, err, "skill unavailable: hidden")
 }

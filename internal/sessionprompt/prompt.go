@@ -57,6 +57,7 @@ type promptTools struct {
 	external   bool
 	search     []string
 	guidance   map[string]string
+	servers    map[string]bool
 }
 
 // Builder synchronizes prompt reads with model and tool-inventory updates.
@@ -320,13 +321,22 @@ func buildToolsSection(reg *tool.Registry, nativeSearch bool) string {
 	return sb.String()
 }
 
+// VisibleMCPServers reports the origins admitted by the registry's tool visibility.
+func VisibleMCPServers(reg *tool.Registry) map[string]bool {
+	return scanPromptTools(reg.List()).servers
+}
+
 func scanPromptTools(registered []tool.Tool) promptTools {
 	type declared struct {
 		id   string
 		spec tool.PromptDeclaration
 	}
 
-	scan := promptTools{registered: make(map[string]bool, len(registered)), guidance: make(map[string]string)}
+	scan := promptTools{
+		registered: make(map[string]bool, len(registered)),
+		guidance:   make(map[string]string),
+		servers:    make(map[string]bool),
+	}
 
 	var inventory []declared
 	var search []declared
@@ -346,8 +356,11 @@ func scanPromptTools(registered []tool.Tool) promptTools {
 		}
 
 		spec := declarer.PromptDeclaration()
-		if spec.InstructionsSource != "" && spec.Instructions != "" {
-			scan.guidance[spec.InstructionsSource] = spec.Instructions
+		if spec.MCPServer != "" {
+			scan.servers[spec.MCPServer] = true
+			if spec.Instructions != "" {
+				scan.guidance[spec.MCPServer] = spec.Instructions
+			}
 		}
 
 		scan.memory = scan.memory || spec.Memory

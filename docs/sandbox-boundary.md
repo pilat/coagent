@@ -41,7 +41,9 @@ read-only access to `~/.coagent/processes/project-<id>/`, after its configured
 rules. This applies to that project's sessions, including subagents, and keeps
 `read`, `tail` and Bash able to inspect output even under
 `deny: ~/.coagent`. It does not reopen secrets, the database or other projects'
-output, and sessions cannot alter the captured files. The directory exists
+output, and sessions cannot alter the captured files. Verified MCP-skill files
+also live there: sessions can read and execute them, while the daemon writes
+them. The directory exists
 before process launch so output created later remains visible. Telegram
 attachments in the host temporary directory have no such exception.
 

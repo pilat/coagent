@@ -139,11 +139,14 @@ func build(
 		}
 	}
 
+	unfiltered := reg
+
 	reg = filterRegistryForAgent(set, reg, agentConfig, stack.Frames().Owns)
 	if reg.Get("batch") != nil {
 		reg.Register(builtin.NewBatchTool(reg))
 	}
 
+	registerMCPSkills(ctx, in.Loader, stack.MCPSkills(), unfiltered, reg)
 	prompt := preparePrompt(in, agentConfig, skills, todos, reg, stack, level)
 
 	var frames tool.FrameRule
@@ -250,10 +253,7 @@ func preparePrompt(
 
 	prompt.RefreshToolsSection(reg)
 
-	if slices.ContainsFunc(reg.List(), func(candidate tool.Tool) bool {
-		_, ok := candidate.(tool.SkillLoader)
-		return ok
-	}) {
+	if hasSkillLoader(reg) {
 		prompt.SetSkillsSection(sessionprompt.BuildSkillsSection(in.Loader))
 	}
 

@@ -1,6 +1,7 @@
 package sessionprompt
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
@@ -17,8 +18,8 @@ type PreparedMessage struct {
 }
 
 // PrepareUserMessageDetailed expands leading skill commands and preserves ordinary messages.
-func PrepareUserMessageDetailed(ldr *loader.Service, message string) (PreparedMessage, error) {
-	expanded, skillName, matched, err := expandSkillCommand(ldr, message)
+func PrepareUserMessageDetailed(ctx context.Context, ldr *loader.Service, message string) (PreparedMessage, error) {
+	expanded, skillName, matched, err := expandSkillCommand(ctx, ldr, message)
 	if !matched {
 		return PreparedMessage{Content: message}, nil
 	}
@@ -26,7 +27,7 @@ func PrepareUserMessageDetailed(ldr *loader.Service, message string) (PreparedMe
 	return PreparedMessage{Content: expanded, SkillName: skillName}, err
 }
 
-func expandSkillCommand(ldr *loader.Service, message string) (string, string, bool, error) {
+func expandSkillCommand(ctx context.Context, ldr *loader.Service, message string) (string, string, bool, error) {
 	name, args, matched, err := parseSkillCommand(message)
 	if !matched || err != nil {
 		return message, "", matched, err
@@ -48,7 +49,12 @@ func expandSkillCommand(ldr *loader.Service, message string) (string, string, bo
 		return "", "", true, fmt.Errorf("skill unavailable: %s\nAvailable skills: %v", name, names)
 	}
 
-	return loader.RenderSkillInvocation(sk, args), sk.Name, true, nil
+	expanded, err := loader.RenderSkill(ctx, sk, args)
+	if err != nil {
+		return "", "", true, fmt.Errorf("expand skill command: %w", err)
+	}
+
+	return expanded, sk.Name, true, nil
 }
 
 func parseSkillCommand(message string) (string, string, bool, error) {

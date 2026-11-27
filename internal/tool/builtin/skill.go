@@ -21,6 +21,7 @@ var (
 type skillParams struct {
 	Name string `json:"name"`
 	Args string `json:"args,omitempty"`
+	File string `json:"file,omitempty"`
 }
 
 type skillTool struct {
@@ -62,6 +63,10 @@ func (t *skillTool) Parameters() json.RawMessage {
 			"args": {
 				"type": "string",
 				"description": "Optional arguments to pass to the skill"
+			},
+			"file": {
+				"type": "string",
+				"description": "For a skill served by an MCP server: a supporting file's path relative to the skill root, as its envelope lists it. Opens that file instead of activating the skill: fetches and verifies it, stores it read-only on disk, and returns its content and local path."
 			}
 		},
 		"required": ["name"]
@@ -78,14 +83,23 @@ func (t *skillTool) Execute(ctx context.Context, params json.RawMessage) (*tool.
 		return nil, errors.New("skill name is required")
 	}
 
+	if p.File != "" {
+		return t.openFile(ctx, p)
+	}
+
 	sk, err := loader.ResolveModelInvocableSkill(t.loader, p.Name)
 	if err != nil {
 		return nil, fmt.Errorf("resolve skill: %w", err)
 	}
 
+	output, err := loader.RenderSkill(ctx, sk, p.Args)
+	if err != nil {
+		return nil, fmt.Errorf("load skill: %w", err)
+	}
+
 	return &tool.Result{
 		Title:  sk.Name,
-		Output: loader.RenderSkillInvocation(sk, p.Args),
+		Output: output,
 		Metadata: map[string]any{
 			"skill":     sk.Name,
 			metaKeyPath: sk.Path,

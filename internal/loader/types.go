@@ -19,12 +19,13 @@ type sourceInfo struct {
 }
 
 type Skill struct {
-	Name                   string `yaml:"name"`
-	Description            string `yaml:"description"`
-	UserInvocable          *bool  `yaml:"user-invocable"`
-	DisableModelInvocation bool   `yaml:"disable-model-invocation"`
-	Content                string `yaml:"-"`
-	Path                   string `yaml:"-"`
+	Name                   string       `yaml:"name"`
+	Description            string       `yaml:"description"`
+	UserInvocable          *bool        `yaml:"user-invocable"`
+	DisableModelInvocation bool         `yaml:"disable-model-invocation"`
+	Content                string       `yaml:"-"`
+	Path                   string       `yaml:"-"`
+	Origin                 *SkillOrigin `yaml:"-"`
 }
 
 type Subagent struct {

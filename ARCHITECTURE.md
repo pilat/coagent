@@ -84,7 +84,7 @@ does not imply a tier except where it expresses an implementation variant.
 - `internal/llm` — provider protocol drivers, client creation, retries and cost handling.
 - `internal/llm/llmtest` — test-support oracle for provider transcript validity; imported only by tests, never by a binary.
 - `internal/llmwire` — provider-neutral message, response and tool wire vocabulary.
-- `internal/loader` — project context, skills, subagent definitions and marketplace loading.
+- `internal/loader` — project context, skills, MCP-skill activation, subagent definitions and marketplace loading.
 - `internal/localapi` — authenticated session, output, chat and discovery services on the API socket and in process, dispatched through the bound controller capability; `DaemonService.GetStatus` alone on the anonymous control socket; owns both socket binds and, when `api.listen` is set, the loopback listener behind the browser guard.
 - `internal/logger` — structured logging and registered-secret redaction.
 - `internal/lsp` — language-server process client for code-intelligence tools.
@@ -92,7 +92,7 @@ does not imply a tier except where it expresses an implementation variant.
 - `internal/managers/telegram` — `coagent.v1` client adapting chat calls to send-only
   delivery. Each manager owns one bot account, one chat and polling loop;
   failures remain isolated at startup.
-- `internal/mcp` — session-owned external MCP process lifecycle, tool discovery and structured content conversion.
+- `internal/mcp` — session-owned external MCP process lifecycle, tool discovery, Skills-extension listing and verified skill-file reads, and structured content conversion.
 - `internal/mcpstore` — durable MCP server definitions, scope precedence and registry tools.
 - `internal/memory` — curated per-project long-term memory.
 - `internal/managerdelivery` — transport-neutral chat entry, ordered cursor delivery and retry policy.
@@ -125,7 +125,7 @@ does not imply a tier except where it expresses an implementation variant.
 - `internal/subagent` — parent-child link ledger, completion transactions, agent-facing tools and the tagged-model candidate rule.
 - `internal/todo` — session-local task tracking.
 - `internal/tool` — tool protocol, registry, suspension sentinel and ordered stage execution.
-- `internal/tool/builtin` — built-in tools, the browser tool surface and their common stack construction.
+- `internal/tool/builtin` — built-in tools, MCP-skill files, the browser tool surface and their common stack construction.
 - `internal/transcript` — durable append-only conversation row vocabulary.
 - `internal/version` — build-stamped version vocabulary.
 - `internal/worktree` — shared remote-default worktree creation, origin attestation and failure rollback.
@@ -257,6 +257,9 @@ extended only additively within v1. MCP servers are external processes;
 marketplace content is loadable instruction/definition data, not executable
 code with privileged integration rights. New managers and drivers are source
 contributions governed by the internal dependency graph.
+An enabled MCP server's skills and their supporting files are operator-trusted
+instruction data, with the same weight as disk skills; ordinary MCP tool output
+remains untrusted ([ADR-0112](docs/adr/0112-mcp-skills-load-like-disk-skills-from-verified-copies.md)).
 
 Operator hooks in `.claude/settings.json` follow the Claude Code command-hook
 contract; settings-file commands are an operator surface, not a plugin API.
@@ -826,8 +829,10 @@ broader rule that buries it incidentally is refused as a configuration error
 The project section ends with mandatory read-only access to its daemon-owned
 process-output directory, after the project's configured rules. Stack construction materializes
 that directory before mounting it, so later process output and MCP attachments
-from roots and subagents remain readable. The exception opens no other coagent state or project output;
-the daemon remains the writer. Shell snapshots instead use inherited descriptors,
+from roots and subagents remain readable. Verified MCP-skill files live there too;
+sessions can read and execute them but cannot write them. The exception opens no
+other coagent state or project output; the daemon remains the writer. Shell
+snapshots instead use inherited descriptors,
 and subagent results and context summaries remain database-backed.
 
 Operator rules are `config.yaml` data validated before a candidate replaces the
@@ -1022,7 +1027,8 @@ Settings edits reach the next activation; project settings cannot disable global
 
 Project context is discovered from supported CLAUDE/AGENTS and coagent locations;
 skills and subagent definitions can come from project, global or marketplace
-sources. A missing subagent `tools` declaration inherits the inventory, whereas
+sources, and enabled MCP servers can supply skills. A missing subagent `tools`
+declaration inherits the inventory, whereas
 an explicit empty list grants none. An unknown subagent model degrades to its
 default instead of making every spawn fail. Skill model visibility and direct
 user invocation are independent controls; a leading `/skill` command in human
@@ -1032,6 +1038,10 @@ invocation. The `task` tool accepts either a free-form prompt or one
 model-invocable skill plus arguments. The parent resolves and renders that skill
 before creating the subagent, then sends the canonical envelope through the
 child's ordinary initial-input path; the child does not rediscover it by name.
+The skill tool's `file` argument opens a listed MCP skill's supporting file by
+exact canonical name, including for model-hidden skills, without activating it.
+Manager discovery lists disk and marketplace skills only; a root's own `/help`
+also lists the MCP skills visible in its activation.
 
 Every root exposes `config_read` and `config_edit` under the
 same one-turn `/config` grant. Only edit
@@ -1284,6 +1294,22 @@ browser surface's exclusive visibility. It is operator-installed server metadata
 about its tools, distinct from untrusted tool output, and never overrides system,
 user, project or task instructions
 ([ADR-0089](docs/adr/0089-mcp-instructions-follow-tool-visibility.md)).
+
+Servers declaring `io.modelcontextprotocol/skills` also supply a paginated skill
+catalog refreshed each activation; undeclared servers receive no skills request.
+A listing failure clears skills while retaining tools; invalid or dynamic
+entries are declined, and a skill with any unmappable manifest URI is declined
+during stack construction. Names are `<label>:<name>`; duplicate names within a
+server use skill paths, sanitized labels belong to the first server by name
+across the stack's server definitions, and existing disk or marketplace names win;
+a bare suffix shared by MCP skills and exactly one non-MCP skill resolves to
+the latter. Guidance and skills read one visible-server computation: a session
+with the skill tool sees the skills of servers whose tools it sees, plus those of
+skills-only servers (no tools after profiles, before agent filtering). SKILL.md and supporting files are fetched lazily from their own
+server, verified against listed size and SHA-256, and stored in the project's read-only process-output
+directory; the loader also verifies frontmatter. Activation envelopes identify
+the operator-installed origin and treat its instructions like disk skills
+([ADR-0112](docs/adr/0112-mcp-skills-load-like-disk-skills-from-verified-copies.md)).
 
 Schedule owns cron validation, schedule-list rendering, durable schedule records and execution of sleep
 and schedule tools, including the sleep guard over pending producer obligations.

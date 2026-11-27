@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/mark3labs/mcp-go/client"
@@ -34,15 +35,22 @@ var initTimeout = 30 * time.Second
 // server that accepts the call and never replies can't hang the loop (var: tests shrink it).
 var callTimeout = 5 * time.Minute
 
+var clientInfo = mcp.Implementation{Name: "coagent", Version: "1.0.0"}
+
 // Client wraps an MCP client for a single server.
 type Client struct {
-	name         string
-	client       client.MCPClient
-	tools        map[string]mcp.Tool
-	instructions string
-	cancelRun    context.CancelFunc // force-kills the server subprocess on close
-	closeOnce    sync.Once
-	closeErr     error
+	name            string
+	client          client.MCPClient
+	tools           map[string]mcp.Tool
+	instructions    string
+	cancelRun       context.CancelFunc // force-kills the server subprocess on close
+	closeOnce       sync.Once
+	closeErr        error
+	transport       transport.Interface
+	protocolVersion string
+	skillsDeclared  bool
+	skills          []Skill
+	extensionIDs    atomic.Int64
 }
 
 type BinaryPart struct {
@@ -118,7 +126,7 @@ func NewClient(
 
 	initReq := mcp.InitializeRequest{}
 	initReq.Params.ProtocolVersion = mcp.LATEST_PROTOCOL_VERSION
-	initReq.Params.ClientInfo = mcp.Implementation{Name: "coagent", Version: "1.0.0"}
+	initReq.Params.ClientInfo = clientInfo
 	initReq.Params.Capabilities = mcp.ClientCapabilities{}
 
 	toolList, instructions, err := handshake(ctx, c, initReq)
@@ -142,12 +150,17 @@ func NewClient(
 
 	log.Debug("mcp_ready", zap.String("name", name), zap.Int("tools", len(tools)))
 
+	_, skillsDeclared := c.GetServerCapabilities().Extensions[skillsExtension]
+
 	return &Client{
-		name:         name,
-		client:       c,
-		tools:        tools,
-		instructions: instructions,
-		cancelRun:    cancelRun,
+		name:            name,
+		client:          c,
+		tools:           tools,
+		instructions:    instructions,
+		cancelRun:       cancelRun,
+		transport:       c.GetTransport(),
+		protocolVersion: c.ProtocolVersion(),
+		skillsDeclared:  skillsDeclared,
 	}, nil
 }
 

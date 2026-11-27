@@ -524,7 +524,7 @@ func (s *Session) acceptBoundaryText(
 	prepared := sessionprompt.PreparedMessage{Content: input.RawContent}
 
 	if input.Source == sessionstore.InputSourceUser {
-		prepared, err = s.PrepareUserMessageDetailed(input.RawContent)
+		prepared, err = s.PrepareUserMessageDetailed(ctx, input.RawContent)
 	}
 
 	if err != nil {
