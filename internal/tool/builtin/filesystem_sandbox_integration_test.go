@@ -99,6 +99,56 @@ func TestFilesystemTools_ProcessOutputOverridesDeny(t *testing.T) {
 	}
 }
 
+func TestMCPSkillFiles_ScriptRunsUnderDenyCoagentHome(t *testing.T) {
+	if _, err := exec.LookPath("bwrap"); err != nil {
+		t.Skip("bwrap is not installed")
+	}
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("SHELL", "/bin/false")
+	home, err := coagenthome.Dir()
+	require.NoError(t, err)
+	outputRoot, err := coagenthome.ProcessProjectDir(1)
+	require.NoError(t, err)
+	workDir := t.TempDir()
+	stack, err := BuildStack(t.Context(), StackConfig{
+		ProjectID: 1,
+		SessionID: 1,
+		WorkDir:   workDir,
+		Loader:    loader.New(),
+		Todo:      todo.New(),
+		Unified: &config.UnifiedConfig{
+			Sandbox: config.SandboxConfig{Enabled: true, Rules: []sandboxpolicy.Rule{{Deny: home}}},
+		},
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, stack.Close()) })
+	data := []byte("#!/bin/sh\necho HELLO_FROM_MCP_SKILL\n")
+	file := listedSkillFile("skill://guide/scripts/hello.sh", data)
+	source := &mcpSkillFiles{
+		reader: &skillReaderFake{data: data},
+		dir:    filepath.Join(outputRoot, coagenthome.MCPSkillsDirName, "docs"),
+	}
+	path, _, err := source.store(t.Context(), file)
+	require.NoError(t, err)
+	for _, command := range []string{quoteShell(path), "sh " + quoteShell(path)} {
+		result, err := stack.Registry.Get("bash").
+			Execute(t.Context(), marshalToolParams(t, bashParams{Command: command}))
+		require.NoError(t, err)
+		assert.Contains(t, result.Output, "HELLO_FROM_MCP_SKILL")
+	}
+	for _, command := range []string{
+		"chmod u+w " + quoteShell(path) + " && printf x > " + quoteShell(path),
+		"rm -f " + quoteShell(path),
+	} {
+		result, err := stack.Registry.Get("bash").
+			Execute(t.Context(), marshalToolParams(t, bashParams{Command: command}))
+		require.NoError(t, err)
+		assert.NotEqual(t, 0, result.Metadata[metaKeyExitCode], command)
+		assert.FileExists(t, path)
+		assertTestFileContent(t, path, string(data))
+	}
+}
+
 func assertProcessOutputReadable(t *testing.T, stack *Stack, path, workDir string) {
 	t.Helper()
 	for _, toolID := range []string{"read", "tail"} {

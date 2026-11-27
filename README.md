@@ -132,7 +132,8 @@ framework with a public plugin API.
   its own connections across replies and sleep/resume; policy, configuration or
   shell activation changes replace them. Stop and shutdown close them.
 - **Skills and subagents:** project and user `SKILL.md` files, project-defined
-  agent types, and opt-in git marketplaces. Tool restrictions are enforced by
+  agent types, opt-in git marketplaces, and skills served by enabled MCP servers
+  (`<server>:<skill>`). Tool restrictions are enforced by
   the registered tool set, but Bash remains a powerful escape hatch wherever a
   policy allows it.
 - **Schedules:** cron expressions with `CRON_TZ` and one-shot wakes. Fresh

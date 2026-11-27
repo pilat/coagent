@@ -29,6 +29,7 @@ const (
 	MarketplacesDirName   = "marketplaces"
 	ProcessesDirName      = "processes"
 	MCPAttachmentsDirName = "mcp-attachments"
+	MCPSkillsDirName      = "mcp-skills"
 )
 
 var startupUserHome = resolveStartupUserHome()

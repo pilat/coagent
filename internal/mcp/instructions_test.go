@@ -62,7 +62,7 @@ func TestClientInstructions(t *testing.T) {
 				reg := tool.NewRegistry()
 				assert.Equal(t, 1, service.RegisterTools(reg, nil, nil, nil))
 				declaration := reg.Get("mcp__remote__view").(tool.PromptDeclarer).PromptDeclaration()
-				assert.Equal(t, "remote", declaration.InstructionsSource)
+				assert.Equal(t, "remote", declaration.MCPServer)
 				assert.Equal(t, tc.want, declaration.Instructions)
 				require.NoError(t, client.refreshTools(ctx))
 			}

@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 
@@ -23,6 +24,12 @@ type ServerStats struct {
 	Skipped int
 }
 
+type ServerSkills struct {
+	Server string
+	Client *Client
+	Skills []Skill
+}
+
 // Service manages multiple MCP server connections.
 type Service interface {
 	Start(ctx context.Context, config *Config) (*ServerStats, error)
@@ -30,6 +37,7 @@ type Service interface {
 	RegisterTools(registry *tool.Registry, sink AttachmentSink, profiles map[string]Profile, search SearchOrder) int
 	GetClient(name string) *Client
 	Stats() ServerStats
+	Skills() []ServerSkills
 	// Refresh checks live connections and refreshes their catalog before reuse.
 	Refresh(context.Context) bool
 }
@@ -185,6 +193,23 @@ func (s *svc) Stats() ServerStats {
 	return s.stats
 }
 
+func (s *svc) Skills() []ServerSkills {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var groups []ServerSkills
+
+	for name, client := range s.clients {
+		if skills := client.Skills(); len(skills) > 0 {
+			groups = append(groups, ServerSkills{Server: name, Client: client, Skills: skills})
+		}
+	}
+
+	sort.Slice(groups, func(i, j int) bool { return groups[i].Server < groups[j].Server })
+
+	return groups
+}
+
 func (s *svc) Refresh(ctx context.Context) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -197,6 +222,8 @@ func (s *svc) Refresh(ctx context.Context) bool {
 		if err := client.refreshTools(ctx); err != nil {
 			return false
 		}
+
+		client.refreshSkills(ctx)
 	}
 
 	return true
@@ -213,6 +240,8 @@ func (s *svc) startServer(ctx context.Context, name string, cfg ServerConfig) er
 	if err != nil {
 		return err
 	}
+
+	client.refreshSkills(ctx)
 
 	s.mu.Lock()
 	s.clients[name] = client

@@ -277,7 +277,9 @@ Text returned by a web page, search provider, MCP server, or network-derived
 command output that coagent treats as evidence rather than authority. Instructions
 inside it cannot override system, user/project or task instructions. Host-added
 markers are model-facing provenance hints, not a sandbox or formal security
-boundary.
+boundary. An enabled MCP server's skills, including supporting files opened
+through the skill tool, are operator-trusted instructions rather than untrusted
+tool output ([ADR-0112](adr/0112-mcp-skills-load-like-disk-skills-from-verified-copies.md)).
 _Avoid_: treating external content as tool authority; **prompt injection** names
 the attack, not the content category.
 
@@ -316,6 +318,8 @@ non-empty guidance, sorted by server name. The client caps each server's text at
 8,000 Unicode characters, appending a marker when truncated. Guidance follows tool
 visibility and never overrides system, user, project or task instructions; it is
 distinct from **untrusted tool output** ([ADR-0089](adr/0089-mcp-instructions-follow-tool-visibility.md)).
+The server's MCP skills follow the same visibility; a server with no tools after
+its MCP profile, before agent filtering, reaches every session with the skill tool.
 _Avoid_: tool output, system authority.
 
 **websearch**:
@@ -327,15 +331,26 @@ The unit of ordered scheduling (`internal/tool`): a maximal contiguous run of pa
 _Avoid_: worker pool (there is no shared queue), fan-out (the removed unconditional concurrency).
 
 **skill**:
-A `SKILL.md` instruction bundle loaded from project, global, or marketplace dirs. Two *independent* discovery axes: `disable-model-invocation: true` hides it from the model's available-skills inventory and skill tool; `user-invocable: false` rejects `/skill <name>`. A leading `/skill <name> [args]` in **human input** expands before the LLM call.
+A `SKILL.md` instruction bundle loaded from project, global, or marketplace dirs, or served by an enabled MCP server (an **MCP skill**). Two *independent* discovery axes: `disable-model-invocation: true` hides it from the model's available-skills inventory and skill-tool activation; `user-invocable: false` rejects `/skill <name>`. Opening a supporting file through the skill tool's `file` argument needs the exact canonical name and works for a model-hidden MCP skill. A leading `/skill <name> [args]` in **human input** expands before the LLM call.
 The `task` tool may also seed a new subagent from one model-invocable skill: the parent resolves the canonical name and renders the envelope before spawn, so the child receives content rather than rediscovering the skill.
 _Avoid_: plugin (a plugin is a marketplace bundle), command.
+
+**MCP skill**:
+A skill an enabled MCP server lists through the Skills extension
+(`io.modelcontextprotocol/skills`), named `<server>:<skill>` (the server is its registry
+name with bytes outside `[A-Za-z0-9_-]` replaced by `_`; duplicate names within a
+server use skill paths)
+and listed with the MCP client's catalog each activation. SKILL.md and supporting
+files are fetched on demand, checked against the listing's size and SHA-256,
+and stored read-only beneath the project's process-output directory. The envelope
+names the originating server.
+_Avoid_: served skill, remote skill, plugin skill.
 
 **marketplace**:
 A git repo supplying loadable skills and subagent definitions, cloned and cached with a TTL. Configured under `marketplaces:` in `config.yaml`.
 
 **MCP client**:
-One external MCP-server process and its discovered tools, retained for one
+One external MCP-server process and its discovered tools and skills, retained for one
 session ID across loop activations. Each stack refreshes the live client's
 catalog before use and keeps its schemas fixed during that activation. Policy,
 configuration or shell-snapshot changes replace the client; a subagent's terminal

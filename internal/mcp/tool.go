@@ -117,7 +117,7 @@ func (t *mcpTool) Description() string {
 func (t *mcpTool) PromptDeclaration() tool.PromptDeclaration {
 	return tool.PromptDeclaration{
 		Search: t.search, SearchOrder: t.searchOrder,
-		InstructionsSource: t.serverName, Instructions: t.instructions,
+		MCPServer: t.serverName, Instructions: t.instructions,
 	}
 }
 

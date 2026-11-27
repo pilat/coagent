@@ -225,13 +225,16 @@ func (s *Session) SwitchModel(client llm.Client, modelsSection sessionprompt.Mod
 	}
 }
 
-func (s *Session) PrepareUserMessage(message string) (string, error) {
-	prepared, err := s.PrepareUserMessageDetailed(message)
+func (s *Session) PrepareUserMessage(ctx context.Context, message string) (string, error) {
+	prepared, err := s.PrepareUserMessageDetailed(ctx, message)
 	return prepared.Content, err
 }
 
-func (s *Session) PrepareUserMessageDetailed(message string) (sessionprompt.PreparedMessage, error) {
-	prepared, err := sessionprompt.PrepareUserMessageDetailed(s.loader, message)
+func (s *Session) PrepareUserMessageDetailed(
+	ctx context.Context,
+	message string,
+) (sessionprompt.PreparedMessage, error) {
+	prepared, err := sessionprompt.PrepareUserMessageDetailed(ctx, s.loader, message)
 	if err != nil {
 		return prepared, fmt.Errorf("prepare user message: %w", err)
 	}

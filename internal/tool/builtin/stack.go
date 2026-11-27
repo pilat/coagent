@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 
 	"go.uber.org/zap"
@@ -51,6 +53,7 @@ type Stack struct {
 	Registry  *tool.Registry
 	lspMgr    lsp.Manager
 	mcpSvc    mcp.Service // nil when no MCP servers configured
+	mcpSkills []MCPSkill
 	frames    browserFrameRule
 	resources *resourceLease
 	closeOnce sync.Once
@@ -164,6 +167,7 @@ func BuildStack(ctx context.Context, cfg StackConfig) (*Stack, error) {
 	}
 
 	frames := browserFrameRule{}
+	var mcpSkills []MCPSkill
 	var profiles map[string]mcp.Profile
 	if cfg.Unified != nil && cfg.Unified.Browser != nil {
 		frames.serverName = cfg.Unified.Browser.MCPName
@@ -176,6 +180,7 @@ func BuildStack(ctx context.Context, cfg StackConfig) (*Stack, error) {
 			profiles,
 			mcpSearchOrder,
 		)
+		mcpSkills = offerMCPSkills(ctx, cfg.ProjectID, slices.Sorted(maps.Keys(cfg.Servers)), mcpSvc.Skills())
 	}
 
 	logger.Ctx(ctx).Named("tool.stack").Info("stack_started",
@@ -184,6 +189,7 @@ func BuildStack(ctx context.Context, cfg StackConfig) (*Stack, error) {
 
 	return &Stack{
 		Registry: registry, lspMgr: lspMgr, mcpSvc: mcpSvc, runner: bashRunner, access: access,
+		mcpSkills: mcpSkills,
 		resources: resources, web: webTransports, frames: frames,
 		sessionID: cfg.SessionID,
 		provider:  provider,

@@ -297,7 +297,9 @@ other clients' plaintext token files. This is a single-tenant delegation, with n
   root and resets the cursor, owing entry. `ResetChatFocus` clears focus and cursor while focus is still
   `from_session_id`.
 - `DiscoveryService` lists what the caller can start work with. `ListModels` lists configured models;
-  `ListSkills` lists skills available to a root; `ListProjects` lists daemon-managed projects, most
+  `ListSkills` lists a root's disk and marketplace skills; MCP skills are not listed there,
+  while the root's own in-session `/help` lists its visible MCP skills.
+  `ListProjects` lists daemon-managed projects, most
   recently active first; `ListSpawnFavorites` lists configured favorite project paths. `CreateProject` creates
   a folder project under the projects root, or opens an existing one.
 

@@ -3,6 +3,7 @@
 - **Status:** Accepted
 - **Date:** 2026-09-27
 - **Amended by:** [ADR-0083](0083-core-recognises-tools-by-declared-traits.md) — a call whose tool is not registered is classified by the tool instance, so its host-written unknown-tool error is not wrapped
+- **Amended by:** [ADR-0112](0112-mcp-skills-load-like-disk-skills-from-verified-copies.md) — an enabled MCP server's skills, and the supporting files opened through the skill tool, are operator-trusted instructions, not untrusted MCP output
 
 ## Context
 

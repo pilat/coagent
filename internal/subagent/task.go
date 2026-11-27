@@ -207,7 +207,7 @@ func (t *taskTool) Execute(ctx context.Context, params json.RawMessage) (*tool.R
 	}
 
 	if p.Background {
-		if err := t.renderOpeningInput(&p); err != nil {
+		if err := t.renderOpeningInput(ctx, &p); err != nil {
 			return nil, err
 		}
 
@@ -276,7 +276,7 @@ func (t *taskTool) executeBlocking(ctx context.Context, p TaskParams) (*tool.Res
 		}
 	}
 
-	if err := t.renderOpeningInput(&p); err != nil {
+	if err := t.renderOpeningInput(ctx, &p); err != nil {
 		return nil, err
 	}
 
@@ -323,7 +323,7 @@ func (t *taskTool) validateParams(p TaskParams) error {
 	return fmt.Errorf("invalid subagent_type: %s (available: %s)", p.SubagentType, strings.Join(typeNames, ", "))
 }
 
-func (t *taskTool) renderOpeningInput(p *TaskParams) error {
+func (t *taskTool) renderOpeningInput(ctx context.Context, p *TaskParams) error {
 	if strings.TrimSpace(p.Skill) == "" {
 		return nil
 	}
@@ -333,7 +333,10 @@ func (t *taskTool) renderOpeningInput(p *TaskParams) error {
 		return fmt.Errorf("resolve task skill: %w", err)
 	}
 
-	p.Prompt = loader.RenderSkillInvocation(skill, p.SkillArgs)
+	p.Prompt, err = loader.RenderSkill(ctx, skill, p.SkillArgs)
+	if err != nil {
+		return fmt.Errorf("render task skill: %w", err)
+	}
 
 	return nil
 }
